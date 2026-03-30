@@ -1,136 +1,232 @@
 # mdb-embedded
 
-# Building a Local-First MongoDB Emulator in Python (with WiredTiger)
+**One query language. Every environment. Zero compromises.**
 
-If you’ve ever built a Python application heavily reliant on MongoDB, you know the friction of local development. You either have to spin up a Docker container, maintain a local MongoDB daemon, or rely on heavy mocking libraries like `mongomock` that don't always support the complex aggregation pipelines you need. 
+MongoDB's document model and MQL are the most productive way to work with data -- but only if you can use them *everywhere*. Cloud, edge, laptop, airplane mode, CI pipeline, embedded device. `mdb-embedded` makes that real: a local-first MongoDB engine in Python, powered by WiredTiger (the same storage engine family that runs MongoDB itself), with bidirectional sync to Atlas when you're ready.
 
-But what if you could have a truly **local-first** database that uses the exact same `PyMongo` API, supports complex Aggregation Pipelines, and persists to disk using **WiredTiger**—the exact same storage engine that powers MongoDB under the hood?
-
-We just built exactly that. Let's break down the architecture of a drop-in MongoDB emulator that fits into a single Python file.
-
----
-
-## 1. The Magic Switch: The Connection Layer
-
-The core architectural goal was zero code changes for the consumer. You shouldn't have to write `if env == "local"` everywhere in your app. 
-
-We achieved this by building a proxy `MongoClient` class. The URI string dictates the execution engine:
+Write your app once. Run it against a local B-Tree. Ship it against Atlas. The query language never changes.
 
 ```python
-# Remote Mode (Standard PyMongo)
-client = MongoClient("mongodb://user:pass@cluster.mongodb.net")
+from mdb_embedded import MongoClient
 
-# Local Embedded Mode (Our Engine)
-client = MongoClient("local://my_local_wt_data")
+# Flip the URI -- nothing else changes
+client = MongoClient("local://data")          # embedded WiredTiger
+# client = MongoClient("mongodb+srv://...")    # Atlas / any mongod
+
+db = client["myapp"]
+users = db["users"]
+
+users.insert_one({"name": "Alice", "age": 34, "city": "NYC"})
+users.create_index([("city", 1), ("age", -1)])
+
+for doc in users.find({"city": "NYC", "age": {"$gt": 30}}):
+    print(doc["name"])
+
+results = users.aggregate([
+    {"$group": {"_id": "$city", "avg_age": {"$avg": "$age"}}},
+    {"$sort": {"avg_age": -1}},
+])
 ```
-
-If it sees `mongodb://`, it instantiates a standard `PyMongo` client. If it sees `local://`, it drops into our embedded engine. Both return wrapper objects (`Database` and `Collection`) that expose the exact same API: `.find()`, `.insert_many()`, `.aggregate()`, etc.
 
 ---
 
-## 2. Using MongoDB’s Actual Brain: WiredTiger
+## Why this exists
 
-This is where the project shifts from a "toy mock" to a highly capable embedded database. We utilized the Python bindings for **WiredTiger**.
+| Problem | How mdb-embedded solves it |
+|---|---|
+| Local dev requires a running `mongod` or Docker container | Embedded WiredTiger -- zero external dependencies at runtime |
+| `mongomock` doesn't support real aggregation pipelines | Full pipeline engine: `$match`, `$group`, `$sort`, `$project`, `$unwind`, `$limit`, `$skip` with `$sum`, `$avg`, `$min`, `$max`, `$push` |
+| Edge / offline-first apps need a different database and query language | Same MQL everywhere -- one codebase, portable across environments |
+| Syncing local state to the cloud is a custom nightmare | Built-in oplog-driven bidirectional sync with conflict resolution |
+| Mock databases don't have indexes or query planners | Real B-Tree indexes with a cost-based query planner that picks index scans, range scans, or collection scans |
 
-WiredTiger is an extensible, high-performance, NoSQL, open-source storage engine that MongoDB acquired in 2014 and uses as its default engine. By using WiredTiger locally, we inherit document-level concurrency, intense write optimization, and highly efficient B-Tree storage.
+---
 
-When our `LocalCollection` initializes, it opens a WiredTiger session and creates a table. 
+## Architecture
+
+```
+┌────────────────────────────────────────────────────────┐
+│                    Your Application                     │
+│           from mdb_embedded import MongoClient          │
+└────────────────────┬───────────────────────────────────┘
+                     │  URI routing
+          ┌──────────┴──────────┐
+          ▼                     ▼
+   local://path          mongodb://host
+          │                     │
+   ┌──────┴──────┐       ┌─────┴─────┐
+   │  Embedded   │       │  PyMongo  │
+   │   Engine    │       │  Driver   │
+   │             │       └───────────┘
+   │  ┌───────┐  │
+   │  │ MQL   │  │  ◄── compile_query, apply_update
+   │  │Compiler│  │      $gt $lt $in $ne $or $and ...
+   │  └───┬───┘  │
+   │      │      │
+   │  ┌───┴───┐  │
+   │  │ Query │  │  ◄── cost-based plan selection
+   │  │Planner│  │      index scan / pk lookup / coll scan
+   │  └───┬───┘  │
+   │      │      │
+   │  ┌───┴───┐  │
+   │  │B-Tree │  │  ◄── WiredTiger-backed indexes
+   │  │Indexes│  │      single, compound, unique, sparse
+   │  └───┬───┘  │
+   │      │      │
+   │  ┌───┴───┐  │
+   │  │WiredTi│  │  ◄── same engine family as MongoDB
+   │  │  ger  │  │      key=_id, value=JSON document
+   │  └───┬───┘  │
+   │      │      │
+   │  ┌───┴───┐  │       ┌──────────────┐
+   │  │ Oplog │  │──────►│  SyncManager  │──► Atlas
+   │  └───────┘  │       │  push / pull  │
+   └─────────────┘       │  conflict res │
+                         └──────────────┘
+```
+
+---
+
+## Features
+
+### Storage -- WiredTiger B-Trees
+MongoDB acquired WiredTiger in 2014 and made it the default storage engine. We use the same technology locally: documents are serialized to JSON and stored in WiredTiger B-Tree tables keyed by `_id`. You get document-level concurrency, crash recovery, and efficient disk I/O for free.
+
+### MQL Compiler
+A pure-Python compiler translates MongoDB query dictionaries into executable predicates. Supported operators: `$gt`, `$lt`, `$gte`, `$lte`, `$eq`, `$ne`, `$in`, `$exists`, `$or`, `$and`. Update operators: `$set`, `$inc`, `$push`, `$unset`. Dot-notation paths work everywhere (`"address.city"`).
+
+### Aggregation Pipeline
+In-memory pipeline execution with stages: `$match`, `$group`, `$project`, `$sort`, `$limit`, `$skip`, `$unwind`. Group accumulators: `$sum`, `$avg`, `$min`, `$max`, `$push`. Build analytics queries that run identically on local data and against Atlas.
+
+### B-Tree Indexes & Query Planner
+Create single-field, compound, unique, and sparse indexes backed by dedicated WiredTiger tables. The query planner scores candidate indexes and picks the optimal execution path:
+- **Index Scan** -- range or equality scan on the best-matching index
+- **PK Lookup** -- O(log n) direct `_id` fetch
+- **Collection Scan** -- fallback full-table scan
+
+Sortable key encoding (IEEE 754 bit-flipping for numbers, hex inversion for descending fields) ensures correct lexicographic ordering across mixed types.
+
+### Oplog (Operations Log)
+Every mutation (insert, update, delete, index create/drop) is append-logged to a dedicated WiredTiger table with timestamps, version counters, and checksums. This is the foundation for sync -- and it's inspectable in the dashboard.
+
+### Bidirectional Sync
+`SyncManager` syncs local state to any MongoDB-compatible remote:
+- **Push**: tail the oplog, batch `bulk_write` to remote
+- **Pull**: timestamp-based polling, merge remote changes locally
+- **Index sync**: index definitions flow both directions
+- **Conflict resolution**: Last-Write-Wins, local-wins, remote-wins, or a custom callable
+- **Checkpointing**: survives crashes and restarts via a WiredTiger checkpoint table
+- **Auto-sync**: background thread with configurable interval
+
+### Interactive Web Dashboard
+A full-featured GUI at `localhost:5000` with:
+
+| Tab | What it does |
+|---|---|
+| **Shell** | mongosh-compatible terminal -- `db.users.find({})`, `db.users.aggregate([...])`, arrow-key history, execution timing |
+| **Documents** | Browse, insert, delete docs in a rich table with formatted values |
+| **Find & Query** | Clickable query chips, plan badges (INDEX SCAN / COLL SCAN / PK LOOKUP), timing |
+| **Aggregation** | Visual pipeline builder with drag stages, pre-built example pipelines |
+| **Indexes** | List, create, drop B-Tree indexes; index template chips; query plan tester |
+| **Sync** | Live visualization of local <-> remote, push/pull controls, remote client simulator, conflict metrics |
+| **Oplog** | Color-coded mutation log with timestamps and version numbers |
+
+---
+
+## Quick Start
+
+### Docker Compose (recommended)
+
+```bash
+docker compose up --build
+# open http://localhost:5000
+```
+
+This starts a MongoDB container (stands in for Atlas) and the mdb-embedded dashboard. Sample data is auto-seeded on first run: 10 employees, 5 indexes, everything synced.
+
+### Standalone (no Docker, no network)
+
+```bash
+pip install wiredtiger pymongo flask
+python demo.py
+```
+
+Runs the full embedded engine locally -- indexes, queries, aggregation, oplog -- with zero external dependencies beyond WiredTiger.
+
+---
+
+## Project Structure
+
+```
+mdb_embedded/
+  __init__.py        MongoClient, SyncManager, DuplicateKeyError
+  client.py          URI-based routing: local:// vs mongodb://
+  storage.py         WiredTiger-backed LocalCollection with full CRUD
+  query.py           MQL compiler: compile_query, apply_update
+  aggregation.py     Pipeline engine: Cursor.aggregate()
+  index.py           B-Tree index manager + query planner
+  oplog.py           Append-only operations log
+  sync.py            Bidirectional sync with conflict resolution
+
+web_app.py           Flask API + shell endpoint
+templates/
+  index.html         Single-page dashboard
+
+demo.py              Standalone CLI demo (no Docker needed)
+Dockerfile           Python 3.11 + WiredTiger build deps
+docker-compose.yml   App + MongoDB for the full sync experience
+```
+
+---
+
+## The API
 
 ```python
-self.table_uri = f"table:{self.db_name}_{self.name}"
-# Key = String (_id), Value = String (JSON doc)
-self.session.create(self.table_uri, "key_format=S,value_format=S")
-```
+from mdb_embedded import MongoClient, SyncManager
 
-Whenever you run `.insert_one()` or `.update_many()`, the engine simply serializes the document to JSON and stores it natively in the WiredTiger B-Tree.
+client = MongoClient("local://data")
+db = client["mydb"]
+coll = db["things"]
+
+# CRUD
+coll.insert_one({"x": 1})
+coll.insert_many([{"x": 2}, {"x": 3}])
+coll.find({"x": {"$gt": 1}})
+coll.find_one({"x": 2})
+coll.update_one({"x": 1}, {"$set": {"x": 10}})
+coll.update_many({}, {"$inc": {"x": 1}})
+coll.delete_one({"x": 2})
+coll.delete_many({"x": {"$lt": 5}})
+coll.count_documents({"x": {"$gte": 1}})
+
+# Indexes
+coll.create_index([("x", 1)])
+coll.create_index("name", unique=True)
+coll.create_index([("city", 1), ("age", -1)])
+coll.list_indexes()
+coll.drop_index("x_1")
+coll.explain({"x": {"$gt": 5}})
+
+# Aggregation
+coll.aggregate([
+    {"$match": {"status": "active"}},
+    {"$group": {"_id": "$dept", "total": {"$sum": "$salary"}}},
+    {"$sort": {"total": -1}},
+    {"$limit": 10},
+])
+
+# Sync
+sync = SyncManager(client, "mongodb+srv://user:pass@cluster.mongodb.net",
+                   sync_config={"conflict_resolution": "lww"})
+sync.register_collection("mydb", "things", coll.get_local_collection())
+sync.start()          # background bidirectional sync
+sync.sync_now()       # immediate sync cycle
+sync.status()         # {"running": True, "pending": 0, ...}
+sync.stop()
+```
 
 ---
 
-## 3. The Pure Python MQL Compiler
+## License
 
-MongoDB Query Language (MQL) is famously represented as JSON/Dictionaries. To make our local engine work, we had to build a compiler that translates dictionaries like `{"age": {"$gt": 30}}` into executable Python functions.
-
-We built a recursive `compile_query` function that evaluates documents on the fly:
-
-```python
-def compile_query(query):
-    def match(doc):
-        for key, condition in query.items():
-            # Support for logical operators
-            if key == "$or":
-                if not any(compile_query(sub)(doc) for sub in condition): return False
-                continue
-            
-            value = get_value(doc, key) # Supports "user.stats.logins" dot-notation
-            
-            # Support for comparison operators
-            if isinstance(condition, dict):
-                for op, cond_val in condition.items():
-                    if op == "$gt" and not (value > cond_val): return False
-                    if op == "$in" and not (value in cond_val): return False
-            else:
-                if value != condition: return False
-        return True
-    return match
-```
-
-When you call `collection.find(query)`, the engine fetches the documents from WiredTiger, compiles your query into a `match` function, and filters the results in memory. 
-
----
-
-## 4. Aggregation Pipelines on the Edge
-
-One of the hardest things to replicate outside of MongoDB is the Aggregation Pipeline. However, because an aggregation pipeline is just a series of sequential data transformations, we built a local `Cursor` that applies these stages iteratively.
-
-```python
-def aggregate(self, pipeline):
-    docs = self.docs
-    for stage in pipeline:
-        op, spec = list(stage.items())[0]
-
-        if op == "$match":
-            fn = compile_query(spec)
-            docs = [d for d in docs if fn(d)]
-        elif op == "$group": 
-            docs = group_stage(docs, spec)
-        elif op == "$unwind": 
-            docs = unwind_stage(docs, spec)
-        elif op == "$sort": 
-            docs = sort_stage(docs, spec)
-            
-    return docs
-```
-
-You can now test complex `$group` and `$unwind` analytics queries locally without a network round-trip.
-
----
-
-## 5. The Sync Log (Oplog)
-
-A local-first database isn't very useful if that data remains trapped on the edge forever. To bridge the gap between local execution and remote synchronization, we implemented an **Oplog** (Operations Log).
-
-Every single time a document is inserted, updated, or deleted, the `LocalCollection` writes a chronological event to a dedicated `__oplog_` WiredTiger table.
-
-```python
-def _log_op(self, op, doc_id, payload):
-    oplog_key = f"{time.time_ns()}-{uuid.uuid4()}"
-    log_entry = {
-        "ts": time.time(),
-        "op": op,
-        "doc_id": doc_id,
-        "payload": payload
-    }
-    
-    cursor = self.session.open_cursor(self.oplog_uri, None, "overwrite=true")
-    cursor[oplog_key] = json.dumps(log_entry)
-```
-
-**Why is this a big deal?** Because this lays the exact foundation needed for a background **Sync Worker**. A separate thread can wake up, read the `_oplog` table, push those mutations to your central MongoDB Atlas cluster, and clear the local log. You get immediate UI updates locally, and eventual consistency globally.
-
----
-
-## Conclusion
-
-By combining the PyMongo API structure, a custom Python MQL compiler, and the raw power of the WiredTiger storage engine, we've created an incredibly potent tool for developers. 
-
-Whether you are building unit tests that need persistent state, creating an edge-compute application, or prototyping a local-first application architecture, you no longer have to compromise on your database syntax.
+See [LICENSE](LICENSE).

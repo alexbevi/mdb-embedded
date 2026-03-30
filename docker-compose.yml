@@ -1,0 +1,27 @@
+services:
+  # Stands in for MongoDB Atlas -- a real mongod the sync layer talks to
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    healthcheck:
+      test: mongosh --eval "db.runCommand('ping').ok" --quiet
+      interval: 3s
+      timeout: 5s
+      retries: 10
+
+  # The mdb-embedded web dashboard
+  app:
+    build: .
+    depends_on:
+      mongo:
+        condition: service_healthy
+    ports:
+      - "5000:5000"
+    environment:
+      MONGO_URI: mongodb://mongo:27017
+    volumes:
+      - wt_data:/app/local_wt_data
+
+volumes:
+  wt_data:

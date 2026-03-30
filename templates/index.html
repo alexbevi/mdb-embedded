@@ -1,0 +1,1026 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>mdb-embedded | Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0a0c10;--surface:#12151c;--surface2:#1a1e28;--surface3:#222736;
+  --border:#2a3040;--border2:#343b50;
+  --text:#e8ecf4;--text2:#8892a8;--text3:#5c6580;
+  --green:#00ed64;--green2:#00c853;--green-bg:rgba(0,237,100,.08);
+  --red:#ff4d6a;--red-bg:rgba(255,77,106,.08);
+  --orange:#ffaa2c;--orange-bg:rgba(255,170,44,.08);
+  --blue:#3b82f6;--blue-bg:rgba(59,130,246,.08);
+  --purple:#a78bfa;--purple-bg:rgba(167,139,250,.08);
+  --cyan:#22d3ee;--cyan-bg:rgba(34,211,238,.08);
+  --mono:'JetBrains Mono',monospace;--sans:'Inter',system-ui,sans-serif;
+  --radius:10px;--radius-sm:6px;
+}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);overflow-x:hidden;min-height:100vh}
+a{color:var(--green);text-decoration:none}
+::selection{background:rgba(0,237,100,.2)}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+
+/* ─── Header ──────────────────────────────────────────── */
+.hdr{display:flex;align-items:center;gap:14px;padding:0 24px;height:56px;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100}
+.logo{display:flex;align-items:center;gap:10px;font-size:16px;font-weight:800;letter-spacing:-.5px}
+.logo svg{width:28px;height:28px}
+.logo span{color:var(--green)}
+.pills{display:flex;gap:6px;margin-left:8px}
+.pill{font-size:10px;padding:3px 10px;border-radius:20px;background:var(--surface2);color:var(--text2);border:1px solid var(--border);font-weight:600;letter-spacing:.3px;text-transform:uppercase}
+.pill.on{background:var(--green-bg);color:var(--green);border-color:rgba(0,237,100,.25);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(0,237,100,.15)}50%{box-shadow:0 0 0 6px rgba(0,237,100,0)}}
+.hdr-right{margin-left:auto;display:flex;gap:8px;align-items:center}
+.hdr-stat{font-family:var(--mono);font-size:11px;color:var(--text2);display:flex;align-items:center;gap:6px;padding:0 12px;border-left:1px solid var(--border);height:32px}
+.hdr-stat .num{color:var(--green);font-weight:700;font-size:13px}
+
+/* ─── Tabs ────────────────────────────────────────────── */
+.tab-bar{display:flex;gap:0;padding:0 24px;background:var(--surface);border-bottom:1px solid var(--border)}
+.tab{padding:12px 20px;font-size:13px;font-weight:600;color:var(--text2);cursor:pointer;border-bottom:2px solid transparent;transition:all .15s;display:flex;align-items:center;gap:8px}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--green);border-bottom-color:var(--green)}
+.tab .tab-icon{width:14px;height:14px;opacity:.6}
+.tab.active .tab-icon{opacity:1}
+.tab-panel{display:none;padding:20px 24px}
+.tab-panel.active{display:block}
+
+/* ─── Layout helpers ──────────────────────────────────── */
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+@media(max-width:1100px){.grid2,.grid3{grid-template-columns:1fr}}
+
+/* ─── Card ────────────────────────────────────────────── */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;display:flex;flex-direction:column}
+.card.full{grid-column:1/-1}
+.card-hdr{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border);font-weight:600;font-size:13px}
+.card-hdr .dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.card-hdr .actions{margin-left:auto;display:flex;gap:6px}
+.card-hdr .badge-count{font-family:var(--mono);font-size:10px;background:var(--surface3);color:var(--text2);padding:2px 8px;border-radius:10px;font-weight:700}
+.card-body{padding:14px 16px;flex:1;overflow:auto;max-height:500px}
+
+/* ─── Buttons ─────────────────────────────────────────── */
+.btn{font-family:var(--sans);font-size:12px;font-weight:600;padding:7px 14px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--surface2);color:var(--text);cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:6px}
+.btn:hover{border-color:var(--green);color:var(--green)}
+.btn.primary{background:var(--green);color:#0a0c10;border-color:var(--green);font-weight:700}
+.btn.primary:hover{background:var(--green2);box-shadow:0 0 20px rgba(0,237,100,.15)}
+.btn.danger{border-color:var(--red);color:var(--red)}
+.btn.danger:hover{background:var(--red-bg)}
+.btn.ghost{border:none;background:none;color:var(--text2);padding:6px 10px}
+.btn.ghost:hover{color:var(--green);background:var(--green-bg)}
+.btn.sm{padding:4px 10px;font-size:11px}
+.btn.xs{padding:3px 8px;font-size:10px}
+
+/* ─── Tables ──────────────────────────────────────────── */
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;padding:8px 10px;color:var(--text3);font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.6px;border-bottom:1px solid var(--border)}
+td{padding:7px 10px;border-bottom:1px solid rgba(42,48,64,.4);vertical-align:top;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+tr:hover td{background:rgba(0,237,100,.02)}
+
+/* ─── Code / Inputs ───────────────────────────────────── */
+.code{font-family:var(--mono);font-size:12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 14px;color:var(--text);resize:vertical;width:100%;min-height:38px;outline:none;line-height:1.6}
+.code:focus{border-color:var(--green);box-shadow:0 0 0 3px rgba(0,237,100,.08)}
+select.code{cursor:pointer}
+pre.json{font-family:var(--mono);font-size:11px;line-height:1.7;white-space:pre-wrap;word-break:break-word;color:var(--text2)}
+pre.json .k{color:var(--blue)}
+pre.json .s{color:var(--green)}
+pre.json .n{color:var(--orange)}
+pre.json .bool{color:var(--purple)}
+pre.json .null{color:var(--text3)}
+
+/* ─── Badges ──────────────────────────────────────────── */
+.badge{display:inline-flex;align-items:center;gap:4px;font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:4px;font-weight:700;text-transform:uppercase;letter-spacing:.3px}
+.badge.scan{background:var(--orange-bg);color:var(--orange)}
+.badge.idx{background:var(--green-bg);color:var(--green)}
+.badge.pk{background:var(--purple-bg);color:var(--purple)}
+
+/* ─── Chips (clickable query examples) ────────────────── */
+.chip{display:inline-block;font-family:var(--mono);font-size:11px;padding:5px 12px;border-radius:20px;border:1px solid var(--border);color:var(--text2);cursor:pointer;transition:all .15s;margin:0 4px 6px 0}
+.chip:hover{border-color:var(--green);color:var(--green);background:var(--green-bg)}
+
+/* ─── Shell ───────────────────────────────────────────── */
+.shell{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;display:flex;flex-direction:column;height:620px}
+.shell-toolbar{display:flex;align-items:center;gap:8px;padding:8px 14px;background:var(--surface);border-bottom:1px solid var(--border);font-size:12px;color:var(--text2)}
+.shell-toolbar .circles{display:flex;gap:6px}
+.shell-toolbar .circles span{width:10px;height:10px;border-radius:50%}
+.shell-output{flex:1;overflow-y:auto;padding:14px;font-family:var(--mono);font-size:12px;line-height:1.7}
+.shell-output .line{margin-bottom:2px}
+.shell-output .prompt{color:var(--green)}
+.shell-output .cmd{color:var(--text)}
+.shell-output .result{color:var(--text2);white-space:pre-wrap}
+.shell-output .err{color:var(--red)}
+.shell-output .info{color:var(--cyan);font-style:italic}
+.shell-output .timing{color:var(--text3);font-size:10px}
+.shell-input-row{display:flex;align-items:center;gap:0;padding:0 14px 12px;background:var(--bg)}
+.shell-input-row .prompt-char{color:var(--green);font-family:var(--mono);font-size:13px;font-weight:700;padding-right:8px}
+.shell-input{flex:1;background:transparent;border:none;color:var(--text);font-family:var(--mono);font-size:13px;outline:none;caret-color:var(--green)}
+
+/* ─── Oplog entry ─────────────────────────────────────── */
+.op-entry{display:flex;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid rgba(42,48,64,.3);font-size:11px}
+.op-entry:last-child{border:none}
+.op-tag{font-family:var(--mono);font-size:10px;padding:2px 8px;border-radius:4px;font-weight:700;min-width:80px;text-align:center;text-transform:uppercase}
+.op-tag.insert{background:var(--green-bg);color:var(--green)}
+.op-tag.update{background:var(--blue-bg);color:var(--blue)}
+.op-tag.delete{background:var(--red-bg);color:var(--red)}
+.op-tag.index_create{background:var(--purple-bg);color:var(--purple)}
+.op-tag.index_drop{background:var(--purple-bg);color:var(--purple)}
+
+/* ─── Sync visualization ─────────────────────────────── */
+.sync-viz{display:flex;align-items:center;justify-content:center;gap:0;padding:30px 0}
+.sync-node{text-align:center;flex:0 0 200px}
+.sync-node .icon{width:64px;height:64px;border-radius:16px;display:flex;align-items:center;justify-content:center;margin:0 auto 12px;font-size:28px;border:2px solid var(--border)}
+.sync-node.local .icon{background:var(--green-bg);border-color:rgba(0,237,100,.2)}
+.sync-node.remote .icon{background:var(--blue-bg);border-color:rgba(59,130,246,.2)}
+.sync-node .label{font-weight:700;font-size:14px;margin-bottom:4px}
+.sync-node .sub{color:var(--text2);font-size:11px}
+.sync-node .count{font-family:var(--mono);font-size:32px;font-weight:800;margin-top:8px}
+.sync-node.local .count{color:var(--green)}
+.sync-node.remote .count{color:var(--blue)}
+
+.sync-arrows{flex:0 0 160px;display:flex;flex-direction:column;align-items:center;gap:12px;position:relative}
+.sync-arrow{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:600;padding:6px 14px;border-radius:20px;cursor:pointer;transition:all .2s}
+.sync-arrow.push{background:var(--green-bg);color:var(--green);border:1px solid rgba(0,237,100,.2)}
+.sync-arrow.push:hover{background:rgba(0,237,100,.15);box-shadow:0 0 15px rgba(0,237,100,.1)}
+.sync-arrow.pull{background:var(--blue-bg);color:var(--blue);border:1px solid rgba(59,130,246,.2)}
+.sync-arrow.pull:hover{background:rgba(59,130,246,.15);box-shadow:0 0 15px rgba(59,130,246,.1)}
+.sync-arrow svg{width:16px;height:16px}
+
+/* ─── Aggregation stage cards ─────────────────────────── */
+.stage-card{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 14px;margin-bottom:8px;display:flex;align-items:flex-start;gap:10px}
+.stage-card .stage-num{font-family:var(--mono);font-size:10px;font-weight:700;color:var(--text3);background:var(--bg);padding:3px 8px;border-radius:4px;flex-shrink:0;margin-top:2px}
+.stage-card .stage-body{flex:1;overflow:hidden}
+.stage-card .stage-type{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--purple);margin-bottom:4px}
+.stage-card textarea{width:100%;min-height:32px;font-family:var(--mono);font-size:11px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:6px 10px;resize:vertical;outline:none}
+.stage-card textarea:focus{border-color:var(--green)}
+.stage-card .remove-stage{cursor:pointer;color:var(--text3);font-size:16px;line-height:1;padding:2px}
+.stage-card .remove-stage:hover{color:var(--red)}
+
+/* ─── Metric cards ────────────────────────────────────── */
+.metric{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;text-align:center}
+.metric .metric-val{font-family:var(--mono);font-size:28px;font-weight:800;margin-bottom:4px}
+.metric .metric-label{font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;font-weight:600}
+
+/* ─── Toast ───────────────────────────────────────────── */
+.toast-container{position:fixed;bottom:24px;right:24px;z-index:200;display:flex;flex-direction:column-reverse;gap:8px}
+.toast{padding:10px 18px;border-radius:var(--radius-sm);font-size:12px;font-weight:600;transition:all .3s;opacity:0;transform:translateY(10px);display:flex;align-items:center;gap:8px}
+.toast.show{opacity:1;transform:translateY(0)}
+.toast.ok{background:var(--green-bg);color:var(--green);border:1px solid rgba(0,237,100,.25)}
+.toast.err{background:var(--red-bg);color:var(--red);border:1px solid rgba(255,77,106,.25)}
+
+/* ─── Misc ────────────────────────────────────────────── */
+.empty{text-align:center;color:var(--text3);padding:40px 20px;font-size:12px}
+.row{display:flex;gap:8px;align-items:flex-end}
+.field{flex:1;display:flex;flex-direction:column;gap:4px}
+.label{font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.6px;font-weight:600}
+.mt{margin-top:14px}
+.divider{border-top:1px solid var(--border);margin:14px 0}
+.timer{font-family:var(--mono);font-size:10px;color:var(--text3);display:inline-flex;align-items:center;gap:4px}
+.timer svg{width:12px;height:12px}
+</style>
+</head>
+<body>
+
+<!-- ─── Header ──────────────────────────────────────────── -->
+<header class="hdr">
+  <div class="logo">
+    <svg viewBox="0 0 28 28" fill="none"><path d="M14 2C7.373 2 2 7.373 2 14s5.373 12 12 12 12-5.373 12-12S20.627 2 14 2z" fill="#00ed64" opacity=".12"/><path d="M14 6v16M8 10l6-4 6 4M8 18l6 4 6-4" stroke="#00ed64" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span>mdb</span>-embedded
+  </div>
+  <div class="pills">
+    <div class="pill">WiredTiger</div>
+    <div class="pill">MQL</div>
+    <div class="pill" id="syncPill">Sync OFF</div>
+  </div>
+  <div class="hdr-right">
+    <div class="hdr-stat">Docs <span class="num" id="hdrDocCount">-</span></div>
+    <div class="hdr-stat">Indexes <span class="num" id="hdrIdxCount">-</span></div>
+    <button class="btn sm" onclick="seedData()">Reset &amp; Seed</button>
+    <button class="btn sm primary" onclick="toggleSync()" id="syncBtn">Start Sync</button>
+  </div>
+</header>
+
+<!-- ─── Tabs ─────────────────────────────────────────────── -->
+<nav class="tab-bar">
+  <div class="tab active" data-tab="shell" onclick="switchTab('shell')">
+    <svg class="tab-icon" viewBox="0 0 16 16" fill="none"><path d="M2 12l5-4-5-4M9 12h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    Shell
+  </div>
+  <div class="tab" data-tab="documents" onclick="switchTab('documents')">
+    <svg class="tab-icon" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M5 6h6M5 8.5h4M5 11h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+    Documents
+  </div>
+  <div class="tab" data-tab="query" onclick="switchTab('query')">
+    <svg class="tab-icon" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.3"/><path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+    Find &amp; Query
+  </div>
+  <div class="tab" data-tab="aggregation" onclick="switchTab('aggregation')">
+    <svg class="tab-icon" viewBox="0 0 16 16" fill="none"><path d="M2 3h12M4 6.5h8M6 10h4M7 13.5h2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+    Aggregation
+  </div>
+  <div class="tab" data-tab="indexes" onclick="switchTab('indexes')">
+    <svg class="tab-icon" viewBox="0 0 16 16" fill="none"><path d="M8 2v12M4 5l4-3 4 3M4 11l4 3 4-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    Indexes
+  </div>
+  <div class="tab" data-tab="sync" onclick="switchTab('sync')">
+    <svg class="tab-icon" viewBox="0 0 16 16" fill="none"><path d="M2 10c0-3.3 2.7-6 6-6h3M8 14c3.3 0 6-2.7 6-6V5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M9 1.5L11.5 4 9 6.5M7 9.5L4.5 12 7 14.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    Sync
+  </div>
+  <div class="tab" data-tab="oplog" onclick="switchTab('oplog')">
+    <svg class="tab-icon" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M5 5.5h6M5 8h4M5 10.5h5" stroke="currentColor" stroke-width="1" stroke-linecap="round" opacity=".6"/></svg>
+    Oplog
+  </div>
+</nav>
+
+<!-- ═══════════════════════════════════════════════════════
+     TAB: SHELL
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-panel active" id="panel-shell">
+  <div class="grid2">
+    <div style="grid-column:1/-1">
+      <div class="shell">
+        <div class="shell-toolbar">
+          <div class="circles">
+            <span style="background:var(--red)"></span>
+            <span style="background:var(--orange)"></span>
+            <span style="background:var(--green)"></span>
+          </div>
+          mongosh&nbsp;&mdash;&nbsp;mdb-embedded
+          <span style="margin-left:auto;font-size:10px;color:var(--text3)">Type commands like db.users.find({}) &bull; Arrow &uarr;&darr; for history</span>
+        </div>
+        <div class="shell-output" id="shellOutput">
+          <div class="line info">Welcome to mdb-embedded shell (mongosh-compatible)</div>
+          <div class="line info">Engine: WiredTiger &bull; Query: MQL &bull; Sync: Atlas-compatible</div>
+          <div class="line info">&nbsp;</div>
+          <div class="line info">Try these commands:</div>
+          <div class="line result">  db.users.find({})</div>
+          <div class="line result">  db.users.find({"city": "NYC"})</div>
+          <div class="line result">  db.users.aggregate([{"$group": {"_id": "$city", "count": {"$sum": 1}}}])</div>
+          <div class="line result">  db.users.insertOne({"name": "Zara", "age": 26, "city": "BOS"})</div>
+          <div class="line result">  db.users.explain({"age": {"$gt": 30}})</div>
+          <div class="line result">  db.users.countDocuments({})</div>
+          <div class="line result">  db.users.getIndexes()</div>
+          <div class="line info">&nbsp;</div>
+        </div>
+        <div class="shell-input-row">
+          <span class="prompt-char">&gt;</span>
+          <input class="shell-input" id="shellInput" placeholder="db.users.find({})" autofocus spellcheck="false" autocomplete="off">
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     TAB: DOCUMENTS
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-panel" id="panel-documents">
+  <div class="grid2">
+    <!-- Document list -->
+    <div class="card" style="grid-column:1/-1">
+      <div class="card-hdr">
+        <div class="dot" style="background:var(--green)"></div>
+        Local Documents
+        <span class="badge-count" id="docCountBadge">0</span>
+        <div class="actions">
+          <button class="btn sm" onclick="refreshDocs()">Refresh</button>
+          <button class="btn sm primary" onclick="showInsertModal()">+ Insert</button>
+        </div>
+      </div>
+      <div class="card-body" id="docsBody" style="max-height:600px">
+        <div class="empty">Loading...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Insert modal -->
+  <div id="insertModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;display:none;align-items:center;justify-content:center">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:500px;max-width:90vw">
+      <div class="card-hdr">
+        <div class="dot" style="background:var(--green)"></div>
+        Insert Document
+        <div class="actions"><button class="btn xs ghost" onclick="hideInsertModal()">&times;</button></div>
+      </div>
+      <div style="padding:16px">
+        <textarea class="code" id="insertDocInput" rows="8" style="min-height:120px">{"name": "", "age": 0, "city": "", "dept": "", "tags": [], "salary": 0}</textarea>
+        <div class="mt" style="display:flex;gap:8px;justify-content:flex-end">
+          <button class="btn" onclick="hideInsertModal()">Cancel</button>
+          <button class="btn primary" onclick="insertFromModal()">Insert</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     TAB: FIND & QUERY
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-panel" id="panel-query">
+  <div class="grid2">
+    <div class="card" style="grid-column:1/-1">
+      <div class="card-hdr">
+        <div class="dot" style="background:var(--blue)"></div>
+        Find Query
+        <div class="actions" id="queryTimer"></div>
+      </div>
+      <div class="card-body" style="max-height:none">
+        <div class="label" style="margin-bottom:8px">Quick Examples</div>
+        <div id="queryChips" style="margin-bottom:14px">
+          <span class="chip" onclick="setQuery('{}')">All docs</span>
+          <span class="chip" onclick="setQuery('{&quot;age&quot;:{&quot;$gt&quot;:30}}')">age &gt; 30</span>
+          <span class="chip" onclick="setQuery('{&quot;city&quot;:&quot;NYC&quot;}')">city = NYC</span>
+          <span class="chip" onclick="setQuery('{&quot;dept&quot;:&quot;engineering&quot;}')">engineering</span>
+          <span class="chip" onclick="setQuery('{&quot;salary&quot;:{&quot;$gte&quot;:140000}}')">salary &ge; 140k</span>
+          <span class="chip" onclick="setQuery('{&quot;$or&quot;:[{&quot;city&quot;:&quot;SF&quot;},{&quot;city&quot;:&quot;LA&quot;}]}')">SF or LA</span>
+          <span class="chip" onclick="setQuery('{&quot;tags&quot;:{&quot;$in&quot;:[&quot;python&quot;]}}')">has python</span>
+          <span class="chip" onclick="setQuery('{&quot;name&quot;:{&quot;$ne&quot;:&quot;Alice&quot;}}')">not Alice</span>
+        </div>
+        <div class="row">
+          <div class="field">
+            <div class="label">db.users.find( &lt;query&gt; )</div>
+            <textarea class="code" id="queryInput" rows="3">{"age": {"$gt": 30}}</textarea>
+          </div>
+        </div>
+        <div class="mt" style="display:flex;gap:8px;align-items:center">
+          <button class="btn primary" onclick="runQuery()">Execute</button>
+          <button class="btn" onclick="setQuery('{}');runQuery()">Show All</button>
+          <button class="btn" onclick="explainQuery()">Explain</button>
+        </div>
+        <div class="divider"></div>
+        <div id="queryPlan" style="margin-bottom:10px"></div>
+        <pre class="json" id="queryResults" style="max-height:400px;overflow:auto"></pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     TAB: AGGREGATION
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-panel" id="panel-aggregation">
+  <div class="grid2">
+    <!-- Pipeline builder -->
+    <div class="card">
+      <div class="card-hdr">
+        <div class="dot" style="background:var(--purple)"></div>
+        Pipeline Builder
+        <div class="actions">
+          <button class="btn xs" onclick="addStage('$match')">+ $match</button>
+          <button class="btn xs" onclick="addStage('$group')">+ $group</button>
+          <button class="btn xs" onclick="addStage('$sort')">+ $sort</button>
+          <button class="btn xs" onclick="addStage('$project')">+ $project</button>
+          <button class="btn xs" onclick="addStage('$unwind')">+ $unwind</button>
+          <button class="btn xs" onclick="addStage('$limit')">+ $limit</button>
+          <button class="btn xs" onclick="addStage('$skip')">+ $skip</button>
+        </div>
+      </div>
+      <div class="card-body" style="max-height:none">
+        <div class="label" style="margin-bottom:10px">Example Pipelines</div>
+        <div style="margin-bottom:14px">
+          <span class="chip" onclick="loadPipeline('countByCity')">Count by city</span>
+          <span class="chip" onclick="loadPipeline('avgSalaryByDept')">Avg salary/dept</span>
+          <span class="chip" onclick="loadPipeline('topEarners')">Top 3 earners</span>
+          <span class="chip" onclick="loadPipeline('tagBreakdown')">Tag breakdown</span>
+          <span class="chip" onclick="loadPipeline('nycEngineers')">NYC engineers</span>
+        </div>
+        <div id="stagesContainer"></div>
+        <div class="mt">
+          <button class="btn primary" onclick="runAggregate()">Run Pipeline</button>
+          <button class="btn" onclick="clearStages()">Clear All</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Results -->
+    <div class="card">
+      <div class="card-hdr">
+        <div class="dot" style="background:var(--orange)"></div>
+        Pipeline Results
+        <div class="actions" id="aggTimer"></div>
+      </div>
+      <div class="card-body" style="max-height:none">
+        <pre class="json" id="aggResults" style="max-height:500px;overflow:auto"><span style="color:var(--text3)">Build a pipeline and click Run</span></pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     TAB: INDEXES
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-panel" id="panel-indexes">
+  <div class="grid2">
+    <div class="card">
+      <div class="card-hdr">
+        <div class="dot" style="background:var(--purple)"></div>
+        B-Tree Indexes
+        <span class="badge-count" id="idxCountBadge">0</span>
+        <div class="actions"><button class="btn sm" onclick="refreshIndexes()">Refresh</button></div>
+      </div>
+      <div class="card-body" style="max-height:none">
+        <table>
+          <thead><tr><th>Name</th><th>Keys</th><th>Unique</th><th>Sparse</th><th></th></tr></thead>
+          <tbody id="idxBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-hdr">
+        <div class="dot" style="background:var(--green)"></div>
+        Create Index
+      </div>
+      <div class="card-body" style="max-height:none">
+        <div class="label" style="margin-bottom:8px">Quick Index Templates</div>
+        <div style="margin-bottom:14px">
+          <span class="chip" onclick="setIdxKeys('[&quot;name&quot;]', true)">Unique name</span>
+          <span class="chip" onclick="setIdxKeys('[[&quot;age&quot;, 1]]')">age ASC</span>
+          <span class="chip" onclick="setIdxKeys('[[&quot;salary&quot;, -1]]')">salary DESC</span>
+          <span class="chip" onclick="setIdxKeys('[[&quot;city&quot;, 1], [&quot;salary&quot;, -1]]')">city + salary</span>
+          <span class="chip" onclick="setIdxKeys('[[&quot;dept&quot;, 1], [&quot;age&quot;, 1]]')">dept + age</span>
+        </div>
+        <div class="row">
+          <div class="field">
+            <div class="label">Key Specification (JSON)</div>
+            <input class="code" id="newIdxKeys" value='[["age", 1]]' style="min-height:auto;padding:8px 12px">
+          </div>
+          <div class="field" style="flex:0 0 80px">
+            <div class="label">Unique</div>
+            <select class="code" id="newIdxUnique" style="min-height:auto;padding:7px 8px"><option value="false">No</option><option value="true">Yes</option></select>
+          </div>
+          <button class="btn primary" style="align-self:flex-end" onclick="createIdx()">Create</button>
+        </div>
+        <div class="divider"></div>
+        <div class="label" style="margin-bottom:8px">Query Plan Tester</div>
+        <div class="row">
+          <div class="field">
+            <div class="label">Query</div>
+            <input class="code" id="planQuery" value='{"age": {"$gt": 30}}' style="min-height:auto;padding:8px 12px">
+          </div>
+          <button class="btn" style="align-self:flex-end" onclick="testPlan()">Explain</button>
+        </div>
+        <pre class="json" id="planResult" style="margin-top:10px"></pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     TAB: SYNC
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-panel" id="panel-sync">
+  <!-- Sync visualization -->
+  <div class="sync-viz">
+    <div class="sync-node local">
+      <div class="icon">
+        <svg width="32" height="32" viewBox="0 0 32 32" fill="none"><rect x="4" y="6" width="24" height="20" rx="3" stroke="#00ed64" stroke-width="1.5"/><path d="M4 12h24M12 12v14" stroke="#00ed64" stroke-width="1.5"/><circle cx="8" cy="9" r="1" fill="#00ed64"/><circle cx="11" cy="9" r="1" fill="#00ed64"/></svg>
+      </div>
+      <div class="label">Local Engine</div>
+      <div class="sub">WiredTiger B-Tree</div>
+      <div class="count" id="localCount">-</div>
+      <div style="color:var(--text3);font-size:11px">documents</div>
+    </div>
+
+    <div class="sync-arrows">
+      <div class="sync-arrow push" onclick="syncPush()" title="Push local changes to remote">
+        Push &rarr;
+      </div>
+      <div style="font-size:10px;color:var(--text3);font-weight:600" id="syncLabel">DISCONNECTED</div>
+      <div class="sync-arrow pull" onclick="syncPull()" title="Pull remote changes to local">
+        &larr; Pull
+      </div>
+    </div>
+
+    <div class="sync-node remote">
+      <div class="icon">
+        <svg width="32" height="32" viewBox="0 0 32 32" fill="none"><path d="M16 4c6.627 0 12 2.239 12 5v14c0 2.761-5.373 5-12 5S4 25.761 4 23V9c0-2.761 5.373-5 12-5z" stroke="#3b82f6" stroke-width="1.5"/><path d="M4 9c0 2.761 5.373 5 12 5s12-2.239 12-5M4 16c0 2.761 5.373 5 12 5s12-2.239 12-5" stroke="#3b82f6" stroke-width="1.5"/></svg>
+      </div>
+      <div class="label">Remote MongoDB</div>
+      <div class="sub">Atlas-compatible</div>
+      <div class="count" id="remoteCount">-</div>
+      <div style="color:var(--text3);font-size:11px">documents</div>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <!-- Sync controls -->
+    <div class="card">
+      <div class="card-hdr">
+        <div class="dot" style="background:var(--orange)"></div>
+        Sync Controls
+      </div>
+      <div class="card-body">
+        <div class="grid3" style="margin-bottom:16px">
+          <div class="metric">
+            <div class="metric-val" style="color:var(--green)" id="syncPushCount">0</div>
+            <div class="metric-label">Pushed</div>
+          </div>
+          <div class="metric">
+            <div class="metric-val" style="color:var(--blue)" id="syncPullCount">0</div>
+            <div class="metric-label">Pulled</div>
+          </div>
+          <div class="metric">
+            <div class="metric-val" style="color:var(--orange)" id="syncConflicts">0</div>
+            <div class="metric-label">Conflicts</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn primary" onclick="syncPush()">Push Now</button>
+          <button class="btn" onclick="syncPull()">Pull Now</button>
+          <button class="btn" onclick="toggleSync()" id="syncBtn2">Start Auto-Sync</button>
+        </div>
+        <div class="divider"></div>
+        <pre class="json" id="syncStatusPre" style="font-size:10px"></pre>
+      </div>
+    </div>
+
+    <!-- Remote insert simulator -->
+    <div class="card">
+      <div class="card-hdr">
+        <div class="dot" style="background:var(--blue)"></div>
+        Remote Client Simulator
+      </div>
+      <div class="card-body">
+        <p style="font-size:12px;color:var(--text2);margin-bottom:12px">Simulate another client inserting directly into MongoDB Atlas. Then pull to sync locally.</p>
+        <div class="field">
+          <div class="label">Document to insert into remote</div>
+          <textarea class="code" id="remoteDoc" rows="3">{"name": "Zara", "age": 26, "city": "BOS", "dept": "data", "tags": ["python"], "salary": 115000}</textarea>
+        </div>
+        <div class="mt" style="display:flex;gap:8px">
+          <button class="btn" onclick="remoteInsert()">Insert into Remote</button>
+          <button class="btn" onclick="viewRemoteDocs()">View Remote Docs</button>
+        </div>
+        <pre class="json" id="remoteDocs" style="margin-top:12px;max-height:200px;overflow:auto"></pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     TAB: OPLOG
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-panel" id="panel-oplog">
+  <div class="card full">
+    <div class="card-hdr">
+      <div class="dot" style="background:var(--red)"></div>
+      Operations Log (Oplog)
+      <span class="badge-count" id="oplogCountBadge">0</span>
+      <div class="actions"><button class="btn sm" onclick="refreshOplog()">Refresh</button></div>
+    </div>
+    <div class="card-body" id="oplogBody" style="max-height:600px">
+      <div class="empty">Loading...</div>
+    </div>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+const API='';
+
+// ═══ Utilities ═══════════════════════════════════════════
+
+function toast(msg,ok=true){
+  const c=document.getElementById('toastContainer');
+  const t=document.createElement('div');
+  t.className='toast show '+(ok?'ok':'err');
+  t.textContent=msg;
+  c.appendChild(t);
+  setTimeout(()=>{t.classList.remove('show');setTimeout(()=>t.remove(),300)},3000);
+}
+
+async function api(path,opts){
+  try{const r=await fetch(API+path,opts);return r.json();}
+  catch(e){return {error:e.message};}
+}
+
+function syntaxHL(obj){
+  let s=JSON.stringify(obj,null,2);
+  if(!s)return '';
+  s=s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  s=s.replace(/"([^"]+)":/g,'<span class="k">"$1"</span>:');
+  s=s.replace(/: "([^"]*)"/g,': <span class="s">"$1"</span>');
+  s=s.replace(/: (-?\d+\.?\d*)/g,': <span class="n">$1</span>');
+  s=s.replace(/: (true|false)/g,': <span class="bool">$1</span>');
+  s=s.replace(/: (null)/g,': <span class="null">$1</span>');
+  return s;
+}
+
+function timerHTML(ms){
+  return `<span class="timer"><svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/><path d="M8 5v3.5l2.5 1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>${ms}ms</span>`;
+}
+
+// ═══ Tab Navigation ══════════════════════════════════════
+
+function switchTab(name){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===name));
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.toggle('active',p.id==='panel-'+name));
+  if(name==='documents')refreshDocs();
+  if(name==='indexes')refreshIndexes();
+  if(name==='oplog')refreshOplog();
+  if(name==='sync'){refreshSyncStatus();updateCounts();}
+}
+
+// ═══ Shell ═══════════════════════════════════════════════
+
+const shellHistory=[];
+let historyIdx=-1;
+
+document.getElementById('shellInput').addEventListener('keydown',function(e){
+  if(e.key==='Enter'){
+    e.preventDefault();
+    const cmd=this.value.trim();
+    if(!cmd)return;
+    shellHistory.unshift(cmd);
+    historyIdx=-1;
+    runShellCmd(cmd);
+    this.value='';
+  }
+  if(e.key==='ArrowUp'){
+    e.preventDefault();
+    if(historyIdx<shellHistory.length-1){historyIdx++;this.value=shellHistory[historyIdx];}
+  }
+  if(e.key==='ArrowDown'){
+    e.preventDefault();
+    if(historyIdx>0){historyIdx--;this.value=shellHistory[historyIdx];}
+    else{historyIdx=-1;this.value='';}
+  }
+});
+
+async function runShellCmd(cmd){
+  const out=document.getElementById('shellOutput');
+  out.innerHTML+=`<div class="line"><span class="prompt">&gt; </span><span class="cmd">${escHTML(cmd)}</span></div>`;
+  const res=await api('/api/shell',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:cmd})});
+  if(res.error){
+    out.innerHTML+=`<div class="line err">${escHTML(res.error)}</div>`;
+  }else{
+    const formatted=JSON.stringify(res.result,null,2);
+    out.innerHTML+=`<div class="line result">${escHTML(formatted)}</div>`;
+  }
+  if(res.ms!==undefined){
+    out.innerHTML+=`<div class="line timing">⏱ ${res.ms}ms</div>`;
+  }
+  out.innerHTML+=`<div class="line">&nbsp;</div>`;
+  out.scrollTop=out.scrollHeight;
+  refreshHeaderStats();
+}
+
+function escHTML(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+// ═══ Documents ═══════════════════════════════════════════
+
+async function refreshDocs(){
+  const docs=await api('/api/docs?coll=users');
+  const el=document.getElementById('docsBody');
+  if(!docs||docs.error||!docs.length){el.innerHTML='<div class="empty">Collection is empty.</div>';return;}
+  const fields=['_id','name','age','city','dept','salary','tags'];
+  const activeFields=fields.filter(f=>docs.some(d=>d[f]!==undefined));
+  let h='<table><thead><tr>'+activeFields.map(f=>'<th>'+f+'</th>').join('')+'<th></th></tr></thead><tbody>';
+  docs.forEach(d=>{
+    h+='<tr>'+activeFields.map(f=>{
+      let v=d[f]; if(v===undefined)v='';
+      else if(Array.isArray(v))v='<span style="color:var(--purple)">'+v.map(x=>'<span class="chip" style="margin:0;padding:2px 6px;font-size:10px;cursor:default">'+x+'</span>').join(' ')+'</span>';
+      else if(typeof v==='object'&&v!==null)v='<span style="color:var(--text2)">'+JSON.stringify(v)+'</span>';
+      else if(f==='_id')v='<span style="color:var(--text3);font-family:var(--mono);font-size:10px" title="'+v+'">'+v.slice(0,8)+'...</span>';
+      else if(f==='salary')v='<span style="color:var(--green);font-family:var(--mono)">$'+Number(v).toLocaleString()+'</span>';
+      else v=escHTML(String(v));
+      return '<td>'+v+'</td>';
+    }).join('')+
+    '<td><button class="btn xs danger" onclick="deleteDoc(\''+d._id+'\')">Del</button></td></tr>';
+  });
+  h+='</tbody></table>';
+  el.innerHTML=h;
+  document.getElementById('docCountBadge').textContent=docs.length;
+  document.getElementById('hdrDocCount').textContent=docs.length;
+  document.getElementById('localCount').textContent=docs.length;
+}
+
+async function deleteDoc(id){
+  if(!confirm('Delete this document?'))return;
+  const res=await api('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({coll:'users',query:{"_id":id}})});
+  if(res.error){toast(res.error,false);return;}
+  toast('Deleted document');
+  refreshDocs();
+}
+
+function showInsertModal(){document.getElementById('insertModal').style.display='flex';}
+function hideInsertModal(){document.getElementById('insertModal').style.display='none';}
+
+async function insertFromModal(){
+  let doc;
+  try{doc=JSON.parse(document.getElementById('insertDocInput').value);}catch(e){toast('Invalid JSON',false);return;}
+  const res=await api('/api/insert',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({coll:'users',doc})});
+  if(res.error){toast(res.error,false);return;}
+  toast('Document inserted');
+  hideInsertModal();
+  refreshDocs();
+}
+
+// ═══ Query ═══════════════════════════════════════════════
+
+function setQuery(q){document.getElementById('queryInput').value=q;}
+
+async function runQuery(){
+  const raw=document.getElementById('queryInput').value.trim();
+  let query;
+  try{query=JSON.parse(raw);}catch(e){toast('Invalid JSON: '+e.message,false);return;}
+  const res=await api('/api/query',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({coll:'users',query})});
+  if(res.error){toast(res.error,false);return;}
+  renderQueryResult(res);
+}
+
+async function explainQuery(){
+  const raw=document.getElementById('queryInput').value.trim();
+  let query;
+  try{query=JSON.parse(raw);}catch(e){toast('Invalid JSON: '+e.message,false);return;}
+  const res=await api('/api/query',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({coll:'users',query})});
+  if(res.error){toast(res.error,false);return;}
+  document.getElementById('queryResults').innerHTML=syntaxHL(res.plan);
+  if(res.ms) document.getElementById('queryTimer').innerHTML=timerHTML(res.ms);
+  renderPlanBadge(res.plan,res.count);
+}
+
+function renderQueryResult(res){
+  const plan=res.plan||{};
+  renderPlanBadge(plan,res.count);
+  document.getElementById('queryResults').innerHTML=syntaxHL(res.docs);
+  if(res.ms) document.getElementById('queryTimer').innerHTML=timerHTML(res.ms);
+}
+
+function renderPlanBadge(plan,count){
+  let badge='';
+  if(plan.plan==='index_scan') badge=`<span class="badge idx">INDEX SCAN</span> <span style="color:var(--text2);font-size:11px">using <strong>${plan.index}</strong></span>`;
+  else if(plan.plan==='pk_lookup') badge='<span class="badge pk">PK LOOKUP</span>';
+  else badge='<span class="badge scan">COLL SCAN</span>';
+  document.getElementById('queryPlan').innerHTML=badge+` <span style="color:var(--text3);font-size:11px;margin-left:8px">${count} result${count!==1?'s':''}</span>`;
+}
+
+// ═══ Aggregation ═════════════════════════════════════════
+
+const defaultStageValues={
+  '$match':'{"dept": "engineering"}',
+  '$group':'{"_id": "$city", "count": {"$sum": 1}, "avgAge": {"$avg": "$age"}}',
+  '$sort':'{"count": -1}',
+  '$project':'{"_id": 1, "name": 1, "salary": 1}',
+  '$unwind':'"$tags"',
+  '$limit':'5',
+  '$skip':'0'
+};
+
+const examplePipelines={
+  countByCity:[
+    {type:'$group',value:'{"_id": "$city", "count": {"$sum": 1}}'},
+    {type:'$sort',value:'{"count": -1}'}
+  ],
+  avgSalaryByDept:[
+    {type:'$group',value:'{"_id": "$dept", "avgSalary": {"$avg": "$salary"}, "count": {"$sum": 1}}'},
+    {type:'$sort',value:'{"avgSalary": -1}'}
+  ],
+  topEarners:[
+    {type:'$sort',value:'{"salary": -1}'},
+    {type:'$limit',value:'3'},
+    {type:'$project',value:'{"name": 1, "salary": 1, "dept": 1}'}
+  ],
+  tagBreakdown:[
+    {type:'$unwind',value:'"$tags"'},
+    {type:'$group',value:'{"_id": "$tags", "count": {"$sum": 1}}'},
+    {type:'$sort',value:'{"count": -1}'}
+  ],
+  nycEngineers:[
+    {type:'$match',value:'{"city": "NYC", "dept": "engineering"}'},
+    {type:'$project',value:'{"name": 1, "salary": 1, "tags": 1}'}
+  ]
+};
+
+let stages=[];
+
+function addStage(type,value){
+  stages.push({type,value:value||defaultStageValues[type]||'{}'});
+  renderStages();
+}
+
+function removeStage(i){stages.splice(i,1);renderStages();}
+
+function clearStages(){stages=[];renderStages();document.getElementById('aggResults').innerHTML='<span style="color:var(--text3)">Build a pipeline and click Run</span>';}
+
+function loadPipeline(name){
+  stages=examplePipelines[name].map(s=>({...s}));
+  renderStages();
+}
+
+function renderStages(){
+  const el=document.getElementById('stagesContainer');
+  if(!stages.length){el.innerHTML='<div class="empty" style="padding:20px">Add stages using the buttons above or pick an example pipeline</div>';return;}
+  el.innerHTML=stages.map((s,i)=>`
+    <div class="stage-card">
+      <span class="stage-num">${i+1}</span>
+      <div class="stage-body">
+        <div class="stage-type">${s.type}</div>
+        <textarea rows="2" onchange="stages[${i}].value=this.value">${s.value}</textarea>
+      </div>
+      <span class="remove-stage" onclick="removeStage(${i})">&times;</span>
+    </div>`).join('');
+}
+
+async function runAggregate(){
+  let pipeline;
+  try{
+    pipeline=stages.map(s=>{
+      const val=JSON.parse(s.value);
+      return {[s.type]:val};
+    });
+  }catch(e){toast('Invalid JSON in pipeline: '+e.message,false);return;}
+  const res=await api('/api/aggregate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({coll:'users',pipeline})});
+  if(res.error){toast(res.error,false);document.getElementById('aggResults').innerHTML='<span style="color:var(--red)">'+escHTML(res.error)+'</span>';return;}
+  document.getElementById('aggResults').innerHTML=syntaxHL(res.results);
+  document.getElementById('aggTimer').innerHTML=timerHTML(res.ms)+` <span style="color:var(--text3);font-size:11px;margin-left:6px">${res.count} result${res.count!==1?'s':''}</span>`;
+}
+
+renderStages();
+
+// ═══ Indexes ═════════════════════════════════════════════
+
+async function refreshIndexes(){
+  const idxs=await api('/api/indexes?coll=users');
+  const el=document.getElementById('idxBody');
+  if(!idxs||idxs.error||!idxs.length){el.innerHTML='<tr><td colspan="5" style="color:var(--text3)">No indexes</td></tr>';return;}
+  el.innerHTML=idxs.map(i=>`<tr>
+    <td style="font-family:var(--mono);font-size:11px">${i.name}</td>
+    <td style="font-family:var(--mono);font-size:11px;color:var(--text2)">${JSON.stringify(i.keys)}</td>
+    <td>${i.unique?'<span style="color:var(--green);font-weight:700">Yes</span>':'<span style="color:var(--text3)">No</span>'}</td>
+    <td>${i.sparse?'<span style="color:var(--orange)">Yes</span>':'<span style="color:var(--text3)">No</span>'}</td>
+    <td><button class="btn xs danger" onclick="dropIdx('${i.name}')">Drop</button></td>
+  </tr>`).join('');
+  document.getElementById('idxCountBadge').textContent=idxs.length;
+  document.getElementById('hdrIdxCount').textContent=idxs.length;
+}
+
+function setIdxKeys(keys,unique){
+  document.getElementById('newIdxKeys').value=keys;
+  if(unique)document.getElementById('newIdxUnique').value='true';
+  else document.getElementById('newIdxUnique').value='false';
+}
+
+async function createIdx(){
+  let keys;try{keys=JSON.parse(document.getElementById('newIdxKeys').value);}catch(e){toast('Invalid JSON',false);return;}
+  const unique=document.getElementById('newIdxUnique').value==='true';
+  const res=await api('/api/indexes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({coll:'users',keys,unique})});
+  if(res.error){toast(res.error,false);return;}
+  toast('Index '+res.name+' created');
+  refreshIndexes();
+}
+
+async function dropIdx(name){
+  if(!confirm('Drop index '+name+'?'))return;
+  await api('/api/indexes/'+encodeURIComponent(name)+'?coll=users',{method:'DELETE'});
+  toast('Dropped '+name);
+  refreshIndexes();
+}
+
+async function testPlan(){
+  let query;try{query=JSON.parse(document.getElementById('planQuery').value);}catch(e){toast('Invalid JSON',false);return;}
+  const res=await api('/api/query',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({coll:'users',query})});
+  if(res.error){toast(res.error,false);return;}
+  document.getElementById('planResult').innerHTML=syntaxHL(res.plan);
+}
+
+// ═══ Sync ════════════════════════════════════════════════
+
+let syncRunning=false;
+
+async function syncPush(){
+  toast('Pushing to MongoDB...');
+  const res=await api('/api/sync/push',{method:'POST'});
+  toast(res.error?res.error:'Push complete',!res.error);
+  refreshSyncStatus();updateCounts();refreshDocs();
+}
+
+async function syncPull(){
+  toast('Pulling from MongoDB...');
+  const res=await api('/api/sync/push',{method:'POST'});
+  toast(res.error?res.error:'Pull complete',!res.error);
+  refreshSyncStatus();refreshDocs();updateCounts();
+}
+
+async function toggleSync(){
+  if(syncRunning){
+    await api('/api/sync/stop',{method:'POST'});
+    syncRunning=false;
+  }else{
+    await api('/api/sync/start',{method:'POST'});
+    syncRunning=true;
+  }
+  updateSyncUI();
+  refreshSyncStatus();
+}
+
+function updateSyncUI(){
+  const pill=document.getElementById('syncPill');
+  const btn1=document.getElementById('syncBtn');
+  const btn2=document.getElementById('syncBtn2');
+  const label=document.getElementById('syncLabel');
+  if(syncRunning){
+    btn1.textContent='Stop Sync';btn1.className='btn sm danger';
+    btn2.textContent='Stop Auto-Sync';btn2.className='btn danger';
+    pill.textContent='Sync ON';pill.className='pill on';
+    label.textContent='CONNECTED';label.style.color='var(--green)';
+  }else{
+    btn1.textContent='Start Sync';btn1.className='btn sm primary';
+    btn2.textContent='Start Auto-Sync';btn2.className='btn';
+    pill.textContent='Sync OFF';pill.className='pill';
+    label.textContent='DISCONNECTED';label.style.color='var(--text3)';
+  }
+}
+
+async function refreshSyncStatus(){
+  const s=await api('/api/sync/status');
+  if(s.error)return;
+  syncRunning=s.running;
+  updateSyncUI();
+  document.getElementById('syncStatusPre').innerHTML=syntaxHL(s);
+  if(s.last_sync){
+    document.getElementById('syncPushCount').textContent=s.last_sync.pushed||0;
+    document.getElementById('syncPullCount').textContent=s.last_sync.pulled||0;
+    document.getElementById('syncConflicts').textContent=s.last_sync.conflicts||0;
+  }
+}
+
+async function updateCounts(){
+  try{const rd=await api('/api/remote/docs?coll=users');document.getElementById('remoteCount').textContent=Array.isArray(rd)?rd.length:'?';}
+  catch(e){document.getElementById('remoteCount').textContent='?';}
+}
+
+async function remoteInsert(){
+  let doc;try{doc=JSON.parse(document.getElementById('remoteDoc').value);}catch(e){toast('Invalid JSON',false);return;}
+  const res=await api('/api/remote/insert',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({coll:'users',doc})});
+  if(res.error){toast(res.error,false);return;}
+  toast('Inserted into remote MongoDB');
+  updateCounts();
+}
+
+async function viewRemoteDocs(){
+  const docs=await api('/api/remote/docs?coll=users');
+  document.getElementById('remoteDocs').innerHTML=syntaxHL(docs);
+}
+
+// ═══ Oplog ═══════════════════════════════════════════════
+
+async function refreshOplog(){
+  const entries=await api('/api/oplog?coll=users&limit=100');
+  const el=document.getElementById('oplogBody');
+  if(!entries||entries.error||!entries.length){el.innerHTML='<div class="empty">No oplog entries</div>';return;}
+  document.getElementById('oplogCountBadge').textContent=entries.length;
+  el.innerHTML=entries.reverse().map(e=>{
+    const ts=new Date(e.ts*1000).toLocaleTimeString();
+    return `<div class="op-entry">
+      <span class="op-tag ${e.op}">${e.op}</span>
+      <span style="color:var(--text3);font-family:var(--mono);font-size:10px;min-width:70px">${ts}</span>
+      <span style="color:var(--text2);font-family:var(--mono);font-size:10px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHTML(e.doc_id||'')}">${e.doc_id||''}</span>
+      <span style="color:var(--text3);font-size:10px">v${e.v||0}</span>
+    </div>`;
+  }).join('');
+}
+
+// ═══ Seed ════════════════════════════════════════════════
+
+async function seedData(){
+  if(!confirm('This will reset all data. Continue?'))return;
+  toast('Seeding sample data...');
+  const res=await api('/api/seed',{method:'POST'});
+  if(res.error){toast(res.error,false);return;}
+  toast('Seeded '+res.count+' documents');
+  refreshAll();
+}
+
+// ═══ Header Stats ════════════════════════════════════════
+
+async function refreshHeaderStats(){
+  try{
+    const s=await api('/api/stats?coll=users');
+    document.getElementById('hdrDocCount').textContent=s.doc_count||0;
+    document.getElementById('hdrIdxCount').textContent=s.index_count||0;
+  }catch(e){}
+}
+
+// ═══ Init ════════════════════════════════════════════════
+
+function refreshAll(){
+  refreshDocs();
+  refreshIndexes();
+  refreshOplog();
+  refreshSyncStatus();
+  updateCounts();
+  refreshHeaderStats();
+}
+
+refreshAll();
+setInterval(()=>{refreshSyncStatus();updateCounts();refreshHeaderStats();},5000);
+</script>
+</body>
+</html>
