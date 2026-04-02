@@ -1,3 +1,9 @@
-wiredtiger
-pymongo
-flask
+# Full demo / Docker install -- includes all optional extras.
+# For the canonical dependency spec, see pyproject.toml.
+# Core-only: pip install -e .
+# With extras: pip install -e ".[web]", ".[vector]", or ".[all]"
+wiredtiger>=4.0
+pymongo>=4.6
+flask>=3.0
+numpy>=1.26
+usearch>=2.0

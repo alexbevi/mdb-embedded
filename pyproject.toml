@@ -1,0 +1,102 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smongo"
+version = "0.2.0"
+description = "Small MongoDB, big ambitions -- a local-first document engine with WiredTiger and Atlas sync"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "smongo contributors"}]
+keywords = ["mongodb", "embedded", "wiredtiger", "database", "local-first", "sync", "smongo"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Database",
+    "Topic :: Database :: Database Engines/Servers",
+    "Typing :: Typed",
+]
+dependencies = [
+    "wiredtiger>=4.0",
+    "pymongo>=4.6",
+]
+
+[project.urls]
+Repository = "https://github.com/smongo/smongo"
+
+[project.scripts]
+smongo-wire = "smongo.wire.__main__:main"
+
+[project.optional-dependencies]
+web = ["flask>=3.0"]
+vector = ["numpy>=1.26", "usearch>=2.0"]
+all = ["flask>=3.0", "numpy>=1.26", "usearch>=2.0"]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "pytest-benchmark>=4.0",
+    "testcontainers[mongodb]>=4.0",
+    "ruff>=0.8,<0.9",
+    "mypy>=1.11",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "unit: Unit tests (no Docker, no network)",
+    "integration: Integration tests requiring Docker MongoDB",
+    "performance: Performance benchmarks",
+]
+addopts = "-m 'not integration and not performance' --tb=short -q"
+
+[tool.coverage.run]
+source = ["smongo", "web_app"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+fail_under = 85
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+
+[[tool.mypy.overrides]]
+module = [
+    "wiredtiger",
+    "crc32c",
+    "snappy",
+    "usearch.*",
+]
+ignore_missing_imports = true
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = [
+    "E501",    # line length handled by formatter
+    "E402",    # module-level imports not at top -- unavoidable with try/except import guards
+    "E731",    # lambda assignment -- inline lambdas are clearer in some contexts
+    "B010",    # do not call setattr with a constant attribute value
+    "B905",    # zip-without-strict -- strict= breaks on iterators without __len__
+    "SIM102",  # collapsible-if -- nested ifs are often clearer with cursor ops
+    "SIM105",  # suppressible-exception -- contextlib.suppress obscures control flow in tight loops
+    "SIM108",  # use ternary operator -- often less readable
+    "UP015",   # unnecessary open mode parameters
+    "RUF012",  # mutable class attributes (false positives on descriptors)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B011", "B017", "SIM300", "F841", "RUF043", "RUF059"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["smongo"]

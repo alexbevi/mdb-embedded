@@ -8,12 +8,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY pyproject.toml requirements.txt ./
+COPY smongo/ smongo/
+RUN pip install --no-cache-dir -e ".[web]"
 
-COPY mdb_embedded/ mdb_embedded/
 COPY templates/ templates/
+COPY static/ static/
 COPY demo.py web_app.py ./
 
-EXPOSE 5000
+EXPOSE 5000 27018
 CMD ["python", "-u", "web_app.py"]

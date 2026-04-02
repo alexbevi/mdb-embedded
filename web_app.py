@@ -1,23 +1,104 @@
 """
-mdb-embedded Web Dashboard  (v2 -- full experience)
-=====================================================
+smongo Web Dashboard -- Small MongoDB, full experience.
+
 Flask app exposing the complete embedded engine + sync layer.
+Optionally starts a wire protocol server in the same process so that
+MongoDB Compass (or any driver) can connect over TCP.
+
+Environment variables:
+- ``WIRE_PORT``        -- if set (non-zero), start the wire server on this port.
+- ``WIRE_HOST``        -- bind address for the wire server (default: BIND_HOST).
+- ``SMONGO_API_KEY``   -- if set, all ``/api/*`` requests must include
+  ``Authorization: Bearer <key>``.
+- ``SMONGO_RATE_LIMIT`` -- max requests per minute per IP (default 60).
 """
 
 import json
-import os
-import time
 import logging
-import traceback
+import os
+import re
+import threading
+import time
 
-from flask import Flask, render_template, request, jsonify
+from bson import ObjectId as BsonObjectId
+from flask import Flask, jsonify, render_template, request
+from flask.json.provider import DefaultJSONProvider
 from pymongo import MongoClient as PyMongoClient
-from mdb_embedded import MongoClient, SyncManager
+from pymongo.errors import PyMongoError
+
+from smongo import DuplicateKeyError, MongoClient, ObjectId, SyncManager, ValidationError
+from smongo.wire import WireServer
+
+
+class _EngineJSONProvider(DefaultJSONProvider):
+    """Teach Flask how to serialize ObjectId instances (engine + bson)."""
+
+    def default(self, o: object) -> object:
+        if isinstance(o, (ObjectId, BsonObjectId)):
+            return str(o)
+        return super().default(o)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 log = logging.getLogger("web")
 
 app = Flask(__name__)
+app.json_provider_class = _EngineJSONProvider
+app.json = _EngineJSONProvider(app)
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB
+
+# ---------------------------------------------------------------------------
+# Security: API-key auth
+# ---------------------------------------------------------------------------
+
+_API_KEY = os.environ.get("SMONGO_API_KEY")
+
+# ---------------------------------------------------------------------------
+# Security: token-bucket rate limiter (per-IP, in-process)
+# ---------------------------------------------------------------------------
+
+_RATE_LIMIT = int(os.environ.get("SMONGO_RATE_LIMIT", "60"))
+
+
+class _TokenBucket:
+    """Simple per-IP token-bucket rate limiter (no external dependency)."""
+
+    def __init__(self, rate: int, per: float = 60.0) -> None:
+        self._rate = rate
+        self._per = per
+        self._buckets: dict[str, tuple[float, float]] = {}
+        self._lock = threading.Lock()
+
+    def allow(self, key: str) -> bool:
+        now = time.monotonic()
+        with self._lock:
+            tokens, last = self._buckets.get(key, (float(self._rate), now))
+            elapsed = now - last
+            tokens = min(float(self._rate), tokens + elapsed * (self._rate / self._per))
+            if tokens >= 1.0:
+                self._buckets[key] = (tokens - 1.0, now)
+                return True
+            self._buckets[key] = (tokens, now)
+            return False
+
+
+_limiter = _TokenBucket(_RATE_LIMIT)
+
+# ---------------------------------------------------------------------------
+# Security: input validation helpers
+# ---------------------------------------------------------------------------
+
+MAX_SHELL_COMMAND_LEN = 16 * 1024  # 16 KB
+MAX_PIPELINE_STAGES = 50
+_BAD_COLL_NAME_RE = re.compile(r'[\x00$]')
+_MAX_COLL_NAME_LEN = 120
+
+
+def _validate_collection_name(name: str) -> None:
+    """Reject collection names that violate MongoDB namespace rules."""
+    if not name or len(name) > _MAX_COLL_NAME_LEN:
+        raise ValueError(f"Collection name must be 1–{_MAX_COLL_NAME_LEN} characters")
+    if _BAD_COLL_NAME_RE.search(name):
+        raise ValueError("Collection name must not contain '$' or null bytes")
 
 MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
 DB_NAME = "sync_demo"
@@ -31,19 +112,78 @@ sync_mgr = SyncManager(
 )
 
 _collections_cache = {}
+_watch_streams = {}
 
 
 def _coll(name="users"):
+    _validate_collection_name(name)
     if name not in _collections_cache:
         _collections_cache[name] = client[DB_NAME][name]
         sync_mgr.register_collection(DB_NAME, name, _collections_cache[name].get_local_collection())
     return _collections_cache[name]
 
 
+def _watch_stream(name="users"):
+    if name not in _watch_streams:
+        _watch_streams[name] = _coll(name).watch()
+    return _watch_streams[name]
+
+
 def _clean(doc):
+    """Recursively convert ObjectId instances (engine + bson) to strings for JSON."""
     if doc is None:
         return None
-    return {k: (str(v) if k == "_id" else v) for k, v in doc.items()}
+    if isinstance(doc, (ObjectId, BsonObjectId)):
+        return str(doc)
+    if isinstance(doc, dict):
+        return {k: _clean(v) for k, v in doc.items()}
+    if isinstance(doc, list):
+        return [_clean(v) for v in doc]
+    return doc
+
+
+@app.before_request
+def _enforce_auth():
+    """Reject /api/* requests when SMONGO_API_KEY is set but not provided."""
+    if _API_KEY and request.path.startswith("/api/"):
+        auth = request.headers.get("Authorization", "")
+        if auth != f"Bearer {_API_KEY}":
+            return jsonify({"error": "Unauthorized -- set Authorization: Bearer <SMONGO_API_KEY>"}), 401
+
+
+@app.before_request
+def _enforce_rate_limit():
+    """Token-bucket rate limiting on /api/* routes."""
+    if request.path.startswith("/api/"):
+        ip = request.remote_addr or "unknown"
+        if not _limiter.allow(ip):
+            return jsonify({"error": "Rate limit exceeded -- try again shortly"}), 429
+
+
+@app.after_request
+def _set_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "connect-src 'self'"
+    )
+    return response
+
+
+@app.errorhandler(404)
+def handle_not_found(exc):
+    return jsonify({"error": "Not found"}), 404
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(exc):
+    log.exception("Unhandled error in request")
+    return jsonify({"error": "Internal server error"}), 500
 
 
 # ── Pages ────────────────────────────────────────────────────────────
@@ -62,17 +202,20 @@ def shell():
     Supports: db.<coll>.find/findOne/insertOne/insertMany/updateMany/
               deleteMany/aggregate/createIndex/dropIndex/explain/count
     """
-    body = request.json
+    body = request.json or {}
     cmd = (body.get("command") or "").strip()
     if not cmd:
         return jsonify({"error": "Empty command"}), 400
+    if len(cmd) > MAX_SHELL_COMMAND_LEN:
+        return jsonify({"error": f"Command exceeds {MAX_SHELL_COMMAND_LEN} byte limit"}), 400
 
     t0 = time.perf_counter()
     try:
         result = _exec_shell(cmd)
         elapsed = round((time.perf_counter() - t0) * 1000, 2)
         return jsonify({"result": result, "ms": elapsed})
-    except Exception as exc:
+    except (ValueError, KeyError, TypeError, json.JSONDecodeError, NotImplementedError,
+            DuplicateKeyError, ValidationError) as exc:
         elapsed = round((time.perf_counter() - t0) * 1000, 2)
         return jsonify({"error": str(exc), "ms": elapsed}), 400
 
@@ -202,7 +345,7 @@ def run_query():
         docs = [_clean(d) for d in coll.find(query)]
         ms = round((time.perf_counter() - t0) * 1000, 2)
         return jsonify({"plan": plan, "docs": docs, "count": len(docs), "ms": ms})
-    except Exception as exc:
+    except (ValueError, KeyError, TypeError) as exc:
         return jsonify({"error": str(exc)}), 400
 
 
@@ -211,12 +354,14 @@ def run_aggregate():
     body = request.json
     coll = _coll(body.get("coll", "users"))
     pipeline = body.get("pipeline", [])
+    if len(pipeline) > MAX_PIPELINE_STAGES:
+        return jsonify({"error": f"Pipeline exceeds {MAX_PIPELINE_STAGES} stage limit"}), 400
     t0 = time.perf_counter()
     try:
         results = coll.aggregate(pipeline)
         ms = round((time.perf_counter() - t0) * 1000, 2)
         return jsonify({"results": [_clean(d) if isinstance(d, dict) else d for d in results], "count": len(results), "ms": ms})
-    except Exception as exc:
+    except (ValueError, KeyError, TypeError, NotImplementedError) as exc:
         return jsonify({"error": str(exc)}), 400
 
 
@@ -227,7 +372,7 @@ def insert_doc():
     try:
         r = coll.insert_one(body.get("doc", {}))
         return jsonify({"inserted_id": str(r.inserted_ids[0])})
-    except Exception as exc:
+    except (ValueError, KeyError, TypeError, DuplicateKeyError, ValidationError) as exc:
         return jsonify({"error": str(exc)}), 400
 
 
@@ -238,7 +383,7 @@ def update_docs():
     try:
         r = coll.update_many(body.get("query", {}), body.get("update", {}))
         return jsonify({"modified_count": r.modified_count})
-    except Exception as exc:
+    except (ValueError, KeyError, TypeError, ValidationError) as exc:
         return jsonify({"error": str(exc)}), 400
 
 
@@ -249,7 +394,7 @@ def delete_docs():
     try:
         r = coll.delete_many(body.get("query", {}))
         return jsonify({"deleted_count": r.deleted_count})
-    except Exception as exc:
+    except (ValueError, KeyError, TypeError) as exc:
         return jsonify({"error": str(exc)}), 400
 
 
@@ -276,9 +421,12 @@ def list_indexes():
 def create_index():
     body = request.json
     try:
-        name = _coll(body.get("coll", "users")).create_index(body.get("keys", []), unique=body.get("unique", False))
+        kwargs = {"unique": body.get("unique", False)}
+        if body.get("expireAfterSeconds") is not None:
+            kwargs["expireAfterSeconds"] = body.get("expireAfterSeconds")
+        name = _coll(body.get("coll", "users")).create_index(body.get("keys", []), **kwargs)
         return jsonify({"name": name})
-    except Exception as exc:
+    except (ValueError, KeyError, TypeError, DuplicateKeyError) as exc:
         return jsonify({"error": str(exc)}), 400
 
 
@@ -287,7 +435,7 @@ def drop_index(name):
     try:
         _coll(request.args.get("coll", "users")).drop_index(name)
         return jsonify({"dropped": name})
-    except Exception as exc:
+    except (ValueError, KeyError) as exc:
         return jsonify({"error": str(exc)}), 400
 
 
@@ -312,7 +460,16 @@ def sync_push():
     try:
         sync_mgr.sync_now()
         return jsonify({"ok": True, "status": sync_mgr.status()})
-    except Exception as exc:
+    except (PyMongoError, ConnectionError, OSError, RuntimeError) as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/sync/pull", methods=["POST"])
+def sync_pull():
+    try:
+        sync_mgr.pull()
+        return jsonify({"ok": True, "status": sync_mgr.status()})
+    except (PyMongoError, ConnectionError, OSError, RuntimeError) as exc:
         return jsonify({"error": str(exc)}), 500
 
 
@@ -332,7 +489,7 @@ def sync_stop():
 def remote_docs():
     try:
         return jsonify([_clean(d) for d in remote[DB_NAME][request.args.get("coll", "users")].find({}).limit(200)])
-    except Exception as exc:
+    except PyMongoError as exc:
         return jsonify({"error": str(exc)}), 500
 
 
@@ -344,7 +501,31 @@ def remote_insert():
     try:
         remote[DB_NAME][body.get("coll", "users")].insert_one(doc)
         return jsonify({"ok": True})
-    except Exception as exc:
+    except PyMongoError as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/schema", methods=["POST"])
+def set_schema():
+    body = request.json or {}
+    coll_name = body.get("coll", "users")
+    validator = body.get("validator")
+    if not validator:
+        return jsonify({"error": "validator is required"}), 400
+    try:
+        client[DB_NAME].create_collection(coll_name, validator=validator)
+        return jsonify({"ok": True})
+    except (ValueError, KeyError, TypeError, ValidationError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.route("/api/watch/next")
+def watch_next():
+    coll_name = request.args.get("coll", "users")
+    try:
+        event = _watch_stream(coll_name).try_next()
+        return jsonify({"event": _clean(event) if event else None})
+    except (RuntimeError, StopIteration) as exc:
         return jsonify({"error": str(exc)}), 500
 
 
@@ -364,17 +545,57 @@ SAMPLE_DOCS = [
 ]
 
 
+@app.route("/metrics")
+def prometheus_metrics():
+    """Prometheus-compatible metrics endpoint.
+
+    Exports serverStatus counters in Prometheus text exposition format.
+    """
+    lines: list[str] = []
+
+    for coll_name in client[DB_NAME].list_collection_names():
+        c = _coll(coll_name)
+        try:
+            stats = c.get_local_collection().storage_stats()
+        except (RuntimeError, AttributeError):
+            continue
+        prefix = f'smongo_collection_{coll_name.replace("-", "_")}'
+        lines.append(f'{prefix}_documents_total {stats.get("count", 0)}')
+        lines.append(f'{prefix}_data_size_bytes {stats.get("dataSize", 0)}')
+        lines.append(f'{prefix}_storage_size_bytes {stats.get("storageSize", 0)}')
+        lines.append(f'{prefix}_index_count {stats.get("nindexes", 0)}')
+        lines.append(f'{prefix}_total_index_size_bytes {stats.get("totalIndexSize", 0)}')
+
+    sync_status = sync_mgr.status() if sync_mgr else {}
+    lines.append(f'smongo_sync_pushed_total {sync_status.get("pushed", 0)}')
+    lines.append(f'smongo_sync_pulled_total {sync_status.get("pulled", 0)}')
+    lines.append(f'smongo_sync_conflicts_total {sync_status.get("conflicts", 0)}')
+    lines.append(f'smongo_sync_errors_total {sync_status.get("errors", 0)}')
+    lines.append(f'smongo_sync_running {1 if sync_status.get("running") else 0}')
+
+    from flask import Response
+    return Response("\n".join(lines) + "\n", mimetype="text/plain; version=0.0.4")
+
+
 @app.route("/api/seed", methods=["POST"])
 def seed_data():
     coll = _coll("users")
     coll.delete_many({})
     remote[DB_NAME]["users"].drop()
+    _coll("departments").delete_many({})
+    remote[DB_NAME]["departments"].drop()
     coll.create_index([("age", 1)])
     coll.create_index([("city", 1), ("age", -1)])
     coll.create_index("name", unique=True)
     coll.create_index([("dept", 1)])
     coll.create_index([("salary", -1)])
     coll.insert_many(SAMPLE_DOCS)
+    _coll("departments").insert_many([
+        {"name": "engineering", "costCenter": "RND"},
+        {"name": "management", "costCenter": "OPS"},
+        {"name": "design", "costCenter": "DES"},
+        {"name": "data", "costCenter": "ANA"},
+    ])
     sync_mgr.sync_now()
     return jsonify({"ok": True, "count": len(SAMPLE_DOCS)})
 
@@ -391,10 +612,65 @@ def _auto_seed():
     coll.create_index([("dept", 1)])
     coll.create_index([("salary", -1)])
     coll.insert_many(SAMPLE_DOCS)
+    _coll("departments").delete_many({})
+    _coll("departments").insert_many([
+        {"name": "engineering", "costCenter": "RND"},
+        {"name": "management", "costCenter": "OPS"},
+        {"name": "design", "costCenter": "DES"},
+        {"name": "data", "costCenter": "ANA"},
+    ])
     sync_mgr.sync_now()
     log.info("Seeded %d docs + 5 indexes, pushed to remote", len(SAMPLE_DOCS))
 
 
+_wire_server: WireServer | None = None
+
+
+def _start_wire_server() -> None:
+    """Start the wire protocol server in the same process, sharing the WiredTiger connection.
+
+    Controlled by environment variables:
+      WIRE_PORT  -- TCP port (0 or unset = disabled)
+      WIRE_HOST  -- bind address (defaults to BIND_HOST, then 127.0.0.1)
+
+    Failures are logged but never propagate — the web dashboard keeps running
+    even if the wire server can't bind.
+    """
+    global _wire_server
+    wire_port = int(os.environ.get("WIRE_PORT", "0"))
+    if wire_port == 0:
+        return
+    wire_host = os.environ.get("WIRE_HOST", os.environ.get("BIND_HOST", "127.0.0.1"))
+    try:
+        local_client = client.get_local_client()
+        _wire_server = WireServer(
+            host=wire_host,
+            port=wire_port,
+            local_client=local_client,
+            sync=sync_mgr,
+        )
+        _wire_server.start()
+        log.info("Wire server listening on %s:%d (Compass-ready)", wire_host, wire_port)
+    except OSError as exc:
+        log.error("Wire server failed to start on %s:%d -- %s", wire_host, wire_port, exc)
+        log.error("The web dashboard will continue without wire protocol access.")
+        _wire_server = None
+    except Exception as exc:
+        log.error("Wire server startup error: %s", exc)
+        _wire_server = None
+
+
 if __name__ == "__main__":
     _auto_seed()
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    _start_wire_server()
+    bind_host = os.environ.get("BIND_HOST", "127.0.0.1")
+    if bind_host == "0.0.0.0" and not _API_KEY:
+        log.warning(
+            "⚠ Server binding to 0.0.0.0 WITHOUT authentication. "
+            "Set SMONGO_API_KEY to require Bearer-token auth on all /api/* routes."
+        )
+    app.run(
+        host=bind_host,
+        port=int(os.environ.get("BIND_PORT", "5000")),
+        debug=False,
+    )

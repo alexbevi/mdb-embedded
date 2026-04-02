@@ -10,16 +10,20 @@ services:
       timeout: 5s
       retries: 10
 
-  # The mdb-embedded web dashboard
+  # The smongo web dashboard + wire server -- Small MongoDB, big dashboard
   app:
     build: .
     depends_on:
       mongo:
         condition: service_healthy
     ports:
-      - "5000:5000"
+      - "5000:5000"     # web dashboard
+      - "27018:27018"   # wire protocol (connect Compass here)
     environment:
       MONGO_URI: mongodb://mongo:27017
+      BIND_HOST: "0.0.0.0"
+      WIRE_PORT: "27018"
+      WIRE_HOST: "0.0.0.0"
     volumes:
       - wt_data:/app/local_wt_data
 

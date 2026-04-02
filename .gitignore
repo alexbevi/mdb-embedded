@@ -209,3 +209,11 @@ __marimo__/
 # WiredTiger local data directories
 local_wt_data/
 demo_wt_data/
+
+# Benchmark / local QA artifacts
+.benchmarks/
+*.prof
+*.tmp
+
+# macOS
+.DS_Store
