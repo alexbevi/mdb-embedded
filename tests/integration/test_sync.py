@@ -97,13 +97,15 @@ def test_index_pull(sync_manager, embedded_client, remote_client, db_name):
     assert "city_1" in local_names
 
 
-def test_conflict_resolution_local_wins(
-    embedded_client, remote_client, mongo_uri, db_name
-):
+def test_conflict_resolution_local_wins(embedded_client, remote_client, mongo_uri, db_name):
     mgr = SyncManager(
         embedded_client,
         mongo_uri,
-        sync_config={"mode": "bidirectional", "conflict_resolution": "local_wins", "use_change_stream_pull": False},
+        sync_config={
+            "mode": "bidirectional",
+            "conflict_resolution": "local_wins",
+            "use_change_stream_pull": False,
+        },
     )
     coll = embedded_client[db_name]["users"]
     mgr.register_collection(db_name, "users", coll.get_local_collection())
@@ -122,9 +124,7 @@ def test_conflict_resolution_local_wins(
     mgr.stop()
 
 
-def test_conflict_resolution_remote_wins(
-    embedded_client, remote_client, mongo_uri, db_name
-):
+def test_conflict_resolution_remote_wins(embedded_client, remote_client, mongo_uri, db_name):
     mgr = SyncManager(
         embedded_client,
         mongo_uri,

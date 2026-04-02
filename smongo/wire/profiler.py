@@ -1,4 +1,5 @@
 """Profiling, operation tracking, and top stats for the wire protocol."""
+
 from __future__ import annotations
 
 import threading
@@ -10,6 +11,7 @@ from typing import Any
 
 class OpEntry:
     """Describes one in-flight operation."""
+
     __slots__ = ("cancelled", "command", "connection_id", "ns", "op", "op_id", "start_time")
 
     def __init__(
@@ -80,6 +82,7 @@ def _empty_timing() -> dict[str, int]:
 
 class CollectionTimingStats:
     """Per-collection operation counters and cumulative microsecond timings."""
+
     __slots__ = (
         "commands",
         "getmore",
@@ -188,7 +191,7 @@ class Profiler:
         with self._lock:
             self._entries.append(entry)
             if len(self._entries) > self._max:
-                self._entries = self._entries[-self._max:]
+                self._entries = self._entries[-self._max :]
 
     def get_entries(self, limit: int = 100) -> list[dict[str, Any]]:
         with self._lock:

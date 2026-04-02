@@ -11,6 +11,8 @@ pip install smongo  -- and you've got a database.
 
 from __future__ import annotations
 
+from typing import Any
+
 from .aggregation import Cursor, DocumentLimitExceeded
 from .client import (
     BulkWriteError,
@@ -45,7 +47,7 @@ def connect(
     db: str = "default",
     *,
     sync: str | None = None,
-    sync_config: dict | None = None,
+    sync_config: dict[str, Any] | None = None,
 ) -> Database:
     """Zero-config quickstart -- like ``sqlite3.connect()``.
 

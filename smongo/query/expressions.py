@@ -45,16 +45,22 @@ def resolve_expr(doc: Document, expr: Any) -> Any:
     return {k: resolve_expr(doc, v) for k, v in expr.items()}
 
 
-def _eval_expr_op(op: str, arg: Any, doc: Document) -> Any:  # noqa: C901
+def _eval_expr_op(op: str, arg: Any, doc: Document) -> Any:
     """Evaluate a single aggregation expression operator."""
 
     # ── Conditional ──
     if op == "$cond":
         if isinstance(arg, dict):
             cond = resolve_expr(doc, arg.get("if"))
-            return resolve_expr(doc, arg.get("then")) if cond else resolve_expr(doc, arg.get("else"))
+            return (
+                resolve_expr(doc, arg.get("then")) if cond else resolve_expr(doc, arg.get("else"))
+            )
         if isinstance(arg, list) and len(arg) == 3:
-            return resolve_expr(doc, arg[1]) if resolve_expr(doc, arg[0]) else resolve_expr(doc, arg[2])
+            return (
+                resolve_expr(doc, arg[1])
+                if resolve_expr(doc, arg[0])
+                else resolve_expr(doc, arg[2])
+            )
         return None
 
     if op == "$ifNull":
@@ -91,7 +97,7 @@ def _eval_expr_op(op: str, arg: Any, doc: Document) -> Any:  # noqa: C901
             start = resolve_expr(doc, arg[1])
             length = resolve_expr(doc, arg[2])
             if isinstance(s, str):
-                return s[start:start + length]
+                return s[start : start + length]
         return None
 
     if op == "$strLenCP":
@@ -285,7 +291,7 @@ def _eval_expr_op(op: str, arg: Any, doc: Document) -> Any:  # noqa: C901
                 return datetime.fromisoformat(val.replace("Z", "+00:00")).isoformat()
             except (ValueError, TypeError):
                 return None
-        if isinstance(val, (int, float)):
+        if isinstance(val, int | float):
             return datetime.fromtimestamp(val / 1000, tz=UTC).isoformat()
         return None
 
@@ -318,7 +324,7 @@ def _eval_expr_op(op: str, arg: Any, doc: Document) -> Any:  # noqa: C901
                 if to_type == "date":
                     if isinstance(input_val, str):
                         return datetime.fromisoformat(input_val.replace("Z", "+00:00")).isoformat()
-                    if isinstance(input_val, (int, float)):
+                    if isinstance(input_val, int | float):
                         return datetime.fromtimestamp(input_val / 1000, tz=UTC).isoformat()
             except (ValueError, TypeError):
                 return resolve_expr(doc, on_error) if on_error is not None else None
@@ -372,7 +378,7 @@ def _eval_expr_op(op: str, arg: Any, doc: Document) -> Any:  # noqa: C901
             start = resolve_expr(doc, arg[0])
             end = resolve_expr(doc, arg[1])
             step = resolve_expr(doc, arg[2]) if len(arg) > 2 else 1
-            if isinstance(start, (int, float)) and isinstance(end, (int, float)):
+            if isinstance(start, int | float) and isinstance(end, int | float):
                 return list(range(int(start), int(end), int(step or 1)))
         return None
 
@@ -420,7 +426,7 @@ def _eval_expr_op(op: str, arg: Any, doc: Document) -> Any:  # noqa: C901
                 pos = resolve_expr(doc, arg[1])
                 n = resolve_expr(doc, arg[2])
                 if isinstance(pos, int) and isinstance(n, int):
-                    return arr[pos:pos + n]
+                    return arr[pos : pos + n]
         return None
 
     if op == "$isArray":
@@ -462,12 +468,12 @@ def _eval_expr_op(op: str, arg: Any, doc: Document) -> Any:  # noqa: C901
 
     if op == "$mergeObjects":
         if isinstance(arg, list):
-            result_obj: dict[str, Any] = {}
+            merged_obj: dict[str, Any] = {}
             for a in arg:
                 val = resolve_expr(doc, a)
                 if isinstance(val, dict):
-                    result_obj.update(val)
-            return result_obj
+                    merged_obj.update(val)
+            return merged_obj
         val = resolve_expr(doc, arg)
         return val if isinstance(val, dict) else {}
 
@@ -534,7 +540,9 @@ def _eval_expr_op(op: str, arg: Any, doc: Document) -> Any:  # noqa: C901
                 try:
                     results: list[dict[str, Any]] = []
                     for m in _safe_regex(regex_str, flags).finditer(input_val):
-                        results.append({"match": m.group(), "idx": m.start(), "captures": list(m.groups())})
+                        results.append(
+                            {"match": m.group(), "idx": m.start(), "captures": list(m.groups())}
+                        )
                     return results
                 except (ValueError, re.error):
                     pass
@@ -611,7 +619,11 @@ def _eval_expr_op(op: str, arg: Any, doc: Document) -> Any:  # noqa: C901
             input_val = resolve_expr(doc, arg.get("input"))
             find_val = resolve_expr(doc, arg.get("find"))
             replacement = resolve_expr(doc, arg.get("replacement"))
-            if isinstance(input_val, str) and isinstance(find_val, str) and isinstance(replacement, str):
+            if (
+                isinstance(input_val, str)
+                and isinstance(find_val, str)
+                and isinstance(replacement, str)
+            ):
                 return input_val.replace(find_val, replacement, 1)
         return None
 
@@ -620,46 +632,55 @@ def _eval_expr_op(op: str, arg: Any, doc: Document) -> Any:  # noqa: C901
             input_val = resolve_expr(doc, arg.get("input"))
             find_val = resolve_expr(doc, arg.get("find"))
             replacement = resolve_expr(doc, arg.get("replacement"))
-            if isinstance(input_val, str) and isinstance(find_val, str) and isinstance(replacement, str):
+            if (
+                isinstance(input_val, str)
+                and isinstance(find_val, str)
+                and isinstance(replacement, str)
+            ):
                 return input_val.replace(find_val, replacement)
         return None
 
     # ── Math extras ──
     if op == "$sqrt":
         val = resolve_expr(doc, arg)
-        return math.sqrt(val) if isinstance(val, (int, float)) and val >= 0 else None
+        return math.sqrt(val) if isinstance(val, int | float) and val >= 0 else None
 
     if op == "$pow":
         if isinstance(arg, list) and len(arg) == 2:
             base = resolve_expr(doc, arg[0])
             exp = resolve_expr(doc, arg[1])
-            if isinstance(base, (int, float)) and isinstance(exp, (int, float)):
-                return base ** exp
+            if isinstance(base, int | float) and isinstance(exp, int | float):
+                return base**exp
         return None
 
     if op == "$log":
         if isinstance(arg, list) and len(arg) == 2:
             val = resolve_expr(doc, arg[0])
             base = resolve_expr(doc, arg[1])
-            if isinstance(val, (int, float)) and isinstance(base, (int, float)) and val > 0 and base > 0:
+            if (
+                isinstance(val, int | float)
+                and isinstance(base, int | float)
+                and val > 0
+                and base > 0
+            ):
                 return math.log(val, base)
         return None
 
     if op == "$log10":
         val = resolve_expr(doc, arg)
-        if isinstance(val, (int, float)) and val > 0:
+        if isinstance(val, int | float) and val > 0:
             return math.log10(val)
         return None
 
     if op == "$ln":
         val = resolve_expr(doc, arg)
-        if isinstance(val, (int, float)) and val > 0:
+        if isinstance(val, int | float) and val > 0:
             return math.log(val)
         return None
 
     if op == "$exp":
         val = resolve_expr(doc, arg)
-        if isinstance(val, (int, float)):
+        if isinstance(val, int | float):
             return math.exp(val)
         return None
 
@@ -667,12 +688,12 @@ def _eval_expr_op(op: str, arg: Any, doc: Document) -> Any:  # noqa: C901
         if isinstance(arg, list):
             val = resolve_expr(doc, arg[0])
             places = resolve_expr(doc, arg[1]) if len(arg) > 1 else 0
-            if isinstance(val, (int, float)):
+            if isinstance(val, int | float):
                 factor = 10 ** int(places or 0)
                 return int(val * factor) / factor
         else:
             val = resolve_expr(doc, arg)
-            if isinstance(val, (int, float)):
+            if isinstance(val, int | float):
                 return int(val)
         return None
 

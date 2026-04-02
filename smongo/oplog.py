@@ -83,7 +83,9 @@ class OplogHub:
 class OplogWriter:
     """Appends structured operations to a WiredTiger oplog table."""
 
-    def __init__(self, session: Any, oplog_uri: str, namespace: str, hub: OplogHub | None = None) -> None:
+    def __init__(
+        self, session: Any, oplog_uri: str, namespace: str, hub: OplogHub | None = None
+    ) -> None:
         self.session = session
         self.oplog_uri = oplog_uri
         self.namespace = namespace
@@ -286,6 +288,7 @@ class ChangeStream:
 
         if pipeline:
             from .query import compile_query
+
             for stage in pipeline:
                 if "$match" in stage:
                     self._filter = compile_query(stage["$match"])

@@ -5,6 +5,7 @@ Each connection gets its own daemon thread with a private ConnectionContext
 (and thus private WiredTiger sessions).  The server shares a single
 LocalClient and CursorRegistry across all connections.
 """
+
 from __future__ import annotations
 
 import logging
@@ -21,11 +22,7 @@ from .context import (
     ConnectionCounter,
     FreeMonitoringState,
     LogBuffer,
-    OperationTracker,
     ParameterStore,
-    Profiler,
-    SessionRegistry,
-    TopStats,
 )
 from .cursors import CursorRegistry
 from .errors import make_error
@@ -46,6 +43,8 @@ from .msg import (
     encode_msg,
     encode_reply,
 )
+from .profiler import OperationTracker, Profiler, TopStats
+from .sessions import SessionRegistry
 
 log = logging.getLogger("smongo.wire.server")
 
@@ -92,6 +91,7 @@ class WireServer:
             self._sync_mgr: SyncManager | None = sync
         elif isinstance(sync, str):
             from ..client import MongoClient
+
             local_mc = MongoClient(f"local://{db_path}")
             self._sync_mgr = SyncManager(local_mc, sync)
             self._owns_sync_mgr = True
@@ -170,9 +170,7 @@ class WireServer:
             if not self._conn_semaphore.acquire(timeout=0.1):
                 log.warning("Max connections reached, rejecting %s", address)
                 try:
-                    error_doc = make_error(
-                        "OperationFailed", "too many connections"
-                    )
+                    error_doc = make_error("OperationFailed", "too many connections")
                     client_sock.sendall(encode_msg(0, 0, error_doc))
                 except OSError:
                     pass
@@ -250,14 +248,19 @@ class WireServer:
                 elif header.op_code == OP_QUERY:
                     self._handle_op_query(sock, full_msg, ctx, req_id_gen)
                 else:
-                    self._handle_unknown_opcode(
-                        sock, header, ctx, req_id_gen
-                    )
+                    self._handle_unknown_opcode(sock, header, ctx, req_id_gen)
 
         except (ConnectionResetError, BrokenPipeError, TimeoutError, OSError) as exc:
             log.debug("Conn #%d closed: %s", conn_id, exc)
-        except (struct.error, UnicodeDecodeError, KeyError, TypeError,
-                ValueError, IndexError, RuntimeError):
+        except (
+            struct.error,
+            UnicodeDecodeError,
+            KeyError,
+            TypeError,
+            ValueError,
+            IndexError,
+            RuntimeError,
+        ):
             log.exception("Error in connection #%d", conn_id)
         finally:
             self._conn_counter.disconnect()
@@ -270,7 +273,9 @@ class WireServer:
             log.debug("Conn #%d terminated", conn_id)
 
     @staticmethod
-    def _handle_op_msg(sock: socket.socket, data: bytes, ctx: ConnectionContext, req_id_gen: count[int]) -> None:
+    def _handle_op_msg(
+        sock: socket.socket, data: bytes, ctx: ConnectionContext, req_id_gen: count[int]
+    ) -> None:
         try:
             header, flags, body_doc, doc_sequences = decode_msg(data)
         except (ProtocolError, ChecksumMismatch) as exc:
@@ -292,7 +297,9 @@ class WireServer:
             sock.sendall(resp_bytes)
 
     @staticmethod
-    def _handle_op_compressed(sock: socket.socket, data: bytes, ctx: ConnectionContext, req_id_gen: count[int]) -> None:
+    def _handle_op_compressed(
+        sock: socket.socket, data: bytes, ctx: ConnectionContext, req_id_gen: count[int]
+    ) -> None:
         try:
             inner_msg = decode_compressed(data)
         except ProtocolError as exc:
@@ -318,13 +325,13 @@ class WireServer:
             sock.sendall(encode_msg(resp_id, inner_header.request_id, error_doc))
 
     @staticmethod
-    def _handle_op_query(sock: socket.socket, data: bytes, ctx: ConnectionContext, req_id_gen: count[int]) -> None:
+    def _handle_op_query(
+        sock: socket.socket, data: bytes, ctx: ConnectionContext, req_id_gen: count[int]
+    ) -> None:
         header, _flags, _coll_name, _skip, _limit, query_doc = decode_query(data)
 
         if any(k in query_doc for k in ("isMaster", "ismaster", "hello")):
-            response_doc = dispatch(
-                ctx, {"hello": 1, "helloOk": True, "$db": "admin"}, {}
-            )
+            response_doc = dispatch(ctx, {"hello": 1, "helloOk": True, "$db": "admin"}, {})
         else:
             response_doc = dispatch(ctx, query_doc, {})
 
@@ -332,8 +339,9 @@ class WireServer:
         response_flags = 0
         if response_doc.get("ok") == 0:
             response_flags = 0x02
-        sock.sendall(encode_reply(resp_id, header.request_id, [response_doc],
-                                  response_flags=response_flags))
+        sock.sendall(
+            encode_reply(resp_id, header.request_id, [response_doc], response_flags=response_flags)
+        )
 
     @staticmethod
     def _handle_unknown_opcode(

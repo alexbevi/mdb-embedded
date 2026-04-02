@@ -16,6 +16,7 @@ log = logging.getLogger("smongo.storage")
 
 def _to_bson(doc: Document) -> bytes:
     """Normalize a document for BSON encoding and return raw bytes."""
+
     def _normalize(v: Any) -> Any:
         if isinstance(v, dict):
             return {k: _normalize(val) for k, val in v.items()}
@@ -25,9 +26,10 @@ def _to_bson(doc: Document) -> bytes:
             return BsonObjectId(str(v))
         if isinstance(v, BsonObjectId):
             return v
-        if isinstance(v, (str, int, float, bool, type(None), bytes)):
+        if isinstance(v, str | int | float | bool | None | bytes):
             return v
         return str(v)
+
     return _bson_encode(_normalize(doc))
 
 

@@ -53,7 +53,7 @@ class TestOpMsg:
     def test_response_to_field(self):
         doc = {"ok": 1.0}
         encoded = encode_msg(10, 5, doc)
-        header, _, _, _ = decode_msg(encoded)
+        header, _flags, _body, _seqs = decode_msg(encoded)
         assert header.request_id == 10
         assert header.response_to == 5
 
@@ -66,7 +66,7 @@ class TestOpMsg:
     def test_nested_document(self):
         doc = {"find": "users", "filter": {"age": {"$gt": 25}}, "$db": "test"}
         encoded = encode_msg(1, 0, doc)
-        _, _, body, _ = decode_msg(encoded)
+        _header, _flags, body, _seqs = decode_msg(encoded)
         assert body["find"] == "users"
         assert body["filter"]["age"]["$gt"] == 25
 
@@ -209,7 +209,7 @@ class TestOpCompressed:
         inner_header = decode_header(decompressed)
         assert inner_header.op_code == OP_MSG
 
-        _, _, body, _ = decode_msg(decompressed)
+        _header, _flags, body, _seqs = decode_msg(decompressed)
         assert body["ping"] == 1
 
     def test_noop_compression(self):
@@ -217,7 +217,7 @@ class TestOpCompressed:
         original = encode_msg(1, 0, doc)
         compressed = encode_compressed(original, 0)
         decompressed = decode_compressed(compressed)
-        _, _, body, _ = decode_msg(decompressed)
+        _header, _flags, body, _seqs = decode_msg(decompressed)
         assert body["hello"] == 1
 
     def test_unknown_compressor_raises(self):

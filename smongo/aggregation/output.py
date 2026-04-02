@@ -91,9 +91,17 @@ def merge_stage(
             if when_matched == "replace":
                 replacement = {k: v for k, v in doc.items() if k != "_id"}
                 replacement["_id"] = existing[0]["_id"]
-                target.update({"_id": existing[0]["_id"]}, {"$set": {k: v for k, v in replacement.items() if k != "_id"}}, multi=False)
+                target.update(
+                    {"_id": existing[0]["_id"]},
+                    {"$set": {k: v for k, v in replacement.items() if k != "_id"}},
+                    multi=False,
+                )
             elif when_matched == "merge":
-                target.update({"_id": existing[0]["_id"]}, {"$set": {k: v for k, v in doc.items() if k != "_id"}}, multi=False)
+                target.update(
+                    {"_id": existing[0]["_id"]},
+                    {"$set": {k: v for k, v in doc.items() if k != "_id"}},
+                    multi=False,
+                )
             elif when_matched == "fail":
                 raise ValueError(f"$merge: document already exists with {on}={match_key}")
         else:

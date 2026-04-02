@@ -31,6 +31,26 @@ _MONGO_TYPE_MAP: dict[str, type | tuple[type, ...]] = {
 }
 
 
+def _resolve_py_types(bson_type: Any) -> tuple[type, ...]:
+    """Map MongoDB schema type names to Python runtime types."""
+    type_names: list[str]
+    if isinstance(bson_type, str):
+        type_names = [bson_type]
+    elif isinstance(bson_type, list):
+        type_names = [t for t in bson_type if isinstance(t, str)]
+    else:
+        return ()
+
+    resolved: list[type] = []
+    for tn in type_names:
+        mapped = _MONGO_TYPE_MAP.get(tn)
+        if isinstance(mapped, type):
+            resolved.append(mapped)
+        elif isinstance(mapped, tuple):
+            resolved.extend(t for t in mapped if isinstance(t, type))
+    return tuple(resolved)
+
+
 def validate_document(doc: dict[str, Any], schema: dict[str, Any]) -> None:
     """
     Validate a document against a $jsonSchema spec.
@@ -43,15 +63,10 @@ def validate_document(doc: dict[str, Any], schema: dict[str, Any]) -> None:
 
 def _validate_object(value: Any, schema: dict[str, Any], path: str, depth: int = 0) -> None:
     if depth > MAX_NESTING_DEPTH:
-        raise ValidationError(
-            f"Document exceeds maximum nesting depth of {MAX_NESTING_DEPTH}"
-        )
+        raise ValidationError(f"Document exceeds maximum nesting depth of {MAX_NESTING_DEPTH}")
     bson_type = schema.get("bsonType") or schema.get("type")
     if bson_type:
-        types = [bson_type] if isinstance(bson_type, str) else bson_type
-        py_types = tuple(
-            t for tn in types for t in ((_MONGO_TYPE_MAP[tn],) if isinstance(_MONGO_TYPE_MAP.get(tn), type) else _MONGO_TYPE_MAP.get(tn, ()))  # type: ignore[union-attr]
-        )
+        py_types = _resolve_py_types(bson_type)
         if py_types and not isinstance(value, py_types):
             raise ValidationError(
                 f"Document failed validation at '{path}': expected type "
@@ -99,10 +114,7 @@ def _validate_value(value: Any, schema: dict[str, Any], path: str, depth: int = 
 
     bson_type = schema.get("bsonType") or schema.get("type")
     if bson_type:
-        types = [bson_type] if isinstance(bson_type, str) else bson_type
-        py_types = tuple(
-            t for tn in types for t in ((_MONGO_TYPE_MAP[tn],) if isinstance(_MONGO_TYPE_MAP.get(tn), type) else _MONGO_TYPE_MAP.get(tn, ()))  # type: ignore[union-attr]
-        )
+        py_types = _resolve_py_types(bson_type)
         if py_types and not isinstance(value, py_types):
             raise ValidationError(
                 f"Document failed validation at '{path}': expected type {bson_type}, got {type(value).__name__}"
@@ -117,15 +129,23 @@ def _validate_value(value: Any, schema: dict[str, Any], path: str, depth: int = 
 
 
 def _validate_scalar(value: Any, schema: dict[str, Any], path: str) -> None:
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
+    if isinstance(value, int | float) and not isinstance(value, bool):
         if "minimum" in schema and value < schema["minimum"]:
-            raise ValidationError(f"Document failed validation at '{path}': value {value} < minimum {schema['minimum']}")
+            raise ValidationError(
+                f"Document failed validation at '{path}': value {value} < minimum {schema['minimum']}"
+            )
         if "maximum" in schema and value > schema["maximum"]:
-            raise ValidationError(f"Document failed validation at '{path}': value {value} > maximum {schema['maximum']}")
+            raise ValidationError(
+                f"Document failed validation at '{path}': value {value} > maximum {schema['maximum']}"
+            )
         if "exclusiveMinimum" in schema and value <= schema["exclusiveMinimum"]:
-            raise ValidationError(f"Document failed validation at '{path}': value {value} <= exclusiveMinimum")
+            raise ValidationError(
+                f"Document failed validation at '{path}': value {value} <= exclusiveMinimum"
+            )
         if "exclusiveMaximum" in schema and value >= schema["exclusiveMaximum"]:
-            raise ValidationError(f"Document failed validation at '{path}': value {value} >= exclusiveMaximum")
+            raise ValidationError(
+                f"Document failed validation at '{path}': value {value} >= exclusiveMaximum"
+            )
 
     if isinstance(value, str):
         if "minLength" in schema and len(value) < schema["minLength"]:
@@ -136,7 +156,9 @@ def _validate_scalar(value: Any, schema: dict[str, Any], path: str) -> None:
             raise ValidationError(f"Document failed validation at '{path}': pattern mismatch")
 
     if "enum" in schema and value not in schema["enum"]:
-        raise ValidationError(f"Document failed validation at '{path}': value not in enum {schema['enum']}")
+        raise ValidationError(
+            f"Document failed validation at '{path}': value not in enum {schema['enum']}"
+        )
 
 
 def _validate_array(value: list[Any], schema: dict[str, Any], path: str, depth: int = 0) -> None:

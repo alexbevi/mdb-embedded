@@ -32,14 +32,48 @@ def _run(books) -> None:
     # ── Insert ────────────────────────────────────────────────
     print("── insert_one / insert_many ──")
 
-    books.insert_one({"title": "The Pragmatic Programmer", "author": "Hunt & Thomas", "year": 1999, "price": 42.0, "tags": ["software"]})
+    books.insert_one(
+        {
+            "title": "The Pragmatic Programmer",
+            "author": "Hunt & Thomas",
+            "year": 1999,
+            "price": 42.0,
+            "tags": ["software"],
+        }
+    )
 
-    books.insert_many([
-        {"title": "Designing Data-Intensive Applications", "author": "Martin Kleppmann", "year": 2017, "price": 38.0, "tags": ["databases", "distributed"]},
-        {"title": "Clean Code",                            "author": "Robert C. Martin",  "year": 2008, "price": 35.0, "tags": ["software"]},
-        {"title": "MongoDB: The Definitive Guide",         "author": "Shannon Bradshaw",  "year": 2019, "price": 45.0, "tags": ["databases", "mongodb"]},
-        {"title": "Python Crash Course",                   "author": "Eric Matthes",      "year": 2019, "price": 30.0, "tags": ["python"]},
-    ])
+    books.insert_many(
+        [
+            {
+                "title": "Designing Data-Intensive Applications",
+                "author": "Martin Kleppmann",
+                "year": 2017,
+                "price": 38.0,
+                "tags": ["databases", "distributed"],
+            },
+            {
+                "title": "Clean Code",
+                "author": "Robert C. Martin",
+                "year": 2008,
+                "price": 35.0,
+                "tags": ["software"],
+            },
+            {
+                "title": "MongoDB: The Definitive Guide",
+                "author": "Shannon Bradshaw",
+                "year": 2019,
+                "price": 45.0,
+                "tags": ["databases", "mongodb"],
+            },
+            {
+                "title": "Python Crash Course",
+                "author": "Eric Matthes",
+                "year": 2019,
+                "price": 30.0,
+                "tags": ["python"],
+            },
+        ]
+    )
 
     print(f"  {books.count_documents({})} books in the collection\n")
 
@@ -54,7 +88,9 @@ def _run(books) -> None:
 
     print()
     print("── cursor chaining: sort + limit + projection ──")
-    for doc in books.find({}).sort("price", -1).limit(3).projection({"title": 1, "price": 1, "_id": 0}):
+    for doc in (
+        books.find({}).sort("price", -1).limit(3).projection({"title": 1, "price": 1, "_id": 0})
+    ):
         print(f"  ${doc['price']:.0f}  {doc['title']}")
 
     # ── Update ────────────────────────────────────────────────
@@ -66,7 +102,9 @@ def _run(books) -> None:
         {"$set": {"edition": 2}, "$inc": {"price": 5.0}, "$push": {"tags": "classic"}},
     )
     updated = books.find_one({"title": "Clean Code"})
-    print(f"  Clean Code: price=${updated['price']:.0f}, edition={updated['edition']}, tags={updated['tags']}")
+    print(
+        f"  Clean Code: price=${updated['price']:.0f}, edition={updated['edition']}, tags={updated['tags']}"
+    )
 
     print()
     print("── update_many ──")

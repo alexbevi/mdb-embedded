@@ -12,5 +12,7 @@ repos:
       - id: mypy
         additional_dependencies:
           - types-setuptools
+          - flask>=3.0
+          - pymongo>=4.6
         pass_filenames: false
         entry: mypy smongo/ web_app.py --strict

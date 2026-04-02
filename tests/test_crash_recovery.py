@@ -9,13 +9,10 @@ from __future__ import annotations
 
 import multiprocessing
 import os
-import time
 
 import pytest
-import wiredtiger as wt
 
 from smongo.storage import LocalClient
-
 
 # ── Harness helpers ──────────────────────────────────────────────────
 
@@ -60,6 +57,7 @@ def _writer_uncommitted(db_path: str) -> None:
     table_uri = coll.table_uri
     cursor = session.open_cursor(table_uri, None, "overwrite=true")
     from smongo.storage.helpers import _to_bson
+
     for i in range(50):
         doc = {"_id": f"u_{i}", "v": i}
         cursor[str(doc["_id"])] = _to_bson(doc)
@@ -92,6 +90,7 @@ def _writer_checkpoint_then_more(db_path: str) -> None:
     table_uri = coll.table_uri
     cursor = session.open_cursor(table_uri, None, "overwrite=true")
     from smongo.storage.helpers import _to_bson
+
     for i in range(50, 100):
         doc = {"_id": f"cp_{i}", "v": i}
         cursor[str(doc["_id"])] = _to_bson(doc)
@@ -118,6 +117,7 @@ def _writer_multi_doc_txn_crash(db_path: str) -> None:
     db.get_collection("mc_b")
 
     from smongo.storage.transaction import TransactionSession
+
     txn = TransactionSession(client.conn)
     txn.activate()
 

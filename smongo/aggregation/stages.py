@@ -7,7 +7,7 @@ from copy import deepcopy
 from typing import Any
 
 from .._types import Document
-from ..query import field_exists, get_value, resolve_expr, set_value, unset_value
+from ..query import get_value, resolve_expr, set_value, unset_value
 
 
 def group_stage(
@@ -26,7 +26,7 @@ def _group_stage_mem(docs: list[Document], spec: dict[str, Any]) -> list[Documen
     grouped: defaultdict[Any, list[Document]] = defaultdict(list)
     for doc in docs:
         key = resolve_expr(doc, spec["_id"])
-        if isinstance(key, (dict, list)):
+        if isinstance(key, dict | list):
             key = json.dumps(key, sort_keys=True)
         grouped[key].append(doc)
 
@@ -103,7 +103,11 @@ def sort_stage(
     use_spill = allow_disk_use and _estimate_docs_bytes(docs) > DEFAULT_MEMORY_LIMIT_BYTES
 
     for field, direction in reversed(list(spec.items())):
-        key_fn = lambda d, f=field: (get_value(d, f) is not None, get_value(d, f))  # type: ignore[misc]
+
+        def key_fn(doc: Document, field_name: str = field) -> tuple[bool, Any]:
+            value = get_value(doc, field_name)
+            return (value is not None, value)
+
         if use_spill:
             sorter = DiskSpillSorter(key_fn, reverse=(direction == -1))
             docs = sorter.sort(docs)
@@ -239,7 +243,7 @@ def bucket_auto_stage(docs: list[Document], spec: dict[str, Any]) -> list[Docume
     chunk_size = max(1, math.ceil(len(vals) / n))
     results: list[Document] = []
     for i in range(0, len(vals), chunk_size):
-        chunk = vals[i:i + chunk_size]
+        chunk = vals[i : i + chunk_size]
         if not chunk:
             continue
         lo = chunk[0][0]
@@ -315,7 +319,7 @@ def sort_by_count_stage(docs: list[Document], spec: Any) -> list[Document]:
     counts: defaultdict[Any, int] = defaultdict(int)
     for doc in docs:
         val = resolve_expr(doc, spec)
-        key = json.dumps(val, sort_keys=True, default=str) if isinstance(val, (dict, list)) else val
+        key = json.dumps(val, sort_keys=True, default=str) if isinstance(val, dict | list) else val
         counts[key] = counts.get(key, 0) + 1
     results = [{"_id": k, "count": v} for k, v in counts.items()]
     results.sort(key=lambda d: d["count"], reverse=True)
@@ -334,7 +338,7 @@ def set_window_fields_stage(docs: list[Document], spec: dict[str, Any]) -> list[
     partitions: defaultdict[Any, list[Document]] = defaultdict(list)
     for doc in docs:
         key = resolve_expr(doc, partition_by) if partition_by else None
-        if isinstance(key, (dict, list)):
+        if isinstance(key, dict | list):
             key = json.dumps(key, sort_keys=True, default=str)
         partitions[key].append(doc)
 
@@ -354,7 +358,11 @@ def set_window_fields_stage(docs: list[Document], spec: dict[str, Any]) -> list[
                     lo_bound = docs_window[0]
                     hi_bound = docs_window[1]
                     lo = max(0, i + lo_bound) if isinstance(lo_bound, int) else 0
-                    hi = min(len(part_docs), i + hi_bound + 1) if isinstance(hi_bound, int) else len(part_docs)
+                    hi = (
+                        min(len(part_docs), i + hi_bound + 1)
+                        if isinstance(hi_bound, int)
+                        else len(part_docs)
+                    )
                 else:
                     lo, hi = 0, len(part_docs)
                 window_docs = part_docs[lo:hi]

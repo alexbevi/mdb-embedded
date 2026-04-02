@@ -12,6 +12,10 @@ from typing import Any
 from bson import Binary
 
 from ..._compat import WTError as _WTError
+from .._types import CommandDoc, DocSequences, ResponseDoc
+from ..bson_codec import normalize_inbound
+from ..context import ConnectionContext, get_virtual_memory_mb
+from ..errors import error_response, make_error
 from ._registry import (
     _SERVER_START,
     _opcounters,
@@ -19,10 +23,6 @@ from ._registry import (
     _register,
     log,
 )
-from .._types import CommandDoc, DocSequences, ResponseDoc
-from ..bson_codec import normalize_inbound
-from ..context import ConnectionContext, get_virtual_memory_mb
-from ..errors import error_response, make_error
 
 
 @_register("listDatabases", help="List all databases with sizes")
@@ -35,7 +35,7 @@ def _cmd_list_databases(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequen
         while cursor.next() == 0:
             uri = cursor.get_key()
             if uri.startswith("table:") and not uri.startswith("table:__"):
-                table_name = uri[len("table:"):]
+                table_name = uri[len("table:") :]
                 parts = table_name.split("_", 1)
                 if len(parts) == 2:
                     seen_dbs.add(parts[0])
@@ -76,7 +76,9 @@ def _cmd_list_databases(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequen
 
 
 @_register("listCollections", help="List all collections in a database")
-def _cmd_list_collections(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -> ResponseDoc:
+def _cmd_list_collections(
+    ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences
+) -> ResponseDoc:
     db_name = cmd.get("$db", "test")
     db = ctx.get_db(db_name)
     coll_names = db.list_collection_names()
@@ -88,7 +90,10 @@ def _cmd_list_collections(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequ
         entry: dict[str, Any] = {"name": n, "type": "collection"}
         if not name_only:
             entry["options"] = {}
-            entry["info"] = {"readOnly": False, "uuid": Binary(uuid.uuid5(uuid.NAMESPACE_DNS, f"{db_name}.{n}").bytes, subtype=4)}
+            entry["info"] = {
+                "readOnly": False,
+                "uuid": Binary(uuid.uuid5(uuid.NAMESPACE_DNS, f"{db_name}.{n}").bytes, subtype=4),
+            }
         if filter_doc:
             match = True
             for fk, fv in filter_doc.items():
@@ -109,7 +114,9 @@ def _cmd_list_collections(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequ
 
 
 @_register("create")
-def _cmd_create_collection(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -> ResponseDoc:
+def _cmd_create_collection(
+    ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences
+) -> ResponseDoc:
     db_name = cmd.get("$db", "test")
     coll_name = cmd["create"]
     validator = cmd.get("validator")
@@ -209,7 +216,9 @@ def _cmd_coll_mod(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -
 
 
 @_register("renameCollection")
-def _cmd_rename_collection(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -> ResponseDoc:
+def _cmd_rename_collection(
+    ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences
+) -> ResponseDoc:
     src_ns = cmd["renameCollection"]
     dst_ns = cmd.get("to", "")
     drop_target = cmd.get("dropTarget", False)

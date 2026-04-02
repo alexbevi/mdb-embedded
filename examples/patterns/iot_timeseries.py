@@ -18,7 +18,6 @@ from datetime import UTC, datetime, timedelta
 
 from smongo import MongoClient
 
-
 FACILITIES = ["plant_north", "plant_south", "warehouse"]
 SENSORS_PER_FACILITY = 4
 
@@ -61,22 +60,26 @@ def seed(db) -> None:
                     if is_anomaly:
                         temp = round(temp + 15.0, 1)
 
-                    docs.append({
-                        "sensor_id": sensor_id,
-                        "facility": facility,
-                        "timestamp": ts.isoformat(),
-                        "hour": hour,
-                        "temp_c": temp,
-                        "humidity_pct": humidity,
-                    })
+                    docs.append(
+                        {
+                            "sensor_id": sensor_id,
+                            "facility": facility,
+                            "timestamp": ts.isoformat(),
+                            "hour": hour,
+                            "temp_c": temp,
+                            "humidity_pct": humidity,
+                        }
+                    )
 
     readings.insert_many(docs)
     readings.create_index([("facility", 1), ("hour", 1)])
     readings.create_index([("sensor_id", 1)])
     readings.create_index([("temp_c", 1)])
 
-    print(f"  {readings.count_documents({}):,} readings from "
-          f"{len(FACILITIES)} facilities x {SENSORS_PER_FACILITY} sensors x 96 intervals\n")
+    print(
+        f"  {readings.count_documents({}):,} readings from "
+        f"{len(FACILITIES)} facilities x {SENSORS_PER_FACILITY} sensors x 96 intervals\n"
+    )
 
 
 def analytics(db) -> None:
@@ -84,17 +87,21 @@ def analytics(db) -> None:
 
     # ── Hourly averages by facility ───────────────────────────
     print("── hourly temperature averages by facility (6am-noon) ──")
-    results = readings.aggregate([
-        {"$match": {"hour": {"$gte": 6, "$lte": 12}}},
-        {"$group": {
-            "_id": {"facility": "$facility", "hour": "$hour"},
-            "avg_temp": {"$avg": "$temp_c"},
-            "min_temp": {"$min": "$temp_c"},
-            "max_temp": {"$max": "$temp_c"},
-            "readings": {"$sum": 1},
-        }},
-        {"$sort": {"_id.facility": 1, "_id.hour": 1}},
-    ])
+    results = readings.aggregate(
+        [
+            {"$match": {"hour": {"$gte": 6, "$lte": 12}}},
+            {
+                "$group": {
+                    "_id": {"facility": "$facility", "hour": "$hour"},
+                    "avg_temp": {"$avg": "$temp_c"},
+                    "min_temp": {"$min": "$temp_c"},
+                    "max_temp": {"$max": "$temp_c"},
+                    "readings": {"$sum": 1},
+                }
+            },
+            {"$sort": {"_id.facility": 1, "_id.hour": 1}},
+        ]
+    )
 
     current_facility = None
     for r in results:
@@ -102,62 +109,84 @@ def analytics(db) -> None:
         if fac != current_facility:
             current_facility = fac
             print(f"\n  {fac}:")
-        print(f"    {r['_id']['hour']:02d}:00  avg={r['avg_temp']:5.1f}C  "
-              f"range=[{r['min_temp']:.1f}, {r['max_temp']:.1f}]  n={r['readings']}")
+        print(
+            f"    {r['_id']['hour']:02d}:00  avg={r['avg_temp']:5.1f}C  "
+            f"range=[{r['min_temp']:.1f}, {r['max_temp']:.1f}]  n={r['readings']}"
+        )
 
     # ── Anomaly detection: readings > 2 stddev from facility mean
     print("\n── anomaly detection: temp > facility mean + 10C ──")
-    facility_stats = readings.aggregate([
-        {"$group": {
-            "_id": "$facility",
-            "mean_temp": {"$avg": "$temp_c"},
-        }},
-    ])
+    facility_stats = readings.aggregate(
+        [
+            {
+                "$group": {
+                    "_id": "$facility",
+                    "mean_temp": {"$avg": "$temp_c"},
+                }
+            },
+        ]
+    )
     stats_map = {r["_id"]: r["mean_temp"] for r in facility_stats}
 
     for facility, mean in sorted(stats_map.items()):
         threshold = mean + 10.0
-        anomalies = list(readings.find({
-            "facility": facility,
-            "temp_c": {"$gt": threshold},
-        }))
+        anomalies = list(
+            readings.find(
+                {
+                    "facility": facility,
+                    "temp_c": {"$gt": threshold},
+                }
+            )
+        )
         if anomalies:
             print(f"\n  {facility} (mean={mean:.1f}C, threshold={threshold:.1f}C):")
             for a in anomalies[:5]:
-                print(f"    sensor={a['sensor_id']}  hour={a['hour']:02d}  "
-                      f"temp={a['temp_c']}C  (+{a['temp_c'] - mean:.1f}C)")
+                print(
+                    f"    sensor={a['sensor_id']}  hour={a['hour']:02d}  "
+                    f"temp={a['temp_c']}C  (+{a['temp_c'] - mean:.1f}C)"
+                )
         else:
             print(f"  {facility}: no anomalies (mean={mean:.1f}C)")
 
     # ── Facility comparison: daily stats ──────────────────────
     print("\n── facility comparison: 24h summary ──")
-    results = readings.aggregate([
-        {"$group": {
-            "_id": "$facility",
-            "avg_temp": {"$avg": "$temp_c"},
-            "avg_humidity": {"$avg": "$humidity_pct"},
-            "max_temp": {"$max": "$temp_c"},
-            "min_temp": {"$min": "$temp_c"},
-            "sensor_count": {"$addToSet": "$sensor_id"},
-        }},
-        {"$sort": {"avg_temp": 1}},
-    ])
+    results = readings.aggregate(
+        [
+            {
+                "$group": {
+                    "_id": "$facility",
+                    "avg_temp": {"$avg": "$temp_c"},
+                    "avg_humidity": {"$avg": "$humidity_pct"},
+                    "max_temp": {"$max": "$temp_c"},
+                    "min_temp": {"$min": "$temp_c"},
+                    "sensor_count": {"$addToSet": "$sensor_id"},
+                }
+            },
+            {"$sort": {"avg_temp": 1}},
+        ]
+    )
     for r in results:
         sensors = len(r.get("sensor_count", []))
-        print(f"  {r['_id']:15s}  avg={r['avg_temp']:5.1f}C  "
-              f"range=[{r['min_temp']:.1f}, {r['max_temp']:.1f}]  "
-              f"humidity={r['avg_humidity']:.0f}%  sensors={sensors}")
+        print(
+            f"  {r['_id']:15s}  avg={r['avg_temp']:5.1f}C  "
+            f"range=[{r['min_temp']:.1f}, {r['max_temp']:.1f}]  "
+            f"humidity={r['avg_humidity']:.0f}%  sensors={sensors}"
+        )
 
     # ── Sensor health: readings per sensor ────────────────────
     print("\n── sensor health: expected 96 readings each ──")
-    results = readings.aggregate([
-        {"$group": {
-            "_id": "$sensor_id",
-            "count": {"$sum": 1},
-        }},
-        {"$match": {"count": {"$ne": 96}}},
-        {"$sort": {"_id": 1}},
-    ])
+    results = readings.aggregate(
+        [
+            {
+                "$group": {
+                    "_id": "$sensor_id",
+                    "count": {"$sum": 1},
+                }
+            },
+            {"$match": {"count": {"$ne": 96}}},
+            {"$sort": {"_id": 1}},
+        ]
+    )
     missing = list(results)
     if missing:
         for r in missing:

@@ -11,9 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .._compat import WTError as _WTError
-
-from .collection import LocalCollection, TTLReaper, _TTL_DELETE_BATCH_SIZE
+from .collection import LocalCollection, TTLReaper
 from .engine import LocalClient, LocalDB
 from .locking import ReadWriteLock
 from .results import DeleteResult, InsertResult, UpdateResult

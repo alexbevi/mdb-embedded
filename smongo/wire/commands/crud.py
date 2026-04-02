@@ -96,7 +96,9 @@ def _cmd_insert(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -> 
                 break
 
     err_msg = write_errors[0]["errmsg"] if write_errors else None
-    ctx.last_write = LastWriteResult(op="insert", n=inserted, err=err_msg, write_errors=write_errors)
+    ctx.last_write = LastWriteResult(
+        op="insert", n=inserted, err=err_msg, write_errors=write_errors
+    )
 
     resp: ResponseDoc = {"n": inserted, "ok": 1.0}
     if write_errors:
@@ -131,9 +133,7 @@ def _cmd_update(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -> 
             multi = spec.get("multi", False)
             upsert = spec.get("upsert", False)
 
-            has_operators = isinstance(u, dict) and any(
-                k.startswith("$") for k in u
-            )
+            has_operators = isinstance(u, dict) and any(k.startswith("$") for k in u)
 
             if has_operators:
                 result = coll.update(q, u, multi=multi)
@@ -161,6 +161,7 @@ def _cmd_update(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -> 
                     new_doc = dict(u)
 
                 from ...objectid import ObjectId
+
                 if "_id" not in new_doc:
                     new_doc["_id"] = ObjectId()
                 coll.insert_one(new_doc)
@@ -182,7 +183,9 @@ def _cmd_update(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -> 
                 break
 
     err_msg = write_errors[0]["errmsg"] if write_errors else None
-    ctx.last_write = LastWriteResult(op="update", n=n, n_modified=n_modified, err=err_msg, write_errors=write_errors)
+    ctx.last_write = LastWriteResult(
+        op="update", n=n, n_modified=n_modified, err=err_msg, write_errors=write_errors
+    )
 
     resp: ResponseDoc = {"n": n, "nModified": n_modified, "ok": 1.0}
     if upserted:
@@ -303,7 +306,9 @@ def _cmd_kill_cursors(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequence
 
 
 @_register("findAndModify", "findandmodify")
-def _cmd_find_and_modify(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -> ResponseDoc:
+def _cmd_find_and_modify(
+    ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences
+) -> ResponseDoc:
     db_name = cmd.get("$db", "test")
     coll_name = cmd["findAndModify"] if "findAndModify" in cmd else cmd["findandmodify"]
     coll = ctx.get_collection(db_name, coll_name)
@@ -341,9 +346,13 @@ def _cmd_find_and_modify(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSeque
         if matching:
             target_filter = {"_id": matching[0]["_id"]}
             if has_operators:
-                doc = coll.find_one_and_update(target_filter, update_spec, return_document=return_doc)
+                doc = coll.find_one_and_update(
+                    target_filter, update_spec, return_document=return_doc
+                )
             else:
-                doc = coll.find_one_and_replace(target_filter, update_spec, return_document=return_doc)
+                doc = coll.find_one_and_replace(
+                    target_filter, update_spec, return_document=return_doc
+                )
         elif upsert:
             if has_operators:
                 new_doc = dict(query)
@@ -357,6 +366,7 @@ def _cmd_find_and_modify(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSeque
                 new_doc = dict(update_spec)
 
             from ...objectid import ObjectId
+
             if "_id" not in new_doc:
                 new_doc["_id"] = ObjectId()
             coll.insert_one(new_doc)
@@ -374,11 +384,16 @@ def _cmd_find_and_modify(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSeque
         resp["value"] = out
     else:
         resp["value"] = None
-    resp["lastErrorObject"] = {"n": 1 if doc is not None else 0, "updatedExisting": doc is not None and not upsert}
+    resp["lastErrorObject"] = {
+        "n": 1 if doc is not None else 0,
+        "updatedExisting": doc is not None and not upsert,
+    }
     return resp
 
 
-def _apply_sort(docs: list[dict[str, Any]], sort_spec: dict[str, int] | list[tuple[str, int]]) -> list[dict[str, Any]]:
+def _apply_sort(
+    docs: list[dict[str, Any]], sort_spec: dict[str, int] | list[tuple[str, int]]
+) -> list[dict[str, Any]]:
     """Sort a list of docs by the given sort specification."""
     if not docs or not sort_spec:
         return docs
@@ -514,7 +529,9 @@ def _cmd_get_last_error(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequen
 
 
 @_register("estimatedDocumentCount")
-def _cmd_estimated_doc_count(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -> ResponseDoc:
+def _cmd_estimated_doc_count(
+    ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences
+) -> ResponseDoc:
     _inc_counter("query")
     db_name = cmd.get("$db", "test")
     coll_name = cmd["estimatedDocumentCount"]
@@ -552,6 +569,7 @@ def _cmd_data_size(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) 
                 query[field] = bounds
         doc_iter = coll.find_streaming(query) if query else coll.find_streaming()
         from bson import encode as _bson_encode
+
         size = 0
         n = 0
         for n, d in enumerate(doc_iter, 1):  # noqa: B007

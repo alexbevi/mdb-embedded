@@ -31,9 +31,7 @@ def normalize_inbound(doc: dict[str, Any] | None) -> Document | None:
 
 def _convert_inbound(value: Any, depth: int = 0) -> Any:
     if depth > MAX_NESTING_DEPTH:
-        raise ValueError(
-            f"document exceeds maximum nesting depth of {MAX_NESTING_DEPTH}"
-        )
+        raise ValueError(f"document exceeds maximum nesting depth of {MAX_NESTING_DEPTH}")
     if isinstance(value, BsonObjectId):
         return EngineObjectId(str(value))
     if isinstance(value, Decimal128):
@@ -63,9 +61,7 @@ def normalize_outbound(doc: dict[str, Any] | None) -> dict[str, Any] | None:
 
 def _convert_outbound(key: str | None, value: Any, depth: int = 0) -> Any:
     if depth > MAX_NESTING_DEPTH:
-        raise ValueError(
-            f"document exceeds maximum nesting depth of {MAX_NESTING_DEPTH}"
-        )
+        raise ValueError(f"document exceeds maximum nesting depth of {MAX_NESTING_DEPTH}")
     if isinstance(value, EngineObjectId):
         return BsonObjectId(str(value))
     if key == "_id" and isinstance(value, str) and _is_objectid_hex(value):

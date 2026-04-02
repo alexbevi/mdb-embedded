@@ -12,13 +12,13 @@ from .output import _OUT_BATCH_SIZE, out_stage
 from .stages import sort_stage, unwind_stage
 
 __all__ = [
-    "Cursor",
     "DEFAULT_MAX_PIPELINE_DOCS",
     "DEFAULT_MEMORY_LIMIT_BYTES",
-    "DocumentLimitExceeded",
     "MAX_PIPELINE_STAGES",
-    "MemoryLimitExceeded",
     "_OUT_BATCH_SIZE",
+    "Cursor",
+    "DocumentLimitExceeded",
+    "MemoryLimitExceeded",
     "_apply_projection",
     "_optimize_pipeline",
     "out_stage",

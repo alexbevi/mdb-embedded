@@ -138,11 +138,13 @@ class TestRead:
         assert local_collection.get_by_id("nonexistent") is None
 
     def test_get_by_ids(self, local_collection):
-        local_collection.insert_many([
-            {"_id": "a", "v": 1},
-            {"_id": "b", "v": 2},
-            {"_id": "c", "v": 3},
-        ])
+        local_collection.insert_many(
+            [
+                {"_id": "a", "v": 1},
+                {"_id": "b", "v": 2},
+                {"_id": "c", "v": 3},
+            ]
+        )
         docs = local_collection.get_by_ids(["a", "c"])
         assert len(docs) == 2
         vals = {d["v"] for d in docs}
@@ -193,21 +195,25 @@ class TestFind:
         assert "Hank" in names
 
     def test_find_or_with_pk(self, local_collection):
-        local_collection.insert_many([
-            {"_id": "a", "x": 1},
-            {"_id": "b", "x": 2},
-            {"_id": "c", "x": 3},
-        ])
+        local_collection.insert_many(
+            [
+                {"_id": "a", "x": 1},
+                {"_id": "b", "x": 2},
+                {"_id": "c", "x": 3},
+            ]
+        )
         local_collection.create_index([("x", 1)])
         docs = local_collection.find({"$or": [{"_id": "a"}, {"x": 3}]})
         ids = {d["_id"] for d in docs}
         assert ids == {"a", "c"}
 
     def test_find_or_deduplicates(self, local_collection):
-        local_collection.insert_many([
-            {"_id": "a", "x": 1, "y": 10},
-            {"_id": "b", "x": 2, "y": 20},
-        ])
+        local_collection.insert_many(
+            [
+                {"_id": "a", "x": 1, "y": 10},
+                {"_id": "b", "x": 2, "y": 20},
+            ]
+        )
         local_collection.create_index([("x", 1)])
         local_collection.create_index([("y", 1)])
         docs = local_collection.find({"$or": [{"x": 1}, {"y": 10}]})
@@ -340,12 +346,16 @@ class TestDelete:
 
 class TestValidation:
     def test_insert_with_valid_doc(self, local_db):
-        validator = {"$jsonSchema": {"required": ["name"], "properties": {"name": {"bsonType": "string"}}}}
+        validator = {
+            "$jsonSchema": {"required": ["name"], "properties": {"name": {"bsonType": "string"}}}
+        }
         coll = local_db.create_collection("validated", validator=validator)
         coll.insert_one({"name": "Alice"})
 
     def test_insert_with_invalid_doc_raises(self, local_db):
-        validator = {"$jsonSchema": {"required": ["name"], "properties": {"name": {"bsonType": "string"}}}}
+        validator = {
+            "$jsonSchema": {"required": ["name"], "properties": {"name": {"bsonType": "string"}}}
+        }
         coll = local_db.create_collection("validated2", validator=validator)
         with pytest.raises(ValidationError):
             coll.insert_one({"age": 30})
@@ -538,7 +548,9 @@ class TestIndexAcceleratedWrites:
 
 class TestTransactions:
     def test_insert_rollback_on_validation_error(self, local_db):
-        validator = {"$jsonSchema": {"required": ["name"], "properties": {"name": {"bsonType": "string"}}}}
+        validator = {
+            "$jsonSchema": {"required": ["name"], "properties": {"name": {"bsonType": "string"}}}
+        }
         coll = local_db.create_collection("txn_test", validator=validator)
         coll.create_index([("email", 1)], unique=True)
         coll.insert_one({"name": "Alice", "email": "a@b.com"})
@@ -567,8 +579,16 @@ class TestThreadSafety:
             try:
                 for i in range(10):
                     local_collection.insert_one({"thread": thread_id, "i": i})
-            except (DuplicateKeyError, ValidationError, _WTError,
-                    KeyError, TypeError, ValueError, RuntimeError, OSError) as e:
+            except (
+                DuplicateKeyError,
+                ValidationError,
+                _WTError,
+                KeyError,
+                TypeError,
+                ValueError,
+                RuntimeError,
+                OSError,
+            ) as e:
                 errors.append(e)
 
         threads = [threading.Thread(target=worker, args=(t,)) for t in range(10)]
@@ -589,8 +609,16 @@ class TestThreadSafety:
             try:
                 for _ in range(50):
                     local_collection.update({"_id": "counter"}, {"$inc": {"n": 1}}, multi=False)
-            except (_WTError, DuplicateKeyError, ValidationError,
-                    KeyError, TypeError, ValueError, RuntimeError, OSError) as e:
+            except (
+                _WTError,
+                DuplicateKeyError,
+                ValidationError,
+                KeyError,
+                TypeError,
+                ValueError,
+                RuntimeError,
+                OSError,
+            ) as e:
                 errors.append(e)
 
         threads = [threading.Thread(target=incrementer) for _ in range(4)]
@@ -611,19 +639,28 @@ class TestThreadSafety:
             try:
                 for _ in range(20):
                     local_collection.find({"v": {"$gte": 0}})
-            except (_WTError, KeyError, TypeError, ValueError,
-                    RuntimeError, OSError) as e:
+            except (_WTError, KeyError, TypeError, ValueError, RuntimeError, OSError) as e:
                 errors.append(e)
 
         def writer():
             try:
                 for i in range(20):
                     local_collection.update({"_id": f"rw{i % 20}"}, {"$inc": {"v": 1}}, multi=False)
-            except (_WTError, DuplicateKeyError, ValidationError,
-                    KeyError, TypeError, ValueError, RuntimeError, OSError) as e:
+            except (
+                _WTError,
+                DuplicateKeyError,
+                ValidationError,
+                KeyError,
+                TypeError,
+                ValueError,
+                RuntimeError,
+                OSError,
+            ) as e:
                 errors.append(e)
 
-        threads = [threading.Thread(target=reader) for _ in range(3)] + [threading.Thread(target=writer) for _ in range(2)]
+        threads = [threading.Thread(target=reader) for _ in range(3)] + [
+            threading.Thread(target=writer) for _ in range(2)
+        ]
         for t in threads:
             t.start()
         for t in threads:
@@ -640,24 +677,32 @@ class TestThreadSafety:
             try:
                 for _ in range(50):
                     local_collection.find_one_and_update(
-                        {"_id": "fau"}, {"$inc": {"n": 1}}, return_document="after",
+                        {"_id": "fau"},
+                        {"$inc": {"n": 1}},
+                        return_document="after",
                     )
-            except (_WTError, DuplicateKeyError, ValidationError,
-                    KeyError, TypeError, ValueError, RuntimeError, OSError) as e:
+            except (
+                _WTError,
+                DuplicateKeyError,
+                ValidationError,
+                KeyError,
+                TypeError,
+                ValueError,
+                RuntimeError,
+                OSError,
+            ) as e:
                 errors.append(e)
 
         def reader():
             try:
                 for _ in range(50):
                     local_collection.find({"n": {"$gte": 0}})
-            except (_WTError, KeyError, TypeError, ValueError,
-                    RuntimeError, OSError) as e:
+            except (_WTError, KeyError, TypeError, ValueError, RuntimeError, OSError) as e:
                 errors.append(e)
 
-        threads = (
-            [threading.Thread(target=updater) for _ in range(3)]
-            + [threading.Thread(target=reader) for _ in range(3)]
-        )
+        threads = [threading.Thread(target=updater) for _ in range(3)] + [
+            threading.Thread(target=reader) for _ in range(3)
+        ]
         for t in threads:
             t.start()
         for t in threads:
@@ -718,13 +763,17 @@ class TestBSONStorage:
 class TestFindOneAnd:
     def test_find_one_and_update_returns_before(self, local_collection):
         local_collection.insert_one({"_id": "fau1", "x": 1})
-        before = local_collection.find_one_and_update({"_id": "fau1"}, {"$set": {"x": 99}}, return_document="before")
+        before = local_collection.find_one_and_update(
+            {"_id": "fau1"}, {"$set": {"x": 99}}, return_document="before"
+        )
         assert before["x"] == 1
         assert local_collection.get_by_id("fau1")["x"] == 99
 
     def test_find_one_and_update_returns_after(self, local_collection):
         local_collection.insert_one({"_id": "fau2", "x": 1})
-        after = local_collection.find_one_and_update({"_id": "fau2"}, {"$set": {"x": 99}}, return_document="after")
+        after = local_collection.find_one_and_update(
+            {"_id": "fau2"}, {"$set": {"x": 99}}, return_document="after"
+        )
         assert after["x"] == 99
 
     def test_find_one_and_update_no_match(self, local_collection):

@@ -119,19 +119,32 @@ class TestLookupOptimization:
         main = local_db.get_collection("orders")
         foreign = local_db.get_collection("products")
         foreign.create_index("sku")
-        foreign.insert_many([
-            {"sku": "A", "price": 10},
-            {"sku": "B", "price": 20},
-        ])
-        main.insert_many([
-            {"_id": "o1", "product_sku": "A"},
-            {"_id": "o2", "product_sku": "B"},
-            {"_id": "o3", "product_sku": "C"},
-        ])
+        foreign.insert_many(
+            [
+                {"sku": "A", "price": 10},
+                {"sku": "B", "price": 20},
+            ]
+        )
+        main.insert_many(
+            [
+                {"_id": "o1", "product_sku": "A"},
+                {"_id": "o2", "product_sku": "B"},
+                {"_id": "o3", "product_sku": "C"},
+            ]
+        )
         getter = lambda name: local_db.get_collection(name)
-        result = Cursor(main.get_all(), collection_getter=getter).aggregate([
-            {"$lookup": {"from": "products", "localField": "product_sku", "foreignField": "sku", "as": "product"}}
-        ])
+        result = Cursor(main.get_all(), collection_getter=getter).aggregate(
+            [
+                {
+                    "$lookup": {
+                        "from": "products",
+                        "localField": "product_sku",
+                        "foreignField": "sku",
+                        "as": "product",
+                    }
+                }
+            ]
+        )
         found_a = [d for d in result if d["_id"] == "o1"]
         assert len(found_a) == 1
         assert len(found_a[0]["product"]) == 1
@@ -146,9 +159,18 @@ class TestLookupOptimization:
         foreign.insert_many([{"k": "x", "v": 1}])
         main.insert_many([{"_id": "1", "fk": "x"}])
         getter = lambda name: local_db.get_collection(name)
-        result = Cursor(main.get_all(), collection_getter=getter).aggregate([
-            {"$lookup": {"from": "foreign_fb", "localField": "fk", "foreignField": "k", "as": "joined"}}
-        ])
+        result = Cursor(main.get_all(), collection_getter=getter).aggregate(
+            [
+                {
+                    "$lookup": {
+                        "from": "foreign_fb",
+                        "localField": "fk",
+                        "foreignField": "k",
+                        "as": "joined",
+                    }
+                }
+            ]
+        )
         assert len(result[0]["joined"]) == 1
 
 

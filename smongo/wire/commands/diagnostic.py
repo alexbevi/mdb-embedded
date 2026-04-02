@@ -3,10 +3,10 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from ._registry import _HANDLERS, _HELP, _register, log
 from .._types import CommandDoc, DocSequences, ResponseDoc
 from ..context import ConnectionContext
 from ..errors import error_response, make_error
+from ._registry import _HANDLERS, _HELP, _register, log
 
 
 @_register("currentOp")
@@ -31,7 +31,9 @@ def _cmd_kill_op(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) ->
 
 
 @_register("connPoolStats", help="Return connection pool statistics")
-def _cmd_conn_pool_stats(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -> ResponseDoc:
+def _cmd_conn_pool_stats(
+    ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences
+) -> ResponseDoc:
     snap = ctx.conn_counter.snapshot()
     return {
         "numClientConnections": snap["current"],
@@ -56,6 +58,7 @@ def _cmd_features(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -
 @_register("logRotate")
 def _cmd_log_rotate(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -> ResponseDoc:
     import logging as _logging
+
     for handler in _logging.root.handlers:
         if hasattr(handler, "doRollover"):
             handler.doRollover()
@@ -102,7 +105,9 @@ def _cmd_sharding_state(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequen
 
 
 @_register("replSetGetConfig")
-def _cmd_repl_get_config(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -> ResponseDoc:
+def _cmd_repl_get_config(
+    ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences
+) -> ResponseDoc:
     return make_error("NotPrimaryOrSecondary", "smongo is standalone, not a replica set member")
 
 
@@ -112,9 +117,7 @@ def _cmd_repl_status(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences
         try:
             return {
                 "set": "smongo",
-                "members": [
-                    {"_id": 0, "name": "localhost", "state": 1, "stateStr": "PRIMARY"}
-                ],
+                "members": [{"_id": 0, "name": "localhost", "state": 1, "stateStr": "PRIMARY"}],
                 "sync": ctx.sync_mgr.status(),
                 "ok": 1.0,
             }
@@ -124,7 +127,9 @@ def _cmd_repl_status(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences
 
 
 @_register("setFreeMonitoring", help="Enable or disable free monitoring")
-def _cmd_set_free_monitoring(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -> ResponseDoc:
+def _cmd_set_free_monitoring(
+    ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences
+) -> ResponseDoc:
     action = cmd.get("action", "")
     if action not in ("enable", "disable"):
         return make_error("InvalidOptions", f"invalid action: {action!r}")
@@ -150,10 +155,23 @@ def _cmd_lock_info(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) 
 @_register("listCommands", help="List all registered commands with help text")
 def _cmd_list_commands(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -> ResponseDoc:
     commands: dict[str, dict[str, Any]] = {}
-    admin_commands = {"fsync", "serverStatus", "hostInfo", "top", "logRotate",
-                      "getParameter", "setParameter", "currentOp", "killOp",
-                      "listDatabases", "replSetGetStatus", "replSetGetConfig",
-                      "shardingState", "connPoolStats", "getCmdLineOpts"}
+    admin_commands = {
+        "fsync",
+        "serverStatus",
+        "hostInfo",
+        "top",
+        "logRotate",
+        "getParameter",
+        "setParameter",
+        "currentOp",
+        "killOp",
+        "listDatabases",
+        "replSetGetStatus",
+        "replSetGetConfig",
+        "shardingState",
+        "connPoolStats",
+        "getCmdLineOpts",
+    }
     for name, _handler in _HANDLERS.items():
         commands[name] = {
             "help": _HELP.get(name, ""),

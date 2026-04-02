@@ -8,6 +8,7 @@ Follows the MongoDB ObjectId spec:
 
 The 12-byte value is represented as a 24-character hex string.
 """
+
 from __future__ import annotations
 
 import os

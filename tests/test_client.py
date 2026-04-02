@@ -54,8 +54,8 @@ class TestDatabase:
     def test_list_collection_names_local_cache(self, tmp_path):
         client = MongoClient(f"local://{tmp_path}/wt")
         db = client["mydb"]
-        _ = db["users"]
-        _ = db["orders"]
+        db["users"]
+        db["orders"]
         names = db.list_collection_names()
         assert set(names) == {"users", "orders"}
 
@@ -103,9 +103,7 @@ class TestCollectionFacade:
         client = MongoClient(f"local://{tmp_path}/wt")
         coll = client["mydb"]["users"]
         coll.insert_many([{"city": "NYC"}, {"city": "SF"}, {"city": "NYC"}])
-        result = coll.aggregate(
-            [{"$group": {"_id": "$city", "count": {"$sum": 1}}}]
-        )
+        result = coll.aggregate([{"$group": {"_id": "$city", "count": {"$sum": 1}}}])
         nyc = next(r for r in result if r["_id"] == "NYC")
         assert nyc["count"] == 2
 
@@ -201,14 +199,17 @@ class TestCollectionFacade:
 
     def test_bulk_write_mixed_operations(self, tmp_path):
         from smongo.client import DeleteOne, InsertOne, UpdateOne
+
         client = MongoClient(f"local://{tmp_path}/wt")
         coll = client["mydb"]["users"]
         coll.insert_many([{"_id": "bw1", "x": 1}, {"_id": "bw2", "x": 2}])
-        result = coll.bulk_write([
-            InsertOne({"_id": "bw3", "x": 3}),
-            UpdateOne({"_id": "bw1"}, {"$set": {"x": 10}}),
-            DeleteOne({"_id": "bw2"}),
-        ])
+        result = coll.bulk_write(
+            [
+                InsertOne({"_id": "bw3", "x": 3}),
+                UpdateOne({"_id": "bw1"}, {"$set": {"x": 10}}),
+                DeleteOne({"_id": "bw2"}),
+            ]
+        )
         assert result.inserted_count == 1
         assert result.modified_count == 1
         assert result.deleted_count == 1
@@ -218,12 +219,15 @@ class TestCollectionFacade:
 
     def test_bulk_write_upsert(self, tmp_path):
         from smongo.client import ReplaceOne, UpdateOne
+
         client = MongoClient(f"local://{tmp_path}/wt")
         coll = client["mydb"]["users"]
-        result = coll.bulk_write([
-            UpdateOne({"_id": "up1"}, {"$set": {"x": 1}}, upsert=True),
-            ReplaceOne({"_id": "up2"}, {"_id": "up2", "x": 2}, upsert=True),
-        ])
+        result = coll.bulk_write(
+            [
+                UpdateOne({"_id": "up1"}, {"$set": {"x": 1}}, upsert=True),
+                ReplaceOne({"_id": "up2"}, {"_id": "up2", "x": 2}, upsert=True),
+            ]
+        )
         assert result.upserted_count == 2
         assert 0 in result.upserted_ids
         assert coll.find_one({"_id": "up1"})["x"] == 1

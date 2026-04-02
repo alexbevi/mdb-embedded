@@ -30,6 +30,7 @@ except ImportError:
     class PyMongoError(Exception):  # type: ignore[no-redef]
         pass
 
+
 try:
     from bson import ObjectId as BsonObjectId
 except ImportError:
@@ -46,6 +47,7 @@ log = logging.getLogger("smongo.sync")
 # ------------------------------------------------------------------
 # Type bridge: engine ObjectId <-> bson ObjectId for PyMongo
 # ------------------------------------------------------------------
+
 
 def _to_pymongo(value: Any) -> Any:
     """Recursively convert engine ObjectId to bson.ObjectId for PyMongo."""
@@ -73,6 +75,7 @@ def _from_pymongo(value: Any) -> Any:
 # Vector clocks
 # ------------------------------------------------------------------
 
+
 class VectorClock:
     """Per-document vector clock for causal ordering across replicas.
 
@@ -99,7 +102,10 @@ class VectorClock:
         for nid, ts in other._clock.items():
             if self._clock.get(nid, 0) < ts:
                 return False
-        return any(self._clock.get(nid, 0) > other._clock.get(nid, 0) for nid in set(self._clock) | set(other._clock))
+        return any(
+            self._clock.get(nid, 0) > other._clock.get(nid, 0)
+            for nid in set(self._clock) | set(other._clock)
+        )
 
     def concurrent_with(self, other: "VectorClock") -> bool:
         return not self.dominates(other) and not other.dominates(self)
@@ -116,9 +122,10 @@ class VectorClock:
 # CRDT helpers
 # ------------------------------------------------------------------
 
+
 def _crdt_counter_merge(local_val: Any, remote_val: Any) -> Any:
     """Merge two counter values (grow-only counter / PNCounter)."""
-    if isinstance(local_val, (int, float)) and isinstance(remote_val, (int, float)):
+    if isinstance(local_val, int | float) and isinstance(remote_val, int | float):
         return max(local_val, remote_val)
     return remote_val
 
@@ -129,7 +136,11 @@ def _crdt_set_merge(local_val: Any, remote_val: Any) -> Any:
         seen: set[Any] = set()
         merged: list[Any] = []
         for item in local_val + remote_val:
-            key = json.dumps(item, sort_keys=True, default=str) if isinstance(item, (dict, list)) else item
+            key = (
+                json.dumps(item, sort_keys=True, default=str)
+                if isinstance(item, dict | list)
+                else item
+            )
             if key not in seen:
                 seen.add(key)
                 merged.append(item)
@@ -137,7 +148,9 @@ def _crdt_set_merge(local_val: Any, remote_val: Any) -> Any:
     return remote_val
 
 
-def _crdt_merge_doc(local_doc: Document, remote_doc: Document, crdt_fields: dict[str, str] | None = None) -> Document:
+def _crdt_merge_doc(
+    local_doc: Document, remote_doc: Document, crdt_fields: dict[str, str] | None = None
+) -> Document:
     """Merge two documents using CRDT semantics for annotated fields.
 
     ``crdt_fields`` maps field names to CRDT types (``"counter"`` or ``"set"``).
@@ -162,7 +175,11 @@ def _crdt_merge_doc(local_doc: Document, remote_doc: Document, crdt_fields: dict
             else:
                 merged[field] = rv if remote_ts >= local_ts else lv
         elif field in remote_doc:
-            merged[field] = remote_doc[field] if remote_ts >= local_ts else local_doc.get(field, remote_doc[field])
+            merged[field] = (
+                remote_doc[field]
+                if remote_ts >= local_ts
+                else local_doc.get(field, remote_doc[field])
+            )
     return merged
 
 
@@ -209,6 +226,7 @@ class TombstoneRegistry:
 # ------------------------------------------------------------------
 # Conflict resolution
 # ------------------------------------------------------------------
+
 
 def _lww(local_doc: Document, remote_doc: Document) -> Document:
     """Last-write-wins: compare _lastModified timestamps."""
@@ -292,6 +310,7 @@ def _diff_fields(local_doc: Document, remote_doc: Document) -> set[str]:
 # SyncManager
 # ------------------------------------------------------------------
 
+
 class SyncManager:
     """
     Manages bidirectional sync between a local MongoClient and a remote Atlas cluster.
@@ -319,7 +338,9 @@ class SyncManager:
         "sync_rules": None,  # Per-document sync rules: MQL filter dict
     }
 
-    def __init__(self, local_client: Any, atlas_uri: str, sync_config: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self, local_client: Any, atlas_uri: str, sync_config: dict[str, Any] | None = None
+    ) -> None:
         if not _PyMongoClient:  # type: ignore[truthy-function]
             raise ImportError("pymongo required for sync to MongoDB Atlas")
 
@@ -385,7 +406,11 @@ class SyncManager:
             self._state = "online"
         self._thread = threading.Thread(target=self._run_loop, daemon=True, name="sync")
         self._thread.start()
-        log.info("Sync started (mode=%s, interval=%ss)", self._config["mode"], self._config["interval_sec"])
+        log.info(
+            "Sync started (mode=%s, interval=%ss)",
+            self._config["mode"],
+            self._config["interval_sec"],
+        )
 
     def stop(self) -> None:
         """Signal the sync thread to stop and wait for it."""
@@ -454,13 +479,21 @@ class SyncManager:
                     self._consecutive_errors = 0
                     self._state = "online"
                 sleep_time = interval
-            except (PyMongoError, json.JSONDecodeError, KeyError, ValueError, TypeError, OSError, RuntimeError) as exc:
+            except (
+                PyMongoError,
+                json.JSONDecodeError,
+                KeyError,
+                ValueError,
+                TypeError,
+                OSError,
+                RuntimeError,
+            ) as exc:
                 with self._lock:
                     self._last_error = exc
                     self._error_count += 1
                     self._consecutive_errors += 1
                     self._state = "error"
-                sleep_time = min(interval * (2 ** self._consecutive_errors), max_backoff)
+                sleep_time = min(interval * (2**self._consecutive_errors), max_backoff)
                 log.exception("Sync cycle error")
 
             self._stop_event.wait(timeout=sleep_time)
@@ -557,7 +590,9 @@ class SyncManager:
                     with self._lock:
                         self._pushed_count += len(ops)
                 else:
-                    log.warning("Final batch failed for %s; entries retained in oplog for retry", ns)
+                    log.warning(
+                        "Final batch failed for %s; entries retained in oplog for retry", ns
+                    )
 
             if last_key:
                 self._set_checkpoint(f"push:{ns}", last_key)
@@ -627,7 +662,10 @@ class SyncManager:
     _SYNC_META_FIELDS = frozenset({"_lastModified"})
 
     def _upsert_remote_doc(
-        self, ns: str, local_coll: Any, rdoc: Document,
+        self,
+        ns: str,
+        local_coll: Any,
+        rdoc: Document,
         remote_changed: set[str] | None = None,
     ) -> None:
         rdoc = _from_pymongo(rdoc)
@@ -697,7 +735,10 @@ class SyncManager:
         resume_token: dict[str, Any] | None = json.loads(token_raw) if token_raw else None
 
         try:
-            watch_kwargs: dict[str, Any] = {"full_document": "updateLookup", "max_await_time_ms": 200}
+            watch_kwargs: dict[str, Any] = {
+                "full_document": "updateLookup",
+                "max_await_time_ms": 200,
+            }
             if resume_token:
                 watch_kwargs["resume_after"] = resume_token
             with remote_coll.watch([], **watch_kwargs) as stream:
@@ -729,7 +770,9 @@ class SyncManager:
                             with self._lock:
                                 self._pulled_count += 1
                     elif op == "delete" and doc_id is not None:
-                        local_coll.delete({"_id": _from_pymongo(doc_id)}, multi=False, _internal=True)
+                        local_coll.delete(
+                            {"_id": _from_pymongo(doc_id)}, multi=False, _internal=True
+                        )
 
                     token = change.get("_id")
                     if token is not None:
@@ -814,7 +857,9 @@ class SyncManager:
         remote_coll = self._remote[db_name][coll_name]
         self._tracked[ns] = (local_collection, remote_coll, None)
 
-    def _register(self, db_name: str, coll_name: str, *, filter_fn: Predicate | None = None) -> None:
+    def _register(
+        self, db_name: str, coll_name: str, *, filter_fn: Predicate | None = None
+    ) -> None:
         local_db = self._local.client.get_db(db_name)
         local_coll = local_db.get_collection(coll_name)
         remote_coll = self._remote[db_name][coll_name]

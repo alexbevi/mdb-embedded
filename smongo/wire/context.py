@@ -7,6 +7,7 @@ Also tracks compression negotiation, logical sessions, per-session transaction
 state with undo-journal rollback, per-connection write result tracking,
 active-operation monitoring, and an operation profiler.
 """
+
 from __future__ import annotations
 
 import logging
@@ -14,7 +15,6 @@ import os
 import re
 import subprocess
 import threading
-import time
 from itertools import count
 from typing import TYPE_CHECKING, Any
 
@@ -23,13 +23,11 @@ from ..storage.transaction import TransactionSession as _StorageTxnSession
 from . import transactions as _txn
 from .cursors import CursorRegistry
 from .profiler import (
-    CollectionTimingStats,
-    OpEntry,
     OperationTracker,
     Profiler,
     TopStats,
 )
-from .sessions import MAX_SESSIONS, SessionEntry, SessionRegistry, TooManySessions
+from .sessions import SessionRegistry
 from .transactions import (
     SessionTransaction,
     TransactionError,
@@ -41,7 +39,7 @@ if TYPE_CHECKING:
 
 _MAX_DB_NAME_LEN = 64
 _MAX_COLL_NAME_LEN = 120
-_INVALID_NS_CHARS = re.compile(r'[\x00/\\]')
+_INVALID_NS_CHARS = re.compile(r"[\x00/\\]")
 _SYSTEM_PREFIX_EXCEPTIONS = frozenset({"$cmd", "$external"})
 
 
@@ -58,46 +56,34 @@ def validate_namespace(db_name: str, coll_name: str) -> None:
     if not isinstance(db_name, str) or not db_name or db_name != db_name.strip():
         raise NamespaceError(f"invalid database name: {db_name!r}")
     if len(db_name) > _MAX_DB_NAME_LEN:
-        raise NamespaceError(
-            f"database name exceeds {_MAX_DB_NAME_LEN} characters"
-        )
+        raise NamespaceError(f"database name exceeds {_MAX_DB_NAME_LEN} characters")
     if _INVALID_NS_CHARS.search(db_name):
-        raise NamespaceError(
-            f"database name contains forbidden characters: {db_name!r}"
-        )
+        raise NamespaceError(f"database name contains forbidden characters: {db_name!r}")
     if "." in db_name:
         raise NamespaceError(f"database name cannot contain '.': {db_name!r}")
     if db_name.startswith("$"):
-        raise NamespaceError(
-            f"database name cannot start with '$': {db_name!r}"
-        )
+        raise NamespaceError(f"database name cannot start with '$': {db_name!r}")
 
     if not isinstance(coll_name, str) or not coll_name or coll_name != coll_name.strip():
         raise NamespaceError(f"invalid collection name: {coll_name!r}")
     if len(coll_name) > _MAX_COLL_NAME_LEN:
-        raise NamespaceError(
-            f"collection name exceeds {_MAX_COLL_NAME_LEN} characters"
-        )
+        raise NamespaceError(f"collection name exceeds {_MAX_COLL_NAME_LEN} characters")
     if _INVALID_NS_CHARS.search(coll_name):
-        raise NamespaceError(
-            f"collection name contains forbidden characters: {coll_name!r}"
-        )
+        raise NamespaceError(f"collection name contains forbidden characters: {coll_name!r}")
     if coll_name.startswith("$") and coll_name not in _SYSTEM_PREFIX_EXCEPTIONS:
-        raise NamespaceError(
-            f"collection name cannot start with '$': {coll_name!r}"
-        )
+        raise NamespaceError(f"collection name cannot start with '$': {coll_name!r}")
     if ".." in coll_name:
-        raise NamespaceError(
-            f"collection name cannot contain '..': {coll_name!r}"
-        )
+        raise NamespaceError(f"collection name cannot contain '..': {coll_name!r}")
 
 
 # =====================================================================
 # Per-connection last-write tracking (getLastError)
 # =====================================================================
 
+
 class LastWriteResult:
     """Captures the outcome of the most recent write on a connection."""
+
     __slots__ = ("err", "n", "n_modified", "op", "upserted_id", "write_errors")
 
     def __init__(
@@ -121,6 +107,7 @@ class LastWriteResult:
 # =====================================================================
 # Mutable parameter store (getParameter / setParameter)
 # =====================================================================
+
 
 class ParameterStore:
     """Thread-safe mutable parameter store for ``getParameter``/``setParameter``."""
@@ -161,6 +148,7 @@ class ParameterStore:
 # Log buffer (getLog)
 # =====================================================================
 
+
 class LogBuffer(logging.Handler):
     """Logging handler that captures recent log messages for ``getLog``."""
 
@@ -170,9 +158,7 @@ class LogBuffer(logging.Handler):
         self._max = max_lines
         self._lock = threading.Lock()
         self._total = 0
-        self.setFormatter(logging.Formatter(
-            "%(asctime)s %(levelname)s  %(name)s  %(message)s"
-        ))
+        self.setFormatter(logging.Formatter("%(asctime)s %(levelname)s  %(name)s  %(message)s"))
 
     def emit(self, record: logging.LogRecord) -> None:
         line = self.format(record)
@@ -180,7 +166,7 @@ class LogBuffer(logging.Handler):
             self._lines.append(line)
             self._total += 1
             if len(self._lines) > self._max:
-                self._lines = self._lines[-self._max:]
+                self._lines = self._lines[-self._max :]
 
     def get_lines(self) -> tuple[list[str], int]:
         with self._lock:
@@ -196,6 +182,7 @@ class LogBuffer(logging.Handler):
 # =====================================================================
 # Connection counter (serverStatus / connPoolStats)
 # =====================================================================
+
 
 class ConnectionCounter:
     """Thread-safe connection counter shared across all ``ConnectionContext`` instances."""
@@ -228,6 +215,7 @@ class ConnectionCounter:
 # Free monitoring state
 # =====================================================================
 
+
 class FreeMonitoringState:
     """Tracks whether free monitoring is enabled (setFreeMonitoring/getFreeMonitoringStatus)."""
 
@@ -252,6 +240,7 @@ class FreeMonitoringState:
 # System memory helpers
 # =====================================================================
 
+
 def get_total_memory_mb() -> int:
     """Return total physical memory in MB using OS-level APIs."""
     try:
@@ -263,7 +252,9 @@ def get_total_memory_mb() -> int:
     try:
         result = subprocess.run(
             ["sysctl", "-n", "hw.memsize"],
-            capture_output=True, text=True, timeout=2,
+            capture_output=True,
+            text=True,
+            timeout=2,
         )
         return int(result.stdout.strip()) // (1024 * 1024)
     except (OSError, ValueError, subprocess.SubprocessError, FileNotFoundError):
@@ -283,7 +274,9 @@ def get_virtual_memory_mb() -> int:
     try:
         result = subprocess.run(
             ["ps", "-o", "vsz=", "-p", str(os.getpid())],
-            capture_output=True, text=True, timeout=2,
+            capture_output=True,
+            text=True,
+            timeout=2,
         )
         return int(result.stdout.strip()) // 1024
     except (OSError, ValueError, subprocess.SubprocessError, FileNotFoundError):
@@ -295,7 +288,9 @@ def get_git_version() -> str:
     try:
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            capture_output=True, text=True, timeout=2,
+            capture_output=True,
+            text=True,
+            timeout=2,
             cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         )
         if result.returncode == 0:
@@ -308,6 +303,7 @@ def get_git_version() -> str:
 # =====================================================================
 # Connection context
 # =====================================================================
+
 
 class ConnectionContext:
     """Holds per-connection state shared across all commands on that connection."""
@@ -375,9 +371,7 @@ class ConnectionContext:
         key = self._session_key(lsid)
         existing = self._txn_sessions.get(key)
         if existing and existing.state == TransactionState.ACTIVE:
-            raise TransactionError(
-                "Transaction already in progress on this session"
-            )
+            raise TransactionError("Transaction already in progress on this session")
         storage_txn = _StorageTxnSession(self.local_client.conn)
         storage_txn.activate()
         txn = SessionTransaction(next(self._txn_number_gen), storage_txn)

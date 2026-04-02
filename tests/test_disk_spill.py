@@ -2,24 +2,20 @@
 
 from __future__ import annotations
 
-import glob
 import os
 import random
-import tempfile
 
 import pytest
 
 from smongo.aggregation.constants import (
-    DEFAULT_MEMORY_LIMIT_BYTES,
     DiskSpillGrouper,
     DiskSpillSorter,
     MemoryLimitExceeded,
     _estimate_docs_bytes,
-    _write_chunk_to_file,
     _iter_jsonl_file,
+    _write_chunk_to_file,
 )
 from smongo.aggregation.cursor import Cursor
-
 
 # ── DiskSpillSorter ──────────────────────────────────────────────────
 

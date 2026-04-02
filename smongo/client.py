@@ -8,7 +8,7 @@ MongoClient("local://./path")  -> embedded WiredTiger engine
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 try:
     from pymongo import MongoClient as _PyMongoClient
@@ -36,37 +36,49 @@ log = logging.getLogger("smongo.client")
 # Bulk-write operation descriptors (lightweight PyMongo work-alikes)
 # ------------------------------------------------------------------
 
+
 class InsertOne:
     """Represents an insert_one operation for bulk_write."""
+
     def __init__(self, document: Document) -> None:
         self.document = document
 
+
 class UpdateOne:
     """Represents an update_one operation for bulk_write."""
+
     def __init__(self, filter: Filter, update: UpdateSpec, upsert: bool = False) -> None:
         self.filter = filter
         self.update = update
         self.upsert = upsert
+
 
 class UpdateMany:
     """Represents an update_many operation for bulk_write."""
+
     def __init__(self, filter: Filter, update: UpdateSpec, upsert: bool = False) -> None:
         self.filter = filter
         self.update = update
         self.upsert = upsert
 
+
 class DeleteOne:
     """Represents a delete_one operation for bulk_write."""
+
     def __init__(self, filter: Filter) -> None:
         self.filter = filter
+
 
 class DeleteMany:
     """Represents a delete_many operation for bulk_write."""
+
     def __init__(self, filter: Filter) -> None:
         self.filter = filter
 
+
 class ReplaceOne:
     """Represents a replace_one operation for bulk_write."""
+
     def __init__(self, filter: Filter, replacement: Document, upsert: bool = False) -> None:
         self.filter = filter
         self.replacement = replacement
@@ -75,6 +87,7 @@ class ReplaceOne:
 
 class BulkWriteResult:
     """Result of a bulk_write operation (PyMongo-compatible structure)."""
+
     def __init__(self) -> None:
         self.inserted_count = 0
         self.matched_count = 0
@@ -88,6 +101,7 @@ class BulkWriteResult:
 # ------------------------------------------------------------------
 # Client
 # ------------------------------------------------------------------
+
 
 class MongoClient:
     """
@@ -223,7 +237,10 @@ class Database:
 
 class OperationFailure(Exception):
     """Raised when a database operation fails (PyMongo-compatible)."""
-    def __init__(self, message: str, code: int | None = None, details: dict[str, Any] | None = None) -> None:
+
+    def __init__(
+        self, message: str, code: int | None = None, details: dict[str, Any] | None = None
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.details = details
@@ -330,13 +347,17 @@ class Collection:
             return self.backend.insert_many(docs)
         return self.backend.insert_many(docs)
 
-    def update_one(self, query: Filter, update: UpdateSpec, upsert: bool = False) -> UpdateResult | Any:
+    def update_one(
+        self, query: Filter, update: UpdateSpec, upsert: bool = False
+    ) -> UpdateResult | Any:
         """Update the first document matching *query* using *update* operators."""
         if self.mode == "remote":
             return self.backend.update_one(query, update, upsert=upsert)
         return self.backend.update(query, update, multi=False, upsert=upsert)
 
-    def update_many(self, query: Filter, update: UpdateSpec, upsert: bool = False) -> UpdateResult | Any:
+    def update_many(
+        self, query: Filter, update: UpdateSpec, upsert: bool = False
+    ) -> UpdateResult | Any:
         """Update all documents matching *query* using *update* operators."""
         if self.mode == "remote":
             return self.backend.update_many(query, update, upsert=upsert)
@@ -356,7 +377,9 @@ class Collection:
 
     # -- find_one_and_* ------------------------------------------------
 
-    def replace_one(self, query: Filter, replacement: Document, upsert: bool = False) -> UpdateResult | Any:
+    def replace_one(
+        self, query: Filter, replacement: Document, upsert: bool = False
+    ) -> UpdateResult | Any:
         """Replace a single document matching *query* with *replacement*."""
         if self.mode == "remote":
             return self.backend.replace_one(query, replacement, upsert=upsert)
@@ -367,23 +390,32 @@ class Collection:
             return UpdateResult(0, 0, upserted_id=replacement.get("_id"))
         return UpdateResult(0, 0)
 
-    def find_one_and_update(self, query: Filter, update: UpdateSpec, *, return_document: str = "before") -> Document | None:
+    def find_one_and_update(
+        self, query: Filter, update: UpdateSpec, *, return_document: str = "before"
+    ) -> Document | None:
         """Atomically find a document and apply *update*, returning the pre- or post-image."""
         if self.mode == "remote":
             return self.backend.find_one_and_update(query, update, return_document=return_document)  # type: ignore[no-any-return]
         return self.backend.find_one_and_update(query, update, return_document=return_document)  # type: ignore[no-any-return]
 
-    def find_one_and_replace(self, query: Filter, replacement: Document, *, upsert: bool = False, return_document: str = "before") -> Document | None:
+    def find_one_and_replace(
+        self,
+        query: Filter,
+        replacement: Document,
+        *,
+        upsert: bool = False,
+        return_document: str = "before",
+    ) -> Document | None:
         """Atomically find a document and replace it, returning the pre- or post-image."""
-        if self.mode == "remote":
-            return self.backend.find_one_and_replace(query, replacement, upsert=upsert, return_document=return_document)  # type: ignore[no-any-return]
-        return self.backend.find_one_and_replace(query, replacement, upsert=upsert, return_document=return_document)  # type: ignore[no-any-return]
+        result = self.backend.find_one_and_replace(
+            query, replacement, upsert=upsert, return_document=return_document
+        )
+        return cast(Document | None, result)
 
     def find_one_and_delete(self, query: Filter) -> Document | None:
         """Atomically find a document and delete it, returning the deleted document."""
-        if self.mode == "remote":
-            return self.backend.find_one_and_delete(query)  # type: ignore[no-any-return]
-        return self.backend.find_one_and_delete(query)  # type: ignore[no-any-return]
+        result = self.backend.find_one_and_delete(query)
+        return cast(Document | None, result)
 
     # -- bulk_write ----------------------------------------------------
 
@@ -419,23 +451,33 @@ class Collection:
                     r = self.backend.delete(op.filter, multi=True)
                     result.deleted_count += r.deleted_count
                 elif isinstance(op, ReplaceOne):
-                    r = self.backend.find_one_and_replace(op.filter, op.replacement, upsert=op.upsert)
+                    r = self.backend.find_one_and_replace(
+                        op.filter, op.replacement, upsert=op.upsert
+                    )
                     if r is not None:
                         result.matched_count += 1
                         result.modified_count += 1
                     elif op.upsert:
                         result.upserted_count += 1
             except (
-                DuplicateKeyError, ValidationError, _WTError,
-                KeyError, TypeError, ValueError, RuntimeError, OSError,
+                DuplicateKeyError,
+                ValidationError,
+                _WTError,
+                KeyError,
+                TypeError,
+                ValueError,
+                RuntimeError,
+                OSError,
             ) as exc:
                 if ordered:
                     raise
-                result.write_errors.append({
-                    "index": idx,
-                    "op": type(op).__name__,
-                    "errmsg": str(exc),
-                })
+                result.write_errors.append(
+                    {
+                        "index": idx,
+                        "op": type(op).__name__,
+                        "errmsg": str(exc),
+                    }
+                )
                 log.debug("bulk_write op %d (%s) failed: %s", idx, type(op).__name__, exc)
         return result
 

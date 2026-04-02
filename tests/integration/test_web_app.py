@@ -78,7 +78,9 @@ def test_update_and_delete_endpoint(web_client):
 
 
 def test_index_crud_endpoints(web_client):
-    c = web_client.post("/api/indexes", json={"coll": "users", "keys": [["age", 1]], "unique": False})
+    c = web_client.post(
+        "/api/indexes", json={"coll": "users", "keys": [["age", 1]], "unique": False}
+    )
     assert c.status_code == 200
     name = c.get_json()["name"]
     lst = web_client.get("/api/indexes?coll=users")
@@ -97,7 +99,9 @@ def test_oplog_endpoint(web_client):
 def test_shell_insert_and_find(web_client):
     ins = web_client.post("/api/shell", json={"command": 'db.users.insertOne({"name":"Shell"})'})
     assert ins.status_code == 200
-    out = web_client.post("/api/shell", json={"command": 'db.users.find({"name":"Shell"})'}).get_json()
+    out = web_client.post(
+        "/api/shell", json={"command": 'db.users.find({"name":"Shell"})'}
+    ).get_json()
     assert len(out["result"]) >= 1
 
 
@@ -124,5 +128,7 @@ def test_schema_endpoint_validation(web_client):
     bad = web_client.post("/api/insert", json={"coll": "strict", "doc": {"age": 1}})
     assert bad.status_code == 400
     assert "error" in bad.get_json()
-    good = web_client.post("/api/insert", json={"coll": "strict", "doc": {"name": "Valid", "age": 1}})
+    good = web_client.post(
+        "/api/insert", json={"coll": "strict", "doc": {"name": "Valid", "age": 1}}
+    )
     assert good.status_code == 200

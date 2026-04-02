@@ -25,6 +25,7 @@ def ctx(local_client, cursor_registry):
     )
     yield c
     from smongo.storage.transaction import _txn_state
+
     _txn_state.session = None
 
 
@@ -54,11 +55,14 @@ class TestGetLastError:
 
     def test_tracks_update(self, ctx):
         dispatch(ctx, {"insert": "gle_u", "documents": [{"x": 1}], "$db": "test"})
-        dispatch(ctx, {
-            "update": "gle_u",
-            "updates": [{"q": {"x": 1}, "u": {"$set": {"x": 2}}}],
-            "$db": "test",
-        })
+        dispatch(
+            ctx,
+            {
+                "update": "gle_u",
+                "updates": [{"q": {"x": 1}, "u": {"$set": {"x": 2}}}],
+                "$db": "test",
+            },
+        )
         resp = dispatch(ctx, {"getLastError": 1, "$db": "test"})
         assert resp["ok"] == 1.0
         assert resp["n"] >= 1
@@ -66,11 +70,14 @@ class TestGetLastError:
 
     def test_tracks_delete(self, ctx):
         dispatch(ctx, {"insert": "gle_d", "documents": [{"x": 1}], "$db": "test"})
-        dispatch(ctx, {
-            "delete": "gle_d",
-            "deletes": [{"q": {"x": 1}, "limit": 1}],
-            "$db": "test",
-        })
+        dispatch(
+            ctx,
+            {
+                "delete": "gle_d",
+                "deletes": [{"q": {"x": 1}, "limit": 1}],
+                "$db": "test",
+            },
+        )
         resp = dispatch(ctx, {"getLastError": 1, "$db": "test"})
         assert resp["ok"] == 1.0
         assert resp["n"] >= 1
@@ -95,10 +102,15 @@ class TestTransactions:
         resp = dispatch(ctx, {"startTransaction": 1, "$db": "test", "lsid": lsid})
         assert resp["ok"] == 1.0
 
-        dispatch(ctx, {
-            "insert": "txn_coll", "documents": [{"k": "v"}],
-            "$db": "test", "lsid": lsid,
-        })
+        dispatch(
+            ctx,
+            {
+                "insert": "txn_coll",
+                "documents": [{"k": "v"}],
+                "$db": "test",
+                "lsid": lsid,
+            },
+        )
 
         resp = dispatch(ctx, {"commitTransaction": 1, "$db": "test", "lsid": lsid})
         assert resp["ok"] == 1.0
@@ -107,10 +119,15 @@ class TestTransactions:
         lsid = _make_lsid()
         dispatch(ctx, {"startTransaction": 1, "$db": "test", "lsid": lsid})
 
-        dispatch(ctx, {
-            "insert": "txn_abort", "documents": [{"rollme": True}],
-            "$db": "test", "lsid": lsid,
-        })
+        dispatch(
+            ctx,
+            {
+                "insert": "txn_abort",
+                "documents": [{"rollme": True}],
+                "$db": "test",
+                "lsid": lsid,
+            },
+        )
 
         coll = ctx.get_collection("test", "txn_abort")
         assert len(coll.find({"rollme": True})) == 1
@@ -125,11 +142,15 @@ class TestTransactions:
 
         lsid = _make_lsid()
         dispatch(ctx, {"startTransaction": 1, "$db": "test", "lsid": lsid})
-        dispatch(ctx, {
-            "delete": "txn_del",
-            "deletes": [{"q": {"keep": True}, "limit": 1}],
-            "$db": "test", "lsid": lsid,
-        })
+        dispatch(
+            ctx,
+            {
+                "delete": "txn_del",
+                "deletes": [{"q": {"keep": True}, "limit": 1}],
+                "$db": "test",
+                "lsid": lsid,
+            },
+        )
         assert len(coll.find({"keep": True})) == 0
 
         dispatch(ctx, {"abortTransaction": 1, "$db": "test", "lsid": lsid})
@@ -141,11 +162,15 @@ class TestTransactions:
 
         lsid = _make_lsid()
         dispatch(ctx, {"startTransaction": 1, "$db": "test", "lsid": lsid})
-        dispatch(ctx, {
-            "update": "txn_upd",
-            "updates": [{"q": {"val": 1}, "u": {"$set": {"val": 999}}}],
-            "$db": "test", "lsid": lsid,
-        })
+        dispatch(
+            ctx,
+            {
+                "update": "txn_upd",
+                "updates": [{"q": {"val": 1}, "u": {"$set": {"val": 999}}}],
+                "$db": "test",
+                "lsid": lsid,
+            },
+        )
         assert coll.find({"val": 999})
 
         dispatch(ctx, {"abortTransaction": 1, "$db": "test", "lsid": lsid})
@@ -220,9 +245,14 @@ class TestRolesInfo:
         assert resp["roles"] == []
 
     def test_show_builtin_roles(self, ctx):
-        resp = dispatch(ctx, {
-            "rolesInfo": 1, "showBuiltinRoles": True, "$db": "admin",
-        })
+        resp = dispatch(
+            ctx,
+            {
+                "rolesInfo": 1,
+                "showBuiltinRoles": True,
+                "$db": "admin",
+            },
+        )
         assert resp["ok"] == 1.0
         assert len(resp["roles"]) > 0
         assert any(r["role"] == "root" for r in resp["roles"])
@@ -248,41 +278,48 @@ class TestSaslStartMessage:
 
 class TestBulkWrite:
     def test_insert_via_bulk(self, ctx):
-        resp = dispatch(ctx, {
-            "bulkWrite": 1,
-            "$db": "testdb",
-            "ops": [
-                {"insert": 0, "document": {"name": "alpha"}},
-                {"insert": 0, "document": {"name": "beta"}},
-            ],
-            "nsInfo": [{"ns": "testdb.things"}],
-        })
+        resp = dispatch(
+            ctx,
+            {
+                "bulkWrite": 1,
+                "$db": "testdb",
+                "ops": [
+                    {"insert": 0, "document": {"name": "alpha"}},
+                    {"insert": 0, "document": {"name": "beta"}},
+                ],
+                "nsInfo": [{"ns": "testdb.things"}],
+            },
+        )
         assert resp["ok"] == 1.0
         assert resp["nInserted"] == 2
 
     def test_delete_via_bulk(self, ctx):
-        dispatch(ctx, {
-            "insert": "bw_del", "documents": [{"name": "x"}, {"name": "y"}], "$db": "testdb"
-        })
-        resp = dispatch(ctx, {
-            "bulkWrite": 1,
-            "$db": "testdb",
-            "ops": [{"delete": 0, "filter": {}}],
-            "nsInfo": [{"ns": "testdb.bw_del"}],
-        })
+        dispatch(
+            ctx, {"insert": "bw_del", "documents": [{"name": "x"}, {"name": "y"}], "$db": "testdb"}
+        )
+        resp = dispatch(
+            ctx,
+            {
+                "bulkWrite": 1,
+                "$db": "testdb",
+                "ops": [{"delete": 0, "filter": {}}],
+                "nsInfo": [{"ns": "testdb.bw_del"}],
+            },
+        )
         assert resp["ok"] == 1.0
         assert resp["nDeleted"] >= 1
 
     def test_update_via_bulk(self, ctx):
-        dispatch(ctx, {
-            "insert": "bw_upd", "documents": [{"name": "x", "v": 1}], "$db": "testdb"
-        })
-        resp = dispatch(ctx, {
-            "bulkWrite": 1,
-            "$db": "testdb",
-            "ops": [{"update": 0, "filter": {"name": "x"}, "updateMods": {"$set": {"v": 2}}}],
-            "nsInfo": [{"ns": "testdb.bw_upd"}],
-        })
+        dispatch(ctx, {"insert": "bw_upd", "documents": [{"name": "x", "v": 1}], "$db": "testdb"})
+        resp = dispatch(
+            ctx,
+            {
+                "bulkWrite": 1,
+                "$db": "testdb",
+                "ops": [{"update": 0, "filter": {"name": "x"}, "updateMods": {"$set": {"v": 2}}}],
+                "nsInfo": [{"ns": "testdb.bw_upd"}],
+            },
+        )
         assert resp["ok"] == 1.0
         assert resp["nModified"] >= 1
 
@@ -290,12 +327,15 @@ class TestBulkWrite:
         coll = ctx.get_collection("testdb", "bw_err")
         coll.create_index("name", unique=True)
         coll.insert_one({"name": "dup"})
-        resp = dispatch(ctx, {
-            "bulkWrite": 1,
-            "$db": "testdb",
-            "ops": [{"insert": 0, "document": {"name": "dup"}}],
-            "nsInfo": [{"ns": "testdb.bw_err"}],
-        })
+        resp = dispatch(
+            ctx,
+            {
+                "bulkWrite": 1,
+                "$db": "testdb",
+                "ops": [{"insert": 0, "document": {"name": "dup"}}],
+                "nsInfo": [{"ns": "testdb.bw_err"}],
+            },
+        )
         assert resp["ok"] == 1.0
         assert "writeErrors" in resp
 
@@ -330,9 +370,14 @@ class TestParameterStore:
 
 class TestEstimatedDocumentCount:
     def test_count(self, ctx):
-        dispatch(ctx, {
-            "insert": "edc", "documents": [{"a": 1}, {"a": 2}, {"a": 3}], "$db": "test",
-        })
+        dispatch(
+            ctx,
+            {
+                "insert": "edc",
+                "documents": [{"a": 1}, {"a": 2}, {"a": 3}],
+                "$db": "test",
+            },
+        )
         resp = dispatch(ctx, {"estimatedDocumentCount": "edc", "$db": "test"})
         assert resp["ok"] == 1.0
         assert resp["n"] == 3

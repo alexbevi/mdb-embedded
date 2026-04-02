@@ -64,7 +64,9 @@ class Cursor:
     that only the required documents are pulled from the source.
     """
 
-    def __init__(self, docs: Iterable[Document], collection_getter: CollectionGetter | None = None) -> None:
+    def __init__(
+        self, docs: Iterable[Document], collection_getter: CollectionGetter | None = None
+    ) -> None:
         if isinstance(docs, list):
             self._materialized: list[Document] | None = docs
         else:
@@ -87,7 +89,11 @@ class Cursor:
 
     # ── Chainable modifiers ──────────────────────────────────────────
 
-    def sort(self, key_or_list: str | list[tuple[str, int]] | dict[str, int], direction: int | None = None) -> Cursor:
+    def sort(
+        self,
+        key_or_list: str | list[tuple[str, int]] | dict[str, int],
+        direction: int | None = None,
+    ) -> Cursor:
         if isinstance(key_or_list, str):
             self._sort_spec = [(key_or_list, direction or 1)]
         elif isinstance(key_or_list, list):
@@ -122,11 +128,13 @@ class Cursor:
         if self._sort_spec:
             docs = sort_stage(self._materialize(), dict(self._sort_spec))
             if self._skip_val is not None:
-                docs = docs[self._skip_val:]
+                docs = docs[self._skip_val :]
             if self._limit_val is not None:
-                docs = docs[:self._limit_val]
+                docs = docs[: self._limit_val]
         else:
-            it: Iterable[Document] = self._materialized if self._materialized is not None else self._docs
+            it: Iterable[Document] = (
+                self._materialized if self._materialized is not None else self._docs
+            )
             if self._skip_val is not None:
                 it = itertools.islice(it, self._skip_val, None)
             if self._limit_val is not None:
@@ -231,7 +239,9 @@ class Cursor:
                 docs = replace_root_stage(docs, spec)
             elif op == "$lookup":
                 if "pipeline" in spec and "localField" not in spec:
-                    docs = pipeline_lookup_stage(docs, spec, self._collection_getter, max_pipeline_docs=max_pipeline_docs)
+                    docs = pipeline_lookup_stage(
+                        docs, spec, self._collection_getter, max_pipeline_docs=max_pipeline_docs
+                    )
                 else:
                     docs = lookup_stage(docs, spec, self._collection_getter)
             elif op == "$sample":
@@ -239,7 +249,9 @@ class Cursor:
             elif op == "$vectorSearch":
                 docs = vector_search_stage(docs, spec)
             elif op == "$facet":
-                docs = facet_stage(docs, spec, self._collection_getter, max_pipeline_docs=max_pipeline_docs)
+                docs = facet_stage(
+                    docs, spec, self._collection_getter, max_pipeline_docs=max_pipeline_docs
+                )
             elif op == "$out":
                 docs = out_stage(docs, spec, self._collection_getter)
             elif op == "$merge":
@@ -251,7 +263,9 @@ class Cursor:
             elif op == "$graphLookup":
                 docs = graph_lookup_stage(docs, spec, self._collection_getter)
             elif op == "$unionWith":
-                docs = union_with_stage(docs, spec, self._collection_getter, max_pipeline_docs=max_pipeline_docs)
+                docs = union_with_stage(
+                    docs, spec, self._collection_getter, max_pipeline_docs=max_pipeline_docs
+                )
             elif op == "$unset":
                 docs = unset_stage(docs, spec)
             elif op == "$redact":

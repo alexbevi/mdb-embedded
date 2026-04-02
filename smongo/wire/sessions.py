@@ -1,4 +1,5 @@
 """Logical session registry for the wire protocol."""
+
 from __future__ import annotations
 
 import threading
@@ -9,6 +10,7 @@ from typing import Any
 
 class SessionEntry:
     """Tracks a single logical session."""
+
     __slots__ = ("created_at", "last_use", "session_id")
 
     def __init__(self, session_id: Any) -> None:
@@ -65,9 +67,7 @@ class SessionRegistry:
         key = str(sid)
         with self._lock:
             if len(self._sessions) >= self._max_sessions:
-                raise TooManySessions(
-                    f"session limit {self._max_sessions} reached"
-                )
+                raise TooManySessions(f"session limit {self._max_sessions} reached")
             self._sessions[key] = SessionEntry(sid)
         return sid
 
@@ -117,8 +117,7 @@ class SessionRegistry:
         now = time.monotonic()
         with self._lock:
             expired = [
-                key for key, entry in self._sessions.items()
-                if now - entry.last_use > self._timeout
+                key for key, entry in self._sessions.items() if now - entry.last_use > self._timeout
             ]
             for key in expired:
                 del self._sessions[key]

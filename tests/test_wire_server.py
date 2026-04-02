@@ -143,9 +143,7 @@ class TestPymongoFindAdvanced:
 class TestPymongoFindAndModify:
     def test_find_one_and_update(self, coll):
         coll.insert_one({"name": "test", "v": 1})
-        doc = coll.find_one_and_update(
-            {"name": "test"}, {"$set": {"v": 42}}, return_document=True
-        )
+        doc = coll.find_one_and_update({"name": "test"}, {"$set": {"v": 42}}, return_document=True)
         assert doc["v"] == 42
 
     def test_find_one_and_replace(self, coll):
@@ -165,15 +163,21 @@ class TestPymongoFindAndModify:
 
 class TestPymongoAggregation:
     def test_aggregate_pipeline(self, coll):
-        coll.insert_many([
-            {"dept": "eng", "sal": 100},
-            {"dept": "eng", "sal": 200},
-            {"dept": "hr", "sal": 150},
-        ])
-        result = list(coll.aggregate([
-            {"$match": {"dept": "eng"}},
-            {"$group": {"_id": "$dept", "total": {"$sum": "$sal"}}},
-        ]))
+        coll.insert_many(
+            [
+                {"dept": "eng", "sal": 100},
+                {"dept": "eng", "sal": 200},
+                {"dept": "hr", "sal": 150},
+            ]
+        )
+        result = list(
+            coll.aggregate(
+                [
+                    {"$match": {"dept": "eng"}},
+                    {"$group": {"_id": "$dept", "total": {"$sum": "$sal"}}},
+                ]
+            )
+        )
         assert len(result) == 1
         assert result[0]["total"] == 300
 
@@ -247,8 +251,7 @@ class TestPymongoConcurrent:
                 count = coll.count_documents({})
                 results.append(count)
                 c.close()
-            except (ConnectionFailure, OperationFailure,
-                    ServerSelectionTimeoutError, OSError) as e:
+            except (ConnectionFailure, OperationFailure, ServerSelectionTimeoutError, OSError) as e:
                 errors.append(e)
 
         threads = [threading.Thread(target=worker, args=(i,)) for i in range(5)]

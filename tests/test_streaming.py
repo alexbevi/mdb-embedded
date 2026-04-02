@@ -100,9 +100,7 @@ class TestStreamingCursorPlanTypes:
         assert len(results) >= 2
 
     def test_or_union_indexed_branches(self, indexed_coll: LocalCollection) -> None:
-        results = list(indexed_coll.find_streaming({
-            "$or": [{"city": "NYC"}, {"city": "SF"}]
-        }))
+        results = list(indexed_coll.find_streaming({"$or": [{"city": "NYC"}, {"city": "SF"}]}))
         assert all(d["city"] in ("NYC", "SF") for d in results)
 
     def test_or_union_pk_branches(self, coll: LocalCollection) -> None:
@@ -250,6 +248,7 @@ class TestCursorIterable:
         def gen():
             for i in range(5):
                 yield {"_id": str(i), "x": i}
+
         c = Cursor(gen())
         result = c.to_list()
         assert len(result) == 5
@@ -265,6 +264,7 @@ class TestCursorIterable:
         def gen():
             for i in [3, 1, 2]:
                 yield {"_id": str(i), "x": i}
+
         c = Cursor(gen()).sort("x", 1)
         result = c.to_list()
         assert [d["x"] for d in result] == [1, 2, 3]
@@ -287,6 +287,7 @@ class TestCursorIterable:
         def gen():
             for i in range(10):
                 yield {"_id": str(i), "x": i}
+
         c = Cursor(gen()).skip(7)
         result = c.to_list()
         assert len(result) == 3
@@ -319,6 +320,7 @@ class TestCursorIterable:
         def gen():
             for i in range(7):
                 yield {"_id": str(i), "x": i}
+
         c = Cursor(gen())
         assert len(c) == 7
 
@@ -326,6 +328,7 @@ class TestCursorIterable:
         def gen():
             for i in range(5):
                 yield {"_id": str(i), "x": i}
+
         c = Cursor(gen())
         assert c[2]["x"] == 2
 
@@ -411,10 +414,12 @@ class TestClientStreaming:
         assert client_coll.count_documents({"city": "ATLANTIS"}) == 0
 
     def test_aggregate_from_streaming(self, client_coll: Collection) -> None:
-        results = client_coll.aggregate([
-            {"$group": {"_id": "$city", "count": {"$sum": 1}}},
-            {"$sort": {"count": -1}},
-        ])
+        results = client_coll.aggregate(
+            [
+                {"$group": {"_id": "$city", "count": {"$sum": 1}}},
+                {"$sort": {"count": -1}},
+            ]
+        )
         assert len(results) > 0
         assert all("_id" in r and "count" in r for r in results)
 

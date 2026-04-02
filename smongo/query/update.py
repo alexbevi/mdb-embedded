@@ -67,8 +67,17 @@ def apply_update(
                             arr.sort(reverse=(sort_spec == -1))
                         elif isinstance(sort_spec, dict):
                             for sf, sd in reversed(list(sort_spec.items())):
+
+                                def _sort_item_key(item: Any, field_name: str = sf) -> Any:
+                                    value = (
+                                        get_value(item, field_name)
+                                        if isinstance(item, dict)
+                                        else item
+                                    )
+                                    return value or 0
+
                                 arr.sort(
-                                    key=lambda d, f=sf: (get_value(d, f) if isinstance(d, dict) else d) or 0,
+                                    key=_sort_item_key,
                                     reverse=(sd == -1),
                                 )
                     if "$slice" in v:
@@ -104,7 +113,9 @@ def apply_update(
                     continue
                 if isinstance(v, dict):
                     fn = compile_query(v)
-                    arr = [item for item in arr if not (fn(item) if isinstance(item, dict) else False)]
+                    arr = [
+                        item for item in arr if not (fn(item) if isinstance(item, dict) else False)
+                    ]
                 else:
                     arr = [item for item in arr if item != v]
                 set_value(doc, k, arr)
@@ -192,7 +203,7 @@ def _find_positional_index(doc: Document, array_path: str, query: Filter | None)
         return None
     for qk, qv in query.items():
         if qk.startswith(array_path + "."):
-            sub_field = qk[len(array_path) + 1:]
+            sub_field = qk[len(array_path) + 1 :]
             for i, elem in enumerate(arr):
                 if isinstance(elem, dict) and get_value(elem, sub_field) == qv:
                     return i
@@ -210,8 +221,11 @@ def _find_positional_index(doc: Document, array_path: str, query: Filter | None)
 
 
 def _set_with_positional(
-    doc: Document, path: str, value: Any,
-    query: Filter | None, filter_map: dict[str, dict[str, Any]],
+    doc: Document,
+    path: str,
+    value: Any,
+    query: Filter | None,
+    filter_map: dict[str, dict[str, Any]],
 ) -> None:
     """Handle ``$``, ``$[]``, ``$[<identifier>]`` in field paths."""
     if ".$." in path or path.endswith(".$"):
@@ -235,11 +249,11 @@ def _set_with_positional(
                 set_value(doc, actual_path, value)
         return
 
-    m = _re.search(r'\.\$\[(\w+)\]', path)
+    m = _re.search(r"\.\$\[(\w+)\]", path)
     if m:
         ident = m.group(1)
-        array_path = path[:m.start()]
-        remainder = path[m.end():].lstrip(".")
+        array_path = path[: m.start()]
+        remainder = path[m.end() :].lstrip(".")
         arr = get_value(doc, array_path)
         af = filter_map.get(ident, {})
         if isinstance(arr, list) and af:
@@ -254,8 +268,10 @@ def _set_with_positional(
 
 
 def _get_positional(
-    doc: Document, path: str,
-    query: Filter | None, filter_map: dict[str, dict[str, Any]],
+    doc: Document,
+    path: str,
+    query: Filter | None,
+    filter_map: dict[str, dict[str, Any]],
 ) -> Any:
     """Read the value at a potentially positional path."""
     if ".$." in path or path.endswith(".$"):

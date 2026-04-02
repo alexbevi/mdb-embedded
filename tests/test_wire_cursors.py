@@ -76,15 +76,15 @@ class TestCursorRegistryGetMore:
 
     def test_custom_batch_size_on_get_more(self, registry):
         docs = [{"x": i} for i in range(10)]
-        cursor_id, _ = registry.create("test.coll", docs, batch_size=2)
-        _, batch = registry.get_more(cursor_id, batch_size=5)
+        cursor_id, _first_batch = registry.create("test.coll", docs, batch_size=2)
+        _next_cursor_id, batch = registry.get_more(cursor_id, batch_size=5)
         assert len(batch) == 5
 
 
 class TestCursorRegistryKill:
     def test_kill_existing_cursor(self, registry):
         docs = [{"x": i} for i in range(10)]
-        cursor_id, _ = registry.create("test.coll", docs)
+        cursor_id, _first_batch = registry.create("test.coll", docs)
         killed = registry.kill([cursor_id])
         assert cursor_id in killed
 
@@ -97,8 +97,8 @@ class TestCursorRegistryKill:
 
     def test_kill_multiple(self, registry):
         docs = [{"x": i} for i in range(10)]
-        c1, _ = registry.create("test.a", docs)
-        c2, _ = registry.create("test.b", docs)
+        c1, _first_batch_a = registry.create("test.a", docs)
+        c2, _first_batch_b = registry.create("test.b", docs)
         killed = registry.kill([c1, c2, 99999])
         assert c1 in killed
         assert c2 in killed
@@ -109,9 +109,9 @@ class TestCursorRegistryEviction:
     def test_evict_when_at_capacity(self):
         reg = CursorRegistry(default_batch_size=2, max_cursors=2)
         docs = [{"x": i} for i in range(10)]
-        c1, _ = reg.create("a", docs)
-        c2, _ = reg.create("b", docs)
-        c3, _ = reg.create("c", docs)
+        c1, _first_batch_a = reg.create("a", docs)
+        c2, _first_batch_b = reg.create("b", docs)
+        c3, _first_batch_c = reg.create("c", docs)
         assert c3 != 0
         # c1 (oldest) should have been evicted
         nid, batch = reg.get_more(c1)
@@ -120,7 +120,7 @@ class TestCursorRegistryEviction:
     def test_idle_expiration(self):
         reg = CursorRegistry(default_batch_size=2, idle_timeout_sec=0)
         docs = [{"x": i} for i in range(10)]
-        cid, _ = reg.create("a", docs)
+        cid, _first_batch = reg.create("a", docs)
 
         time.sleep(0.05)
         reg._expire_idle()

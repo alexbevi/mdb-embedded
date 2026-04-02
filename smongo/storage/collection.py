@@ -4,7 +4,7 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from .._compat import WTError as _WTError
 from .._types import Document, Filter, UpdateSpec
@@ -54,7 +54,9 @@ class TTLReaper:
         if not self._has_ttl_indexes():
             return
         self._stop.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True, name=f"ttl:{self._collection.namespace}")
+        self._thread = threading.Thread(
+            target=self._run, daemon=True, name=f"ttl:{self._collection.namespace}"
+        )
         self._thread.start()
 
     def stop(self) -> None:
@@ -79,7 +81,7 @@ class TTLReaper:
     def _coerce_ts(self, value: Any) -> float | None:
         if value is None:
             return None
-        if isinstance(value, (int, float)):
+        if isinstance(value, int | float):
             return float(value)
         if isinstance(value, str):
             try:
@@ -92,7 +94,11 @@ class TTLReaper:
         return None
 
     def _reap_once(self) -> None:
-        ttl_indexes = [idx for idx in self._collection.list_indexes() if idx.get("expireAfterSeconds") is not None]
+        ttl_indexes = [
+            idx
+            for idx in self._collection.list_indexes()
+            if idx.get("expireAfterSeconds") is not None
+        ]
         if not ttl_indexes:
             return
 
@@ -129,7 +135,11 @@ class TTLReaper:
                 self._collection.delete({"_id": {"$in": batch}}, multi=True)
 
     def _reap_via_index(
-        self, idx_def: Any, field: str, expire_after: float, now: float,
+        self,
+        idx_def: Any,
+        field: str,
+        expire_after: float,
+        now: float,
     ) -> list[Any]:
         """Walk the TTL index in key order up to the cutoff timestamp."""
         from ..index import _sortable_encode
@@ -138,6 +148,7 @@ class TTLReaper:
         cutoff_encoded = _sortable_encode(cutoff)
         if idx_def.directions[0] == -1:
             from ..index import _invert_encoded
+
             cutoff_encoded = _invert_encoded(cutoff_encoded)
 
         expired_ids: list[Any] = []
@@ -178,7 +189,6 @@ class TTLReaper:
             if ts is not None and ts + expire_after < now:
                 to_delete.append(doc_id)
         return to_delete
-
 
 
 class LocalCollection:
@@ -250,8 +260,14 @@ class LocalCollection:
             self.session.commit_transaction()
             return result
         except (
-            _WTError, KeyError, TypeError, ValueError, AttributeError,
-            RuntimeError, OSError, IndexError,
+            _WTError,
+            KeyError,
+            TypeError,
+            ValueError,
+            AttributeError,
+            RuntimeError,
+            OSError,
+            IndexError,
         ):
             try:
                 self.session.rollback_transaction()
@@ -395,7 +411,7 @@ class LocalCollection:
         seen_ids: set[str] = set()
         candidate_ids: list[str] = []
 
-        for sub in (plan.subplans or []):
+        for sub in plan.subplans or []:
             if sub.plan_type == "pk_lookup":
                 for branch in query.get("$or", []):
                     if "_id" in branch and not isinstance(branch["_id"], dict):
@@ -434,7 +450,7 @@ class LocalCollection:
         WiredTiger instead of materializing every match.
         """
         for doc in self.find_streaming(query):
-            return doc  # type: ignore[return-value]
+            return cast(Document, doc)
         return None
 
     def count(self, query: Filter) -> int:
@@ -478,8 +494,10 @@ class LocalCollection:
                     }
 
                 residual = [
-                    k for k in (query or {})
-                    if not k.startswith("$") and k != "_id"
+                    k
+                    for k in (query or {})
+                    if not k.startswith("$")
+                    and k != "_id"
                     and (not plan.index_def or k not in {f for f, _ in plan.index_def.keys})
                 ]
                 if residual:
@@ -494,6 +512,7 @@ class LocalCollection:
     def watch(self, pipeline: list[dict[str, Any]] | None = None) -> ChangeStream:
         """Return a ChangeStream that tails local mutations."""
         from ..oplog import ChangeStream
+
         return ChangeStream(namespace=self.namespace, pipeline=pipeline, hub=self._oplog_hub)
 
     # -- writes --------------------------------------------------------
@@ -507,7 +526,20 @@ class LocalCollection:
         for op, fields in (update_spec or {}).items():
             if not isinstance(fields, dict):
                 continue
-            if op in ("$set", "$unset", "$inc", "$mul", "$min", "$max", "$rename", "$currentDate", "$addToSet", "$push", "$pull", "$pop"):
+            if op in (
+                "$set",
+                "$unset",
+                "$inc",
+                "$mul",
+                "$min",
+                "$max",
+                "$rename",
+                "$currentDate",
+                "$addToSet",
+                "$push",
+                "$pull",
+                "$pop",
+            ):
                 changed.update(fields.keys())
         return sorted(changed)
 
@@ -526,7 +558,9 @@ class LocalCollection:
             cursor.close()
             version = self._bump_version(doc["_id"])
             if not _internal:
-                self._oplog_w.log("insert", doc["_id"], doc, version=version, changed_fields=sorted(doc.keys()))
+                self._oplog_w.log(
+                    "insert", doc["_id"], doc, version=version, changed_fields=sorted(doc.keys())
+                )
 
         self._rwlock.acquire_write()
         try:
@@ -554,7 +588,13 @@ class LocalCollection:
                 cursor[str(doc["_id"])] = _to_bson(doc)
                 version = self._bump_version(doc["_id"])
                 if not _internal:
-                    self._oplog_w.log("insert", doc["_id"], doc, version=version, changed_fields=sorted(doc.keys()))
+                    self._oplog_w.log(
+                        "insert",
+                        doc["_id"],
+                        doc,
+                        version=version,
+                        changed_fields=sorted(doc.keys()),
+                    )
             cursor.close()
 
         self._rwlock.acquire_write()
@@ -591,7 +631,14 @@ class LocalCollection:
         """Update documents matching *query* using MQL *update_spec* operators."""
         self._rwlock.acquire_write()
         try:
-            return self._update_inner(query, update_spec, multi, upsert=upsert, array_filters=array_filters, _internal=_internal)
+            return self._update_inner(
+                query,
+                update_spec,
+                multi,
+                upsert=upsert,
+                array_filters=array_filters,
+                _internal=_internal,
+            )
         finally:
             self._rwlock.release_write()
 
@@ -618,12 +665,20 @@ class LocalCollection:
 
                     def _do_upsert() -> None:
                         self.index_mgr.add_doc(doc)
-                        cursor = self._active_session.open_cursor(self.table_uri, None, "overwrite=true")
+                        cursor = self._active_session.open_cursor(
+                            self.table_uri, None, "overwrite=true"
+                        )
                         cursor[str(doc["_id"])] = _to_bson(doc)
                         cursor.close()
                         version = self._bump_version(doc["_id"])
                         if not _internal:
-                            self._oplog_w.log("insert", doc["_id"], doc, version=version, changed_fields=sorted(doc.keys()))
+                            self._oplog_w.log(
+                                "insert",
+                                doc["_id"],
+                                doc,
+                                version=version,
+                                changed_fields=sorted(doc.keys()),
+                            )
 
                     self._with_transaction(_do_upsert)
                     return UpdateResult(0, 0, upserted_id=doc["_id"])
@@ -646,9 +701,15 @@ class LocalCollection:
                     version = self._bump_version(doc["_id"])
                     if not _internal:
                         self._oplog_w.log(
-                            "update", doc["_id"], update_spec if isinstance(update_spec, dict) else {"$pipeline": update_spec},
+                            "update",
+                            doc["_id"],
+                            update_spec
+                            if isinstance(update_spec, dict)
+                            else {"$pipeline": update_spec},
                             version=version,
-                            changed_fields=self._changed_fields_from_update(update_spec if isinstance(update_spec, dict) else {}),
+                            changed_fields=self._changed_fields_from_update(
+                                update_spec if isinstance(update_spec, dict) else {}
+                            ),
                         )
                     modified += 1
                 cursor.close()
@@ -665,7 +726,9 @@ class LocalCollection:
         finally:
             self._rwlock.release_write()
 
-    def _delete_inner(self, query: Filter, multi: bool = True, *, _internal: bool = False) -> DeleteResult:
+    def _delete_inner(
+        self, query: Filter, multi: bool = True, *, _internal: bool = False
+    ) -> DeleteResult:
         with self._lock:
             matching = self._find_matching_docs_locked(query)
             if not matching:
@@ -716,13 +779,17 @@ class LocalCollection:
                     apply_update(doc, update_spec)
                     self._validate(doc)
                     self.index_mgr.update_doc(before, doc)
-                    cursor = self._active_session.open_cursor(self.table_uri, None, "overwrite=true")
+                    cursor = self._active_session.open_cursor(
+                        self.table_uri, None, "overwrite=true"
+                    )
                     cursor[str(doc["_id"])] = _to_bson(doc)
                     cursor.close()
                     version = self._bump_version(doc["_id"])
                     if not _internal:
                         self._oplog_w.log(
-                            "update", doc["_id"], update_spec,
+                            "update",
+                            doc["_id"],
+                            update_spec,
                             version=version,
                             changed_fields=self._changed_fields_from_update(update_spec),
                         )
@@ -756,12 +823,20 @@ class LocalCollection:
 
                         def _do_upsert() -> None:
                             self.index_mgr.add_doc(replacement)
-                            cursor = self._active_session.open_cursor(self.table_uri, None, "overwrite=true")
+                            cursor = self._active_session.open_cursor(
+                                self.table_uri, None, "overwrite=true"
+                            )
                             cursor[str(replacement["_id"])] = _to_bson(replacement)
                             cursor.close()
                             version = self._bump_version(replacement["_id"])
                             if not _internal:
-                                self._oplog_w.log("insert", replacement["_id"], replacement, version=version, changed_fields=sorted(replacement.keys()))
+                                self._oplog_w.log(
+                                    "insert",
+                                    replacement["_id"],
+                                    replacement,
+                                    version=version,
+                                    changed_fields=sorted(replacement.keys()),
+                                )
 
                         self._with_transaction(_do_upsert)
                         return replacement if return_document == "after" else None
@@ -774,12 +849,16 @@ class LocalCollection:
                 def _do() -> None:
                     self._validate(replacement)
                     self.index_mgr.update_doc(before, replacement)
-                    cursor = self._active_session.open_cursor(self.table_uri, None, "overwrite=true")
+                    cursor = self._active_session.open_cursor(
+                        self.table_uri, None, "overwrite=true"
+                    )
                     cursor[str(replacement["_id"])] = _to_bson(replacement)
                     cursor.close()
                     version = self._bump_version(replacement["_id"])
                     if not _internal:
-                        self._oplog_w.log("update", replacement["_id"], replacement, version=version)
+                        self._oplog_w.log(
+                            "update", replacement["_id"], replacement, version=version
+                        )
 
                 self._with_transaction(_do)
         finally:
@@ -799,7 +878,9 @@ class LocalCollection:
 
                 def _do() -> None:
                     self.index_mgr.remove_doc(doc)
-                    cursor = self._active_session.open_cursor(self.table_uri, None, "overwrite=true")
+                    cursor = self._active_session.open_cursor(
+                        self.table_uri, None, "overwrite=true"
+                    )
                     cursor.set_key(str(doc["_id"]))
                     cursor.remove()
                     cursor.close()
@@ -815,14 +896,18 @@ class LocalCollection:
 
     # -- index management ----------------------------------------------
 
-    def create_index(self, keys: str | list[tuple[str, int]], *, _internal: bool = False, **kwargs: Any) -> str:
+    def create_index(
+        self, keys: str | list[tuple[str, int | str]], *, _internal: bool = False, **kwargs: Any
+    ) -> str:
         """Create a B-tree index on *keys*, rebuild it, and return the index name."""
+
         def _do() -> str:
             name = self.index_mgr.create_index(keys, **kwargs)
             self.index_mgr.rebuild_index(name, self._get_all_unlocked())
             if not _internal:
                 self._oplog_w.log(
-                    "index_create", name,
+                    "index_create",
+                    name,
                     {"keys": keys if isinstance(keys, list) else [(keys, 1)], **kwargs},
                 )
             return name
@@ -834,6 +919,7 @@ class LocalCollection:
 
     def drop_index(self, name: str, *, _internal: bool = False) -> None:
         """Drop the index identified by *name* and log the operation."""
+
         def _do() -> None:
             self.index_mgr.drop_index(name)
             if not _internal:
@@ -940,7 +1026,9 @@ class LocalCollection:
                 if idx_def and idx_def.table_uri:
                     try:
                         sc = self.session.open_cursor(
-                            f"statistics:{idx_def.table_uri}", None, "statistics=(fast)",
+                            f"statistics:{idx_def.table_uri}",
+                            None,
+                            "statistics=(fast)",
                         )
                         while sc.next() == 0:
                             if "file_size_in_bytes" in sc[0].lower():

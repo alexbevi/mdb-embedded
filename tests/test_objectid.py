@@ -149,6 +149,7 @@ class TestObjectIdCounter:
 
     def test_thread_safety(self):
         results = []
+
         def gen_ids():
             results.extend([str(ObjectId()) for _ in range(200)])
 

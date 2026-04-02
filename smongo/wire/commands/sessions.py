@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from bson import Binary
 
-from ._registry import _register, log
 from .._types import CommandDoc, DocSequences, ResponseDoc
 from ..context import ConnectionContext
 from ..errors import make_error
+from ._registry import _register, log
 
 
 @_register("startSession")
@@ -22,7 +22,9 @@ def _cmd_end_sessions(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequence
 
 
 @_register("refreshSessions")
-def _cmd_refresh_sessions(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -> ResponseDoc:
+def _cmd_refresh_sessions(
+    ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences
+) -> ResponseDoc:
     session_ids = cmd.get("refreshSessions", [])
     ctx.session_registry.refresh(session_ids)
     return {"ok": 1.0}
@@ -36,7 +38,9 @@ def _cmd_kill_sessions(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequenc
 
 
 @_register("killAllSessions", help="Kill all sessions on the server")
-def _cmd_kill_all_sessions(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -> ResponseDoc:
+def _cmd_kill_all_sessions(
+    ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences
+) -> ResponseDoc:
     ctx.session_registry.expire_all()
     return {"ok": 1.0}
 

@@ -15,18 +15,17 @@ import tempfile
 
 from smongo import DuplicateKeyError, MongoClient
 
-
 EMPLOYEES = [
-    {"name": "Alice",   "age": 34, "city": "NYC", "dept": "engineering", "salary": 145000},
-    {"name": "Bob",     "age": 28, "city": "SF",  "dept": "engineering", "salary": 128000},
-    {"name": "Charlie", "age": 40, "city": "NYC", "dept": "management",  "salary": 175000},
-    {"name": "Diana",   "age": 25, "city": "LA",  "dept": "design",      "salary": 98000},
-    {"name": "Eve",     "age": 31, "city": "SF",  "dept": "engineering", "salary": 155000},
-    {"name": "Frank",   "age": 36, "city": "CHI", "dept": "engineering", "salary": 140000},
-    {"name": "Grace",   "age": 29, "city": "NYC", "dept": "data",        "salary": 135000},
-    {"name": "Hank",    "age": 45, "city": "SF",  "dept": "management",  "salary": 190000},
-    {"name": "Ivy",     "age": 27, "city": "LA",  "dept": "design",      "salary": 105000},
-    {"name": "Jack",    "age": 33, "city": "NYC", "dept": "engineering", "salary": 142000},
+    {"name": "Alice", "age": 34, "city": "NYC", "dept": "engineering", "salary": 145000},
+    {"name": "Bob", "age": 28, "city": "SF", "dept": "engineering", "salary": 128000},
+    {"name": "Charlie", "age": 40, "city": "NYC", "dept": "management", "salary": 175000},
+    {"name": "Diana", "age": 25, "city": "LA", "dept": "design", "salary": 98000},
+    {"name": "Eve", "age": 31, "city": "SF", "dept": "engineering", "salary": 155000},
+    {"name": "Frank", "age": 36, "city": "CHI", "dept": "engineering", "salary": 140000},
+    {"name": "Grace", "age": 29, "city": "NYC", "dept": "data", "salary": 135000},
+    {"name": "Hank", "age": 45, "city": "SF", "dept": "management", "salary": 190000},
+    {"name": "Ivy", "age": 27, "city": "LA", "dept": "design", "salary": 105000},
+    {"name": "Jack", "age": 33, "city": "NYC", "dept": "engineering", "salary": 142000},
 ]
 
 
@@ -49,7 +48,7 @@ def _run(emp) -> None:
     print("── explain BEFORE indexes ──")
     for query in [{"age": {"$gt": 35}}, {"city": "NYC"}, {"salary": {"$gte": 150000}}]:
         plan = emp.explain(query)
-        print(f"  {str(query):45s}  {plan['plan']}")
+        print(f"  {query!s:45s}  {plan['plan']}")
 
     # ── Create indexes ────────────────────────────────────────
     print()
@@ -86,7 +85,7 @@ def _run(emp) -> None:
     for query in queries:
         plan = emp.explain(query)
         tag = plan.get("index", plan["plan"].upper())
-        print(f"  {str(query):45s}  {plan['plan']:14s}  ({tag})")
+        print(f"  {query!s:45s}  {plan['plan']:14s}  ({tag})")
 
     # ── Indexed queries ───────────────────────────────────────
     print()
@@ -96,7 +95,13 @@ def _run(emp) -> None:
 
     print()
     print("── cursor chaining: skip(2).limit(3).sort(salary, -1) ──")
-    for doc in emp.find({}).sort("salary", -1).skip(2).limit(3).projection({"name": 1, "salary": 1, "_id": 0}):
+    for doc in (
+        emp.find({})
+        .sort("salary", -1)
+        .skip(2)
+        .limit(3)
+        .projection({"name": 1, "salary": 1, "_id": 0})
+    ):
         print(f"  {doc['name']:10s}  ${doc['salary']:,}")
 
     # ── Unique index constraint ───────────────────────────────

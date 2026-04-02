@@ -9,7 +9,7 @@ from ..query import compile_query, get_value
 try:
     import numpy as _np
 except ImportError:  # pragma: no cover - numpy is expected in normal runtime
-    _np = None  # type: ignore[assignment]
+    _np = None
 
 try:
     from usearch.index import Index as _USearchIndex

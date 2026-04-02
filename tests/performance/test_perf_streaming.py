@@ -97,6 +97,7 @@ def test_streaming_count_filtered(benchmark, indexed_local_coll):
 
 def test_streaming_limit_10(benchmark, populated_local_coll):
     """StreamingCursor + Cursor.limit(10) -- only 10 docs from WiredTiger."""
+
     def run():
         sc = populated_local_coll.find_streaming({})
         Cursor(sc).limit(10).to_list()
@@ -120,9 +121,7 @@ def test_streaming_in_scan(benchmark, indexed_local_coll):
     """$in multi-point index scan via find_streaming."""
     benchmark(
         lambda: list(
-            indexed_local_coll.find_streaming(
-                {"city": {"$in": ["city_1", "city_3", "city_7"]}}
-            )
+            indexed_local_coll.find_streaming({"city": {"$in": ["city_1", "city_3", "city_7"]}})
         )
     )
 

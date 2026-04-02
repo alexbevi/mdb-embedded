@@ -45,6 +45,7 @@ def _make_lsid() -> dict:
 class TestLogBuffer:
     def test_captures_log_lines(self):
         import logging
+
         buf = LogBuffer(max_lines=10)
         logger = logging.getLogger("test.logbuffer")
         logger.addHandler(buf)
@@ -57,6 +58,7 @@ class TestLogBuffer:
 
     def test_max_lines_cap(self):
         import logging
+
         buf = LogBuffer(max_lines=3)
         logger = logging.getLogger("test.logbuf_cap")
         logger.addHandler(buf)
@@ -135,6 +137,7 @@ class TestSystemHelpers:
 class TestGetLog:
     def test_returns_real_log_lines(self, ctx):
         import logging
+
         logger = logging.getLogger("smongo.wire.commands")
         logger.info("enterprise test log line")
         resp = dispatch(ctx, {"getLog": "global", "$db": "admin"})
@@ -238,9 +241,14 @@ class TestConnPoolStatsEnterprise:
 
 class TestListDatabasesEnterprise:
     def test_real_size_on_disk(self, ctx):
-        dispatch(ctx, {"insert": "sized_coll", "$db": "sizedb", "documents": [
-            {"x": i, "data": "A" * 200} for i in range(50)
-        ]})
+        dispatch(
+            ctx,
+            {
+                "insert": "sized_coll",
+                "$db": "sizedb",
+                "documents": [{"x": i, "data": "A" * 200} for i in range(50)],
+            },
+        )
         resp = dispatch(ctx, {"listDatabases": 1, "$db": "admin"})
         assert resp["ok"] == 1.0
         found = [d for d in resp["databases"] if d["name"] == "sizedb"]
@@ -264,11 +272,14 @@ class TestListCollectionsEnterprise:
     def test_filter(self, ctx):
         dispatch(ctx, {"create": "alpha", "$db": "filterdb"})
         dispatch(ctx, {"create": "beta", "$db": "filterdb"})
-        resp = dispatch(ctx, {
-            "listCollections": 1,
-            "filter": {"name": "alpha"},
-            "$db": "filterdb",
-        })
+        resp = dispatch(
+            ctx,
+            {
+                "listCollections": 1,
+                "filter": {"name": "alpha"},
+                "$db": "filterdb",
+            },
+        )
         assert resp["ok"] == 1.0
         names = [e["name"] for e in resp["cursor"]["firstBatch"]]
         assert "alpha" in names
@@ -276,11 +287,14 @@ class TestListCollectionsEnterprise:
 
     def test_name_only(self, ctx):
         dispatch(ctx, {"create": "coll1", "$db": "noinfodb"})
-        resp = dispatch(ctx, {
-            "listCollections": 1,
-            "nameOnly": True,
-            "$db": "noinfodb",
-        })
+        resp = dispatch(
+            ctx,
+            {
+                "listCollections": 1,
+                "nameOnly": True,
+                "$db": "noinfodb",
+            },
+        )
         for entry in resp["cursor"]["firstBatch"]:
             assert "name" in entry
             assert "info" not in entry
@@ -292,16 +306,25 @@ class TestListCollectionsEnterprise:
 class TestDropIndexesEnterprise:
     def test_drop_by_list(self, ctx):
         dispatch(ctx, {"create": "idxdrop", "$db": "idxdb"})
-        dispatch(ctx, {
-            "createIndexes": "idxdrop", "$db": "idxdb",
-            "indexes": [
-                {"key": {"a": 1}, "name": "a_1"},
-                {"key": {"b": 1}, "name": "b_1"},
-            ],
-        })
-        resp = dispatch(ctx, {
-            "dropIndexes": "idxdrop", "index": ["a_1"], "$db": "idxdb",
-        })
+        dispatch(
+            ctx,
+            {
+                "createIndexes": "idxdrop",
+                "$db": "idxdb",
+                "indexes": [
+                    {"key": {"a": 1}, "name": "a_1"},
+                    {"key": {"b": 1}, "name": "b_1"},
+                ],
+            },
+        )
+        resp = dispatch(
+            ctx,
+            {
+                "dropIndexes": "idxdrop",
+                "index": ["a_1"],
+                "$db": "idxdb",
+            },
+        )
         assert resp["ok"] == 1.0
         assert resp["nIndexesWas"] >= 3
 
@@ -334,18 +357,22 @@ class TestKillAllSessions:
 
 class TestBulkWriteUpsert:
     def test_upsert_tracks_count(self, ctx):
-        resp = dispatch(ctx, {
-            "bulkWrite": 1, "$db": "bulkdb",
-            "nsInfo": [{"ns": "bulkdb.ups"}],
-            "ops": [
-                {
-                    "update": 0,
-                    "filter": {"_id": "upserted_doc"},
-                    "updateMods": {"$set": {"val": 42}},
-                    "upsert": True,
-                },
-            ],
-        })
+        resp = dispatch(
+            ctx,
+            {
+                "bulkWrite": 1,
+                "$db": "bulkdb",
+                "nsInfo": [{"ns": "bulkdb.ups"}],
+                "ops": [
+                    {
+                        "update": 0,
+                        "filter": {"_id": "upserted_doc"},
+                        "updateMods": {"$set": {"val": 42}},
+                        "upsert": True,
+                    },
+                ],
+            },
+        )
         assert resp["ok"] == 1.0
         assert resp["nUpserted"] == 1
 
@@ -355,9 +382,14 @@ class TestBulkWriteUpsert:
 
 class TestCompactEnterprise:
     def test_bytes_freed_measured(self, ctx):
-        dispatch(ctx, {"insert": "compacted", "$db": "cdb", "documents": [
-            {"data": "X" * 500} for _ in range(100)
-        ]})
+        dispatch(
+            ctx,
+            {
+                "insert": "compacted",
+                "$db": "cdb",
+                "documents": [{"data": "X" * 500} for _ in range(100)],
+            },
+        )
         resp = dispatch(ctx, {"compact": "compacted", "$db": "cdb"})
         assert resp["ok"] == 1.0
         assert "bytesFreed" in resp
@@ -369,24 +401,26 @@ class TestCompactEnterprise:
 
 class TestDataSizeEnterprise:
     def test_millis_measured(self, ctx):
-        dispatch(ctx, {"insert": "timed", "$db": "dsdb", "documents": [
-            {"x": i} for i in range(50)
-        ]})
+        dispatch(
+            ctx, {"insert": "timed", "$db": "dsdb", "documents": [{"x": i} for i in range(50)]}
+        )
         resp = dispatch(ctx, {"dataSize": "dsdb.timed", "$db": "admin"})
         assert resp["ok"] == 1.0
         assert isinstance(resp["millis"], int)
         assert resp["numObjects"] == 50
 
     def test_key_pattern_scoped(self, ctx):
-        dispatch(ctx, {"insert": "kp", "$db": "dsdb", "documents": [
-            {"x": i} for i in range(100)
-        ]})
-        resp = dispatch(ctx, {
-            "dataSize": "dsdb.kp", "$db": "admin",
-            "keyPattern": {"x": 1},
-            "min": {"x": 10},
-            "max": {"x": 50},
-        })
+        dispatch(ctx, {"insert": "kp", "$db": "dsdb", "documents": [{"x": i} for i in range(100)]})
+        resp = dispatch(
+            ctx,
+            {
+                "dataSize": "dsdb.kp",
+                "$db": "admin",
+                "keyPattern": {"x": 1},
+                "min": {"x": 10},
+                "max": {"x": 50},
+            },
+        )
         assert resp["ok"] == 1.0
         assert resp["numObjects"] == 40
 
@@ -410,29 +444,49 @@ class TestDbStatsEnterprise:
 
 class TestCollModEnterprise:
     def test_validation_level_off(self, ctx):
-        dispatch(ctx, {
-            "create": "validated", "$db": "cmdb",
-        })
-        dispatch(ctx, {
-            "collMod": "validated", "$db": "cmdb",
-            "validator": {"$jsonSchema": {"required": ["name"]}},
-        })
+        dispatch(
+            ctx,
+            {
+                "create": "validated",
+                "$db": "cmdb",
+            },
+        )
+        dispatch(
+            ctx,
+            {
+                "collMod": "validated",
+                "$db": "cmdb",
+                "validator": {"$jsonSchema": {"required": ["name"]}},
+            },
+        )
         # with validator, insert without "name" should fail
-        resp = dispatch(ctx, {
-            "insert": "validated", "$db": "cmdb",
-            "documents": [{"other": "data"}],
-        })
+        resp = dispatch(
+            ctx,
+            {
+                "insert": "validated",
+                "$db": "cmdb",
+                "documents": [{"other": "data"}],
+            },
+        )
         assert resp.get("writeErrors") or resp["ok"] == 0 or resp.get("n", 1) == 0
 
         # now turn off validation
-        dispatch(ctx, {
-            "collMod": "validated", "$db": "cmdb",
-            "validationLevel": "off",
-        })
-        resp = dispatch(ctx, {
-            "insert": "validated", "$db": "cmdb",
-            "documents": [{"other": "data"}],
-        })
+        dispatch(
+            ctx,
+            {
+                "collMod": "validated",
+                "$db": "cmdb",
+                "validationLevel": "off",
+            },
+        )
+        resp = dispatch(
+            ctx,
+            {
+                "insert": "validated",
+                "$db": "cmdb",
+                "documents": [{"other": "data"}],
+            },
+        )
         assert resp["ok"] == 1.0
         assert resp["n"] >= 1
 
@@ -464,9 +518,7 @@ class TestFreeMonitoring:
         resp = dispatch(ctx, {"getFreeMonitoringStatus": 1, "$db": "admin"})
         assert resp["state"] == "disabled"
 
-        resp = dispatch(ctx, {
-            "setFreeMonitoring": 1, "action": "enable", "$db": "admin"
-        })
+        resp = dispatch(ctx, {"setFreeMonitoring": 1, "action": "enable", "$db": "admin"})
         assert resp["ok"] == 1.0
 
         resp = dispatch(ctx, {"getFreeMonitoringStatus": 1, "$db": "admin"})
@@ -477,9 +529,7 @@ class TestFreeMonitoring:
         assert resp["state"] == "disabled"
 
     def test_invalid_action(self, ctx):
-        resp = dispatch(ctx, {
-            "setFreeMonitoring": 1, "action": "bogus", "$db": "admin"
-        })
+        resp = dispatch(ctx, {"setFreeMonitoring": 1, "action": "bogus", "$db": "admin"})
         assert resp["ok"] == 0
 
 
@@ -494,11 +544,15 @@ class TestUserManagement:
             _USER_STORE.clear()
 
     def test_create_and_query_user(self, ctx):
-        resp = dispatch(ctx, {
-            "createUser": "testuser", "pwd": "secret",
-            "roles": [{"role": "readWrite", "db": "mydb"}],
-            "$db": "mydb",
-        })
+        resp = dispatch(
+            ctx,
+            {
+                "createUser": "testuser",
+                "pwd": "secret",
+                "roles": [{"role": "readWrite", "db": "mydb"}],
+                "$db": "mydb",
+            },
+        )
         assert resp["ok"] == 1.0
 
         resp = dispatch(ctx, {"usersInfo": "testuser", "$db": "mydb"})
@@ -525,14 +579,22 @@ class TestUserManagement:
         assert resp["ok"] == 0
 
     def test_update_user_roles(self, ctx):
-        dispatch(ctx, {
-            "createUser": "updatable", "roles": [{"role": "read", "db": "test"}],
-            "$db": "test",
-        })
-        resp = dispatch(ctx, {
-            "updateUser": "updatable", "roles": [{"role": "readWrite", "db": "test"}],
-            "$db": "test",
-        })
+        dispatch(
+            ctx,
+            {
+                "createUser": "updatable",
+                "roles": [{"role": "read", "db": "test"}],
+                "$db": "test",
+            },
+        )
+        resp = dispatch(
+            ctx,
+            {
+                "updateUser": "updatable",
+                "roles": [{"role": "readWrite", "db": "test"}],
+                "$db": "test",
+            },
+        )
         assert resp["ok"] == 1.0
 
         resp = dispatch(ctx, {"usersInfo": "updatable", "$db": "test"})
@@ -573,9 +635,7 @@ class TestGetParameterEnterprise:
         assert resp["ok"] == 0
 
     def test_all_params(self, ctx):
-        resp = dispatch(ctx, {
-            "getParameter": "*", "allParameters": True, "$db": "admin"
-        })
+        resp = dispatch(ctx, {"getParameter": "*", "allParameters": True, "$db": "admin"})
         assert resp["ok"] == 1.0
         assert "logLevel" in resp
 
@@ -585,15 +645,24 @@ class TestGetParameterEnterprise:
 
 class TestPlanSummary:
     def test_find_populates_plan_summary(self, ctx):
-        dispatch(ctx, {"insert": "plancoll", "$db": "plandb", "documents": [
-            {"x": i} for i in range(5)
-        ]})
-        dispatch(ctx, {
-            "profile": 2, "$db": "plandb",
-        })
-        dispatch(ctx, {
-            "find": "plancoll", "filter": {"x": 3}, "$db": "plandb",
-        })
+        dispatch(
+            ctx, {"insert": "plancoll", "$db": "plandb", "documents": [{"x": i} for i in range(5)]}
+        )
+        dispatch(
+            ctx,
+            {
+                "profile": 2,
+                "$db": "plandb",
+            },
+        )
+        dispatch(
+            ctx,
+            {
+                "find": "plancoll",
+                "filter": {"x": 3},
+                "$db": "plandb",
+            },
+        )
         resp = dispatch(ctx, {"system.profile": 1, "$db": "plandb"})
         entries = resp["cursor"]["firstBatch"]
         plan_entries = [e for e in entries if e.get("planSummary")]
@@ -605,9 +674,7 @@ class TestPlanSummary:
 
 class TestSaslMechs:
     def test_hello_returns_mechanisms(self, ctx):
-        resp = dispatch(ctx, {
-            "hello": 1, "saslSupportedMechs": "test.user", "$db": "admin"
-        })
+        resp = dispatch(ctx, {"hello": 1, "saslSupportedMechs": "test.user", "$db": "admin"})
         assert "SCRAM-SHA-256" in resp["saslSupportedMechs"]
         assert "SCRAM-SHA-1" in resp["saslSupportedMechs"]
 

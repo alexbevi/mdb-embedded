@@ -7,11 +7,13 @@ from smongo.storage import _TTL_DELETE_BATCH_SIZE, TTLReaper
 
 class TestScanWithFields:
     def test_returns_ids_and_field_values(self, local_collection):
-        local_collection.insert_many([
-            {"name": "a", "ts": 100},
-            {"name": "b", "ts": 200},
-            {"name": "c", "ts": 300},
-        ])
+        local_collection.insert_many(
+            [
+                {"name": "a", "ts": 100},
+                {"name": "b", "ts": 200},
+                {"name": "c", "ts": 300},
+            ]
+        )
         results = local_collection.scan_with_fields(["ts"])
         assert len(results) == 3
         ts_values = sorted(r[1]["ts"] for r in results)
@@ -40,11 +42,13 @@ class TestTTLReaperBatching:
 
     def test_reaper_deletes_expired_docs(self, local_collection):
         now = time.time()
-        local_collection.insert_many([
-            {"ts": now - 200, "name": "expired_1"},
-            {"ts": now - 200, "name": "expired_2"},
-            {"ts": now + 3600, "name": "fresh"},
-        ])
+        local_collection.insert_many(
+            [
+                {"ts": now - 200, "name": "expired_1"},
+                {"ts": now - 200, "name": "expired_2"},
+                {"ts": now + 3600, "name": "fresh"},
+            ]
+        )
         local_collection.create_index([("ts", 1)], expireAfterSeconds=60)
         reaper = TTLReaper(local_collection, interval_sec=1, batch_size=10)
         reaper._reap_once()

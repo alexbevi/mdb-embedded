@@ -6,7 +6,6 @@ import logging
 import threading
 import time
 from collections.abc import Callable
-from typing import Any
 
 from bson import Binary, Timestamp
 from bson import ObjectId as BsonObjectId
@@ -18,11 +17,11 @@ from .._types import CommandDoc, DocSequences, ResponseDoc
 from ..context import (
     ConnectionContext,
     NamespaceError,
-    TooManySessions,
-    TransactionError,
     get_git_version,
 )
 from ..errors import error_response, make_error
+from ..sessions import TooManySessions
+from ..transactions import TransactionError
 
 log = logging.getLogger("smongo.wire.commands")
 
@@ -104,8 +103,12 @@ _TOPOLOGY_PROCESS_ID = BsonObjectId()
 _GIT_VERSION = get_git_version()
 
 _opcounters: dict[str, int] = {
-    "insert": 0, "query": 0, "update": 0,
-    "delete": 0, "getmore": 0, "command": 0,
+    "insert": 0,
+    "query": 0,
+    "update": 0,
+    "delete": 0,
+    "getmore": 0,
+    "command": 0,
 }
 _opcounters_lock = threading.Lock()
 
@@ -128,6 +131,7 @@ def _inc_counter(name: str) -> None:
 
 def _register(*names: str, help: str = "") -> Callable[[_CommandHandler], _CommandHandler]:
     """Decorator that registers a handler under one or more command names."""
+
     def decorator(fn: _CommandHandler) -> _CommandHandler:
         doc = help or (fn.__doc__ or "").split("\n")[0].strip()
         for n in names:
@@ -135,25 +139,39 @@ def _register(*names: str, help: str = "") -> Callable[[_CommandHandler], _Comma
             if doc:
                 _HELP[n] = doc
         return fn
+
     return decorator
 
 
 _OP_KIND_MAP: dict[str, str] = {
-    "find": "query", "aggregate": "query", "count": "query",
-    "distinct": "query", "getMore": "getmore",
-    "insert": "insert", "update": "update", "delete": "remove",
-    "findAndModify": "command", "findandmodify": "command",
+    "find": "query",
+    "aggregate": "query",
+    "count": "query",
+    "distinct": "query",
+    "getMore": "getmore",
+    "insert": "insert",
+    "update": "update",
+    "delete": "remove",
+    "findAndModify": "command",
+    "findandmodify": "command",
     "bulkWrite": "command",
 }
 
 _TOP_BUCKET_MAP: dict[str, str] = {
-    "find": "queries", "aggregate": "queries", "count": "queries",
-    "distinct": "queries", "getMore": "getmore",
-    "insert": "insert", "update": "update", "delete": "remove",
+    "find": "queries",
+    "aggregate": "queries",
+    "count": "queries",
+    "distinct": "queries",
+    "getMore": "getmore",
+    "insert": "insert",
+    "update": "update",
+    "delete": "remove",
 }
 
 
-def dispatch(ctx: ConnectionContext, command_doc: CommandDoc, doc_sequences: DocSequences | None = None) -> ResponseDoc:
+def dispatch(
+    ctx: ConnectionContext, command_doc: CommandDoc, doc_sequences: DocSequences | None = None
+) -> ResponseDoc:
     """Route a command document to the appropriate handler."""
     if "$db" not in command_doc:
         command_doc["$db"] = "test"
@@ -194,8 +212,15 @@ def dispatch(ctx: ConnectionContext, command_doc: CommandDoc, doc_sequences: Doc
     except _WTError as exc:
         log.exception("Storage engine error in command '%s'", cmd_name)
         resp = error_response(1, "InternalError", str(exc))
-    except (KeyError, TypeError, ValueError, IndexError,
-            RuntimeError, OSError, AttributeError) as exc:
+    except (
+        KeyError,
+        TypeError,
+        ValueError,
+        IndexError,
+        RuntimeError,
+        OSError,
+        AttributeError,
+    ) as exc:
         log.exception("Unhandled error in command '%s'", cmd_name)
         resp = error_response(1, "InternalError", str(exc))
     finally:
@@ -204,7 +229,9 @@ def dispatch(ctx: ConnectionContext, command_doc: CommandDoc, doc_sequences: Doc
         top_bucket = _TOP_BUCKET_MAP.get(cmd_name, "commands")
         ctx.top_stats.record(ns, top_bucket, elapsed_us)
         ctx.profiler.log(
-            op_kind, ns, elapsed_us // 1000,
+            op_kind,
+            ns,
+            elapsed_us // 1000,
             command=command_doc,
             plan_summary=ctx.last_plan_summary,
         )

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._registry import _register, log
 from .._types import CommandDoc, DocSequences, ResponseDoc
 from ..context import ConnectionContext
 from ..errors import make_error
+from ._registry import _register, log
 
 
 @_register("listIndexes")

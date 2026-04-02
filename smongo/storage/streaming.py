@@ -79,7 +79,7 @@ class StreamingCursor:
         seen_ids: set[str] = set()
         candidate_ids: list[str] = []
 
-        for sub in (plan.subplans or []):
+        for sub in plan.subplans or []:
             if sub.plan_type == "pk_lookup":
                 for branch in self._query.get("$or", []):
                     if "_id" in branch and not isinstance(branch["_id"], dict):

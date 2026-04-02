@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from ._registry import _inc_counter, _register
 from ...aggregation import Cursor
 from .._types import CommandDoc, DocSequences, ResponseDoc
 from ..bson_codec import normalize_inbound, normalize_outbound_docs
 from ..context import ConnectionContext
 from ..errors import make_error
+from ._registry import _inc_counter, _register
 
 
 @_register("aggregate")

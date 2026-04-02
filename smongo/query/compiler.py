@@ -9,7 +9,7 @@ from .._types import Document, Filter, Predicate
 from .paths import field_exists, get_value
 
 MAX_REGEX_PATTERN_LEN = 1024
-_NESTED_QUANTIFIER_RE = re.compile(r'[+*]\s*[)]\s*[+*?{]')
+_NESTED_QUANTIFIER_RE = re.compile(r"[+*]\s*[)]\s*[+*?{]")
 
 
 def _build_regex_flags(opts: str) -> int:
@@ -34,13 +34,10 @@ def _safe_regex(pattern: str, flags: int = 0) -> re.Pattern[str]:
     """
     if len(pattern) > MAX_REGEX_PATTERN_LEN:
         raise ValueError(
-            f"regex pattern length {len(pattern)} exceeds limit "
-            f"{MAX_REGEX_PATTERN_LEN}"
+            f"regex pattern length {len(pattern)} exceeds limit " f"{MAX_REGEX_PATTERN_LEN}"
         )
     if _NESTED_QUANTIFIER_RE.search(pattern):
-        raise ValueError(
-            "regex pattern rejected: nested quantifiers are not allowed"
-        )
+        raise ValueError("regex pattern rejected: nested quantifiers are not allowed")
     return re.compile(pattern, flags)
 
 
@@ -83,7 +80,9 @@ def compile_query(query: Filter) -> Predicate:
             if key == "$comment":
                 continue
             if key == "$text":
-                search_str = condition.get("$search", "") if isinstance(condition, dict) else str(condition)
+                search_str = (
+                    condition.get("$search", "") if isinstance(condition, dict) else str(condition)
+                )
                 if not _text_match(doc, search_str, query):
                     return False
                 continue
@@ -137,7 +136,9 @@ def _text_match(doc: Document, search_str: str, query: Filter) -> bool:
     return all(t in all_text for t in tokens)
 
 
-def _eval_op(op: str, value: Any, cond_val: Any, doc: Document, key: str, regex_flags: int = 0) -> bool:
+def _eval_op(
+    op: str, value: Any, cond_val: Any, doc: Document, key: str, regex_flags: int = 0
+) -> bool:
     """Evaluate a single comparison/element/logical operator."""
     if op == "$gt":
         return value is not None and value > cond_val
@@ -196,7 +197,7 @@ def _eval_op(op: str, value: Any, cond_val: Any, doc: Document, key: str, regex_
         if not isinstance(cond_val, list) or len(cond_val) != 2:
             return False
         divisor, remainder = cond_val
-        if not isinstance(value, (int, float)) or divisor == 0:
+        if not isinstance(value, int | float) or divisor == 0:
             return False
         return int(value) % int(divisor) == int(remainder)
     if op == "$bitsAllSet":
@@ -212,7 +213,7 @@ def _eval_op(op: str, value: Any, cond_val: Any, doc: Document, key: str, regex_
 
 def _bits_check(value: Any, bitmask: Any, mode: str) -> bool:
     """Evaluate bitwise query operators against *value*."""
-    if not isinstance(value, (int, float)):
+    if not isinstance(value, int | float):
         return False
     val = int(value)
     if isinstance(bitmask, int):

@@ -1,6 +1,5 @@
 """Tests for smongo.aggregation -- Cursor and pipeline stages."""
 
-
 import pytest
 
 from smongo.aggregation import (
@@ -14,11 +13,51 @@ from smongo.aggregation import (
 @pytest.fixture
 def docs():
     return [
-        {"_id": "1", "name": "Alice", "age": 34, "city": "NYC", "dept": "eng", "tags": ["py", "go"], "salary": 145000},
-        {"_id": "2", "name": "Bob", "age": 28, "city": "SF", "dept": "eng", "tags": ["js"], "salary": 128000},
-        {"_id": "3", "name": "Charlie", "age": 40, "city": "NYC", "dept": "mgmt", "tags": ["py"], "salary": 175000},
-        {"_id": "4", "name": "Diana", "age": 25, "city": "LA", "dept": "design", "tags": [], "salary": 98000},
-        {"_id": "5", "name": "Eve", "age": 31, "city": "SF", "dept": "eng", "tags": ["py", "ml"], "salary": 155000},
+        {
+            "_id": "1",
+            "name": "Alice",
+            "age": 34,
+            "city": "NYC",
+            "dept": "eng",
+            "tags": ["py", "go"],
+            "salary": 145000,
+        },
+        {
+            "_id": "2",
+            "name": "Bob",
+            "age": 28,
+            "city": "SF",
+            "dept": "eng",
+            "tags": ["js"],
+            "salary": 128000,
+        },
+        {
+            "_id": "3",
+            "name": "Charlie",
+            "age": 40,
+            "city": "NYC",
+            "dept": "mgmt",
+            "tags": ["py"],
+            "salary": 175000,
+        },
+        {
+            "_id": "4",
+            "name": "Diana",
+            "age": 25,
+            "city": "LA",
+            "dept": "design",
+            "tags": [],
+            "salary": 98000,
+        },
+        {
+            "_id": "5",
+            "name": "Eve",
+            "age": 31,
+            "city": "SF",
+            "dept": "eng",
+            "tags": ["py", "ml"],
+            "salary": 155000,
+        },
     ]
 
 
@@ -123,50 +162,70 @@ class TestAggregateMatch:
 
 class TestAggregateGroup:
     def test_group_count(self, docs):
-        result = Cursor(docs).aggregate([
-            {"$group": {"_id": "$city", "count": {"$sum": 1}}},
-        ])
+        result = Cursor(docs).aggregate(
+            [
+                {"$group": {"_id": "$city", "count": {"$sum": 1}}},
+            ]
+        )
         nyc = next(r for r in result if r["_id"] == "NYC")
         assert nyc["count"] == 2
 
     def test_group_sum_field(self, docs):
-        result = Cursor(docs).aggregate([
-            {"$group": {"_id": "$dept", "total_salary": {"$sum": "$salary"}}},
-        ])
+        result = Cursor(docs).aggregate(
+            [
+                {"$group": {"_id": "$dept", "total_salary": {"$sum": "$salary"}}},
+            ]
+        )
         eng = next(r for r in result if r["_id"] == "eng")
         assert eng["total_salary"] == 145000 + 128000 + 155000
 
     def test_group_avg(self, docs):
-        result = Cursor(docs).aggregate([
-            {"$group": {"_id": None, "avg_age": {"$avg": "$age"}}},
-        ])
+        result = Cursor(docs).aggregate(
+            [
+                {"$group": {"_id": None, "avg_age": {"$avg": "$age"}}},
+            ]
+        )
         assert result[0]["avg_age"] == pytest.approx((34 + 28 + 40 + 25 + 31) / 5)
 
     def test_group_min_max(self, docs):
-        result = Cursor(docs).aggregate([
-            {"$group": {"_id": None, "min_age": {"$min": "$age"}, "max_age": {"$max": "$age"}}},
-        ])
+        result = Cursor(docs).aggregate(
+            [
+                {"$group": {"_id": None, "min_age": {"$min": "$age"}, "max_age": {"$max": "$age"}}},
+            ]
+        )
         assert result[0]["min_age"] == 25
         assert result[0]["max_age"] == 40
 
     def test_group_push(self, docs):
-        result = Cursor(docs).aggregate([
-            {"$group": {"_id": "$city", "names": {"$push": "$name"}}},
-        ])
+        result = Cursor(docs).aggregate(
+            [
+                {"$group": {"_id": "$city", "names": {"$push": "$name"}}},
+            ]
+        )
         nyc = next(r for r in result if r["_id"] == "NYC")
         assert set(nyc["names"]) == {"Alice", "Charlie"}
 
     def test_group_add_to_set(self, docs):
-        result = Cursor(docs).aggregate([
-            {"$group": {"_id": None, "cities": {"$addToSet": "$city"}}},
-        ])
+        result = Cursor(docs).aggregate(
+            [
+                {"$group": {"_id": None, "cities": {"$addToSet": "$city"}}},
+            ]
+        )
         assert set(result[0]["cities"]) == {"NYC", "SF", "LA"}
 
     def test_group_first_last(self, docs):
-        result = Cursor(docs).aggregate([
-            {"$sort": {"age": 1}},
-            {"$group": {"_id": None, "youngest": {"$first": "$name"}, "oldest": {"$last": "$name"}}},
-        ])
+        result = Cursor(docs).aggregate(
+            [
+                {"$sort": {"age": 1}},
+                {
+                    "$group": {
+                        "_id": None,
+                        "youngest": {"$first": "$name"},
+                        "oldest": {"$last": "$name"},
+                    }
+                },
+            ]
+        )
         assert result[0]["youngest"] == "Diana"
         assert result[0]["oldest"] == "Charlie"
 
@@ -183,9 +242,11 @@ class TestAggregateProject:
             assert "salary" not in d
 
     def test_computed_field(self, docs):
-        result = Cursor(docs).aggregate([
-            {"$project": {"upper_name": {"$toUpper": "$name"}}},
-        ])
+        result = Cursor(docs).aggregate(
+            [
+                {"$project": {"upper_name": {"$toUpper": "$name"}}},
+            ]
+        )
         assert result[0]["upper_name"] == "ALICE"
 
 
@@ -230,15 +291,19 @@ class TestAggregateUnwind:
     def test_unwind_string_path(self, docs):
         result = Cursor(docs).aggregate([{"$unwind": "$tags"}])
         assert all(not isinstance(d["tags"], list) for d in result)
-        tag_count = sum(len(d.get("tags", []) or []) if isinstance(d.get("tags"), list) else 1 for d in docs)
+        tag_count = sum(
+            len(d.get("tags", []) or []) if isinstance(d.get("tags"), list) else 1 for d in docs
+        )
         # Diana has empty tags, so she's excluded
         expected = sum(len(d["tags"]) for d in docs if d["tags"])
         assert len(result) == expected
 
     def test_unwind_dict_preserve_null(self, docs):
-        result = Cursor(docs).aggregate([
-            {"$unwind": {"path": "$tags", "preserveNullAndEmptyArrays": True}},
-        ])
+        result = Cursor(docs).aggregate(
+            [
+                {"$unwind": {"path": "$tags", "preserveNullAndEmptyArrays": True}},
+            ]
+        )
         # Diana (empty tags) and others should be preserved
         assert len(result) >= len(docs)
 
@@ -263,15 +328,19 @@ class TestAggregateUnwind:
 
 class TestAggregateAddFields:
     def test_add_fields(self, docs):
-        result = Cursor(docs).aggregate([
-            {"$addFields": {"age_plus_ten": {"$add": ["$age", 10]}}},
-        ])
+        result = Cursor(docs).aggregate(
+            [
+                {"$addFields": {"age_plus_ten": {"$add": ["$age", 10]}}},
+            ]
+        )
         assert result[0]["age_plus_ten"] == 44
 
     def test_set_alias(self, docs):
-        result = Cursor(docs).aggregate([
-            {"$set": {"label": "constant"}},
-        ])
+        result = Cursor(docs).aggregate(
+            [
+                {"$set": {"label": "constant"}},
+            ]
+        )
         assert all(d["label"] == "constant" for d in result)
 
 
@@ -311,11 +380,21 @@ class TestAggregateLookup:
             class FakeColl:
                 def get_all(self):
                     return products
+
             return FakeColl()
 
-        result = Cursor(orders, collection_getter=getter).aggregate([
-            {"$lookup": {"from": "products", "localField": "product", "foreignField": "_id", "as": "details"}},
-        ])
+        result = Cursor(orders, collection_getter=getter).aggregate(
+            [
+                {
+                    "$lookup": {
+                        "from": "products",
+                        "localField": "product",
+                        "foreignField": "_id",
+                        "as": "details",
+                    }
+                },
+            ]
+        )
         assert len(result[0]["details"]) == 1
         assert result[0]["details"][0]["price"] == 10
 
@@ -327,18 +406,37 @@ class TestAggregateLookup:
             class FakeColl:
                 def get_all(self):
                     return products
+
             return FakeColl()
 
-        result = Cursor(orders, collection_getter=getter).aggregate([
-            {"$lookup": {"from": "products", "localField": "product", "foreignField": "_id", "as": "details"}},
-        ])
+        result = Cursor(orders, collection_getter=getter).aggregate(
+            [
+                {
+                    "$lookup": {
+                        "from": "products",
+                        "localField": "product",
+                        "foreignField": "_id",
+                        "as": "details",
+                    }
+                },
+            ]
+        )
         assert result[0]["details"] == []
 
     def test_lookup_no_getter(self):
         orders = [{"_id": 1, "product": "A"}]
-        result = Cursor(orders).aggregate([
-            {"$lookup": {"from": "x", "localField": "product", "foreignField": "_id", "as": "details"}},
-        ])
+        result = Cursor(orders).aggregate(
+            [
+                {
+                    "$lookup": {
+                        "from": "x",
+                        "localField": "product",
+                        "foreignField": "_id",
+                        "as": "details",
+                    }
+                },
+            ]
+        )
         assert result[0]["details"] == []
 
     def test_lookup_missing_spec_fields_raises(self):
@@ -444,7 +542,15 @@ class TestAggregateVectorSearch:
     def test_vector_search_unsupported_metric_raises(self):
         with pytest.raises(ValueError, match="Unsupported vector metric"):
             Cursor([{"embedding": [1.0]}]).aggregate(
-                [{"$vectorSearch": {"path": "embedding", "queryVector": [1.0], "metric": "manhattan"}}]
+                [
+                    {
+                        "$vectorSearch": {
+                            "path": "embedding",
+                            "queryVector": [1.0],
+                            "metric": "manhattan",
+                        }
+                    }
+                ]
             )
 
 
@@ -456,24 +562,32 @@ class TestAggregateVectorSearch:
 
 class TestAggregateFacet:
     def test_facet_two_pipelines(self, docs):
-        result = Cursor(docs).aggregate([
-            {"$facet": {
-                "by_city": [{"$group": {"_id": "$city", "count": {"$sum": 1}}}],
-                "total": [{"$count": "n"}],
-            }},
-        ])
+        result = Cursor(docs).aggregate(
+            [
+                {
+                    "$facet": {
+                        "by_city": [{"$group": {"_id": "$city", "count": {"$sum": 1}}}],
+                        "total": [{"$count": "n"}],
+                    }
+                },
+            ]
+        )
         assert len(result) == 1
         assert "by_city" in result[0]
         assert "total" in result[0]
         assert result[0]["total"] == [{"n": 5}]
 
     def test_facet_preserves_input(self, docs):
-        result = Cursor(docs).aggregate([
-            {"$facet": {
-                "all": [{"$match": {}}],
-                "engineers": [{"$match": {"dept": "eng"}}],
-            }},
-        ])
+        result = Cursor(docs).aggregate(
+            [
+                {
+                    "$facet": {
+                        "all": [{"$match": {}}],
+                        "engineers": [{"$match": {"dept": "eng"}}],
+                    }
+                },
+            ]
+        )
         assert len(result[0]["all"]) == 5
         assert len(result[0]["engineers"]) == 3
 
@@ -486,10 +600,13 @@ class TestAggregateOut:
         class FakeColl:
             def __init__(self):
                 self.data = [{"_id": "old", "x": 1}]
+
             def delete(self, q, multi=True):
                 self.data.clear()
+
             def insert_many(self, docs):
                 self.data.extend(docs)
+
             def get_all(self):
                 return list(self.data)
 
@@ -499,9 +616,11 @@ class TestAggregateOut:
             return target
 
         data = [{"_id": "1", "v": 10}, {"_id": "2", "v": 20}]
-        result = Cursor(data, collection_getter=getter).aggregate([
-            {"$out": "target_coll"},
-        ])
+        result = Cursor(data, collection_getter=getter).aggregate(
+            [
+                {"$out": "target_coll"},
+            ]
+        )
         assert len(result) == 2
         assert len(target.data) == 2
         assert target.data[0]["_id"] == "1"
@@ -512,14 +631,18 @@ class TestAggregateMerge:
         class FakeColl:
             def __init__(self):
                 self.data = [{"_id": "1", "v": "old"}]
+
             def find(self, q):
                 return [d for d in self.data if all(d.get(k) == v for k, v in q.items())]
+
             def update(self, q, update_spec, multi=False):
                 for d in self.data:
                     if d["_id"] == q["_id"]:
                         d.update(update_spec.get("$set", {}))
+
             def insert_one(self, doc):
                 self.data.append(doc)
+
             def get_all(self):
                 return list(self.data)
 
@@ -529,9 +652,18 @@ class TestAggregateMerge:
             return target
 
         data = [{"_id": "1", "v": "new"}, {"_id": "2", "v": "inserted"}]
-        result = Cursor(data, collection_getter=getter).aggregate([
-            {"$merge": {"into": "target_coll", "on": "_id", "whenMatched": "replace", "whenNotMatched": "insert"}},
-        ])
+        result = Cursor(data, collection_getter=getter).aggregate(
+            [
+                {
+                    "$merge": {
+                        "into": "target_coll",
+                        "on": "_id",
+                        "whenMatched": "replace",
+                        "whenNotMatched": "insert",
+                    }
+                },
+            ]
+        )
         assert len(result) == 2
         assert len(target.data) == 2
         match_1 = next(d for d in target.data if d["_id"] == "1")
@@ -551,21 +683,25 @@ class TestAggregateUnsupported:
 
 class TestMultiStagePipeline:
     def test_match_group_sort(self, docs):
-        result = Cursor(docs).aggregate([
-            {"$match": {"dept": "eng"}},
-            {"$group": {"_id": "$city", "avg_salary": {"$avg": "$salary"}}},
-            {"$sort": {"avg_salary": -1}},
-        ])
+        result = Cursor(docs).aggregate(
+            [
+                {"$match": {"dept": "eng"}},
+                {"$group": {"_id": "$city", "avg_salary": {"$avg": "$salary"}}},
+                {"$sort": {"avg_salary": -1}},
+            ]
+        )
         assert len(result) >= 1
         salaries = [r["avg_salary"] for r in result]
         assert salaries == sorted(salaries, reverse=True)
 
     def test_unwind_group_count(self, docs):
-        result = Cursor(docs).aggregate([
-            {"$unwind": "$tags"},
-            {"$group": {"_id": "$tags", "count": {"$sum": 1}}},
-            {"$sort": {"count": -1}},
-        ])
+        result = Cursor(docs).aggregate(
+            [
+                {"$unwind": "$tags"},
+                {"$group": {"_id": "$tags", "count": {"$sum": 1}}},
+                {"$sort": {"count": -1}},
+            ]
+        )
         py = next(r for r in result if r["_id"] == "py")
         assert py["count"] == 3
 

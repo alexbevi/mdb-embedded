@@ -7,7 +7,6 @@ from typing import Any
 from .._compat import WTError as _WTError
 from .._compat import wt
 from ..oplog import OplogHub
-
 from .helpers import log
 
 
@@ -22,6 +21,7 @@ class LocalClient:
         if durable:
             try:
                 import snappy as _snappy  # noqa: F401
+
                 config += ",log=(enabled=true,compressor=snappy)"
             except ImportError:
                 config += ",log=(enabled=true)"
@@ -76,12 +76,18 @@ class LocalDB:
             if name not in self._collections:
                 validator = self._validators.get(name)
                 self._collections[name] = LocalCollection(
-                    self.conn, self.name, name, db=self,
-                    validator=validator, oplog_hub=self._oplog_hub,
+                    self.conn,
+                    self.name,
+                    name,
+                    db=self,
+                    validator=validator,
+                    oplog_hub=self._oplog_hub,
                 )
             return self._collections[name]
 
-    def create_collection(self, name: str, validator: dict[str, Any] | None = None, **kwargs: Any) -> LocalCollection:
+    def create_collection(
+        self, name: str, validator: dict[str, Any] | None = None, **kwargs: Any
+    ) -> LocalCollection:
         """Create a collection, optionally attaching a ``$jsonSchema`` *validator*."""
         schema: dict[str, Any] | None = None
         if validator:
@@ -137,9 +143,12 @@ class LocalDB:
                 uri: str = cursor.get_key()
                 if not uri.startswith(prefix):
                     continue
-                if any(uri.startswith(f"table:{tag}{self.name}_") for tag in self._INTERNAL_TABLE_PREFIXES):
+                if any(
+                    uri.startswith(f"table:{tag}{self.name}_")
+                    for tag in self._INTERNAL_TABLE_PREFIXES
+                ):
                     continue
-                coll_name = uri[len(prefix):]
+                coll_name = uri[len(prefix) :]
                 if coll_name:
                     names.add(coll_name)
             cursor.close()
@@ -157,4 +166,4 @@ class LocalDB:
                 coll.close()
 
 
-from .collection import LocalCollection  # noqa: E402
+from .collection import LocalCollection

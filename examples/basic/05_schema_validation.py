@@ -31,32 +31,35 @@ def main() -> None:
 def _run(db) -> None:
     # ── Create a collection with a strict schema ──────────────
     print("── creating 'users' with $jsonSchema validator ──")
-    users = db.create_collection("users", validator={
-        "$jsonSchema": {
-            "bsonType": "object",
-            "required": ["name", "email", "age"],
-            "properties": {
-                "name": {
-                    "bsonType": "string",
-                    "minLength": 1,
-                    "maxLength": 100,
+    users = db.create_collection(
+        "users",
+        validator={
+            "$jsonSchema": {
+                "bsonType": "object",
+                "required": ["name", "email", "age"],
+                "properties": {
+                    "name": {
+                        "bsonType": "string",
+                        "minLength": 1,
+                        "maxLength": 100,
+                    },
+                    "email": {
+                        "bsonType": "string",
+                        "pattern": r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
+                    },
+                    "age": {
+                        "bsonType": "int",
+                        "minimum": 0,
+                        "maximum": 150,
+                    },
+                    "role": {
+                        "enum": ["admin", "editor", "viewer"],
+                    },
                 },
-                "email": {
-                    "bsonType": "string",
-                    "pattern": r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
-                },
-                "age": {
-                    "bsonType": "int",
-                    "minimum": 0,
-                    "maximum": 150,
-                },
-                "role": {
-                    "enum": ["admin", "editor", "viewer"],
-                },
-            },
-            "additionalProperties": False,
-        }
-    })
+                "additionalProperties": False,
+            }
+        },
+    )
     print("  schema requires: name (string), email (valid pattern), age (0-150)")
     print("  allowed roles: admin, editor, viewer")
     print("  additional properties: forbidden\n")
@@ -66,7 +69,7 @@ def _run(db) -> None:
     users.insert_one({"name": "Alice", "email": "alice@example.com", "age": 34, "role": "admin"})
     users.insert_one({"name": "Bob", "email": "bob@company.io", "age": 28, "role": "editor"})
     users.insert_one({"name": "Charlie", "email": "charlie@dev.org", "age": 42})
-    print(f"  inserted 3 valid users\n")
+    print("  inserted 3 valid users\n")
 
     # ── Invalid: missing required field ───────────────────────
     print("── rejection: missing required field 'email' ──")
@@ -92,14 +95,18 @@ def _run(db) -> None:
     # ── Invalid: unknown field (additionalProperties: false) ──
     print("── rejection: unexpected field 'phone' ──")
     try:
-        users.insert_one({"name": "Grace", "email": "grace@test.com", "age": 29, "phone": "555-0123"})
+        users.insert_one(
+            {"name": "Grace", "email": "grace@test.com", "age": 29, "phone": "555-0123"}
+        )
     except ValidationError as e:
         print(f"  REJECTED: {e}\n")
 
     # ── Invalid: bad enum value ───────────────────────────────
     print("── rejection: role not in enum ──")
     try:
-        users.insert_one({"name": "Hank", "email": "hank@test.com", "age": 45, "role": "superadmin"})
+        users.insert_one(
+            {"name": "Hank", "email": "hank@test.com", "age": 45, "role": "superadmin"}
+        )
     except ValidationError as e:
         print(f"  REJECTED: {e}\n")
 

@@ -5,11 +5,11 @@ whose underlying WiredTiger session spans all collection operations on the
 current thread.  ``commit`` / ``abort`` map directly to WiredTiger
 ``commit_transaction`` / ``rollback_transaction``.
 """
+
 from __future__ import annotations
 
 import enum
 import time
-from typing import Any
 
 from ..storage import LocalClient
 from ..storage.transaction import TransactionSession
@@ -24,6 +24,7 @@ class TransactionState(enum.Enum):
 
 class SessionTransaction:
     """Per-session transaction state backed by a real WiredTiger transaction."""
+
     __slots__ = ("start_time", "state", "txn_number", "txn_session")
 
     def __init__(self, txn_number: int, txn_session: TransactionSession) -> None:

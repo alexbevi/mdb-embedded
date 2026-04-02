@@ -31,6 +31,7 @@ def ctx(local_client, cursor_registry, session_registry):
     )
     yield c
     from smongo.storage.transaction import _txn_state
+
     _txn_state.session = None
 
 
@@ -74,6 +75,7 @@ class TestSessionRegistry:
         reg = SessionRegistry(timeout_minutes=0)
         reg.create()
         import time
+
         time.sleep(0.01)
         reg.expire()
         assert reg.count == 0

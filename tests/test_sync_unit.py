@@ -69,9 +69,19 @@ def test_field_merge_with_diff_fallback():
 
 def _make_manager():
     mgr = SyncManager.__new__(SyncManager)
-    mgr._config = {"collections": ["db.users"], "batch_size": 10, "use_change_stream_pull": True, "mode": "bidirectional", "max_backoff_sec": 300}
+    mgr._config = {
+        "collections": ["db.users"],
+        "batch_size": 10,
+        "use_change_stream_pull": True,
+        "mode": "bidirectional",
+        "max_backoff_sec": 300,
+    }
     mgr._tracked = {}
-    mgr._local = types.SimpleNamespace(client=types.SimpleNamespace(get_db=lambda _: types.SimpleNamespace(get_collection=lambda __: "LOCAL")))
+    mgr._local = types.SimpleNamespace(
+        client=types.SimpleNamespace(
+            get_db=lambda _: types.SimpleNamespace(get_collection=lambda __: "LOCAL")
+        )
+    )
     mgr._remote = {"db": {"users": "REMOTE"}}
     mgr._local_field_history = {}
     mgr._lock = threading.Lock()
@@ -168,8 +178,12 @@ def test_pull_via_change_stream_success_path():
     mgr._get_checkpoint = lambda k: ck.get(k)
     mgr._set_checkpoint = lambda k, v: ck.__setitem__(k, v)
     seen: list[tuple[str, dict, set | None]] = []
-    orig_upsert = mgr._upsert_remote_doc.__func__ if hasattr(mgr._upsert_remote_doc, "__func__") else None
-    mgr._upsert_remote_doc = lambda ns, local, doc, remote_changed=None: seen.append((ns, doc, remote_changed))
+    orig_upsert = (
+        mgr._upsert_remote_doc.__func__ if hasattr(mgr._upsert_remote_doc, "__func__") else None
+    )
+    mgr._upsert_remote_doc = lambda ns, local, doc, remote_changed=None: seen.append(
+        (ns, doc, remote_changed)
+    )
 
     class Stream:
         def __init__(self):
@@ -240,7 +254,7 @@ def test_backoff_on_consecutive_errors():
     mgr._config["interval_sec"] = 2
     mgr._config["max_backoff_sec"] = 60
     mgr._consecutive_errors = 3
-    sleep_time = min(2 * (2 ** 3), 60)
+    sleep_time = min(2 * (2**3), 60)
     assert sleep_time == 16
 
 

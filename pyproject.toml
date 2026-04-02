@@ -96,7 +96,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["B011", "B017", "SIM300", "F841", "RUF043", "RUF059"]
+"tests/**" = ["B011", "B017", "SIM300", "F841"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["smongo"]

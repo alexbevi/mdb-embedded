@@ -34,6 +34,7 @@ class DuplicateKeyError(Exception):
 # Within numbers, IEEE 754 double with sign-bit flip gives correct order.
 # Everything is hex-encoded so keys are valid C strings (no null bytes).
 
+
 def _sortable_encode(value: Any) -> str:
     """Encode a single value into a lexicographically sortable hex string."""
     if value is None:
@@ -42,7 +43,7 @@ def _sortable_encode(value: Any) -> str:
         return "15" + str(value)
     if isinstance(value, bool):
         return "30" if not value else "31"
-    if isinstance(value, (int, float)):
+    if isinstance(value, int | float):
         packed = struct.pack(">d", float(value))
         b = bytearray(packed)
         if b[0] & 0x80:  # negative: invert all bits
@@ -90,7 +91,7 @@ def encode_index_key_prefix(field_values: list[Any], directions: list[int]) -> s
 # Text tokenizer
 # ------------------------------------------------------------------
 
-_WORD_RE = re.compile(r'[a-zA-Z0-9]+')
+_WORD_RE = re.compile(r"[a-zA-Z0-9]+")
 
 
 def _tokenize(text: str) -> list[str]:
@@ -126,6 +127,7 @@ def _flatten_doc(doc: Document, prefix: str = "") -> list[tuple[str, Any]]:
 # ------------------------------------------------------------------
 # Index definition
 # ------------------------------------------------------------------
+
 
 class IndexDef:
     """Metadata for a single index."""
@@ -175,6 +177,7 @@ class IndexDef:
 # ------------------------------------------------------------------
 # IndexManager -- manages all indexes for a single collection
 # ------------------------------------------------------------------
+
 
 class IndexManager:
     """Creates, drops, and maintains WiredTiger-backed indexes for a collection."""
@@ -298,9 +301,7 @@ class IndexManager:
 
     def update_doc(self, old_doc: Document, new_doc: Document) -> None:
         for idx in self._indexes.values():
-            needs_update = any(
-                get_value(old_doc, f) != get_value(new_doc, f) for f in idx.fields
-            )
+            needs_update = any(get_value(old_doc, f) != get_value(new_doc, f) for f in idx.fields)
             if needs_update:
                 self._delete_entry(idx, old_doc)
                 self._insert_entry(idx, new_doc)
@@ -358,9 +359,7 @@ class IndexManager:
         if idx.unique:
             prefix = encode_index_key_prefix(field_values, idx.directions)
             if self._has_duplicate(idx, prefix, str(doc["_id"])):
-                raise DuplicateKeyError(
-                    f"E11000 duplicate key error index: {idx.name}"
-                )
+                raise DuplicateKeyError(f"E11000 duplicate key error index: {idx.name}")
 
         cursor = self.session.open_cursor(idx.table_uri, None, "overwrite=true")
         cursor[key] = str(doc["_id"])
@@ -613,6 +612,7 @@ class IndexManager:
 # Query planner
 # ------------------------------------------------------------------
 
+
 class QueryPlan:
     """Describes how a query will be executed."""
 
@@ -640,8 +640,16 @@ class QueryPlan:
         if self.bounds:
             lower, upper = self.bounds
             d["indexBounds"] = {
-                "lower": [(seg[0], "inclusive" if seg[1] else "exclusive") for seg in lower if seg[0] is not None],
-                "upper": [(seg[0], "inclusive" if seg[1] else "exclusive") for seg in upper if seg[0] is not None],
+                "lower": [
+                    (seg[0], "inclusive" if seg[1] else "exclusive")
+                    for seg in lower
+                    if seg[0] is not None
+                ],
+                "upper": [
+                    (seg[0], "inclusive" if seg[1] else "exclusive")
+                    for seg in upper
+                    if seg[0] is not None
+                ],
             }
         if self.subplans:
             d["subplans"] = [sp.to_dict() for sp in self.subplans]
@@ -790,8 +798,14 @@ class QueryPlanner:
                     upper_segments.append((wt_high, high_inc))
                 else:
                     # Descending: invert encoding and swap bounds
-                    wt_low = _invert_encoded(_sortable_encode(high_val)) if high_val is not None else None
-                    wt_high = _invert_encoded(_sortable_encode(low_val)) if low_val is not None else None
+                    wt_low = (
+                        _invert_encoded(_sortable_encode(high_val))
+                        if high_val is not None
+                        else None
+                    )
+                    wt_high = (
+                        _invert_encoded(_sortable_encode(low_val)) if low_val is not None else None
+                    )
                     lower_segments.append((wt_low, high_inc))
                     upper_segments.append((wt_high, low_inc))
 
@@ -844,7 +858,10 @@ class QueryPlanner:
         return ids
 
     def execute_in_scan(
-        self, idx: IndexDef, values: list[Any], session: Any,
+        self,
+        idx: IndexDef,
+        values: list[Any],
+        session: Any,
     ) -> list[str]:
         """Multi-point index scan for ``$in`` queries -- one seek per value."""
         assert idx.table_uri is not None
@@ -879,7 +896,9 @@ class QueryPlanner:
         cursor.close()
         return ids
 
-    def _build_bound_key(self, segments: list[tuple[str | None, bool]], is_lower: bool) -> str | None:
+    def _build_bound_key(
+        self, segments: list[tuple[str | None, bool]], is_lower: bool
+    ) -> str | None:
         """
         Concatenate pre-encoded WT-domain segments into a single key string.
         None segments are replaced with min/max sentinels.

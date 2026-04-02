@@ -549,7 +549,9 @@ class TestResolveExprArithmetic:
 
 class TestResolveExprString:
     def test_concat(self):
-        assert resolve_expr({"a": "hello", "b": " world"}, {"$concat": ["$a", "$b"]}) == "hello world"
+        assert (
+            resolve_expr({"a": "hello", "b": " world"}, {"$concat": ["$a", "$b"]}) == "hello world"
+        )
 
     def test_concat_with_none(self):
         assert resolve_expr({}, {"$concat": ["a", "$missing"]}) is None
@@ -615,13 +617,15 @@ class TestResolveExprConditional:
     def test_switch(self):
         result = resolve_expr(
             {"x": 2},
-            {"$switch": {
-                "branches": [
-                    {"case": {"$eq": ["$x", 1]}, "then": "one"},
-                    {"case": {"$eq": ["$x", 2]}, "then": "two"},
-                ],
-                "default": "other",
-            }},
+            {
+                "$switch": {
+                    "branches": [
+                        {"case": {"$eq": ["$x", 1]}, "then": "one"},
+                        {"case": {"$eq": ["$x", 2]}, "then": "two"},
+                    ],
+                    "default": "other",
+                }
+            },
         )
         assert result == "two"
 

@@ -37,7 +37,7 @@ def writer(oplog_env, hub):
 
 @pytest.fixture
 def reader(oplog_env):
-    session, uri, _ = oplog_env
+    session, uri, _namespace = oplog_env
     return OplogReader(session, uri)
 
 
@@ -166,8 +166,10 @@ class TestOplogReader:
 class TestOplogListeners:
     def test_listener_receives_events(self, writer, hub):
         received = []
+
         class FakeListener:
             namespace = "testdb.testcoll"
+
             def _enqueue(self, entry):
                 received.append(entry)
 
@@ -178,8 +180,10 @@ class TestOplogListeners:
 
     def test_listener_namespace_filter(self, writer, hub):
         received = []
+
         class FakeListener:
             namespace = "other.ns"
+
             def _enqueue(self, entry):
                 received.append(entry)
 
@@ -191,6 +195,7 @@ class TestOplogListeners:
     def test_listener_exception_auto_unregistered(self, writer, hub):
         class BadListener:
             namespace = "testdb.testcoll"
+
             def _enqueue(self, entry):
                 raise RuntimeError("boom")
 
@@ -202,8 +207,10 @@ class TestOplogListeners:
     def test_unregister_listener(self, hub):
         class FakeListener:
             namespace = None
+
             def _enqueue(self, entry):
                 pass
+
         listener = FakeListener()
         hub.register(listener)
         hub.unregister(listener)

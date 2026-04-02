@@ -5,10 +5,10 @@ from typing import Any
 
 from bson import ObjectId as BsonObjectId
 
-from ._registry import _register, log
 from .._types import CommandDoc, DocSequences, ResponseDoc
 from ..context import ConnectionContext
 from ..errors import make_error
+from ._registry import _register, log
 
 _USER_STORE: dict[str, dict[str, Any]] = {}
 _USER_STORE_LOCK = threading.Lock()
@@ -64,7 +64,7 @@ def _cmd_create_user(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences
     roles = cmd.get("roles", [])
     with _USER_STORE_LOCK:
         if key in _USER_STORE:
-            return make_error("DuplicateKey", f"User \"{user}@{db_name}\" already exists")
+            return make_error("DuplicateKey", f'User "{user}@{db_name}" already exists')
         _USER_STORE[key] = {
             "_id": f"{db_name}.{user}",
             "userId": BsonObjectId(),
@@ -84,7 +84,7 @@ def _cmd_drop_user(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) 
     key = f"{db_name}.{user}"
     with _USER_STORE_LOCK:
         if key not in _USER_STORE:
-            return make_error("UserNotFound", f"User \"{user}@{db_name}\" not found")
+            return make_error("UserNotFound", f'User "{user}@{db_name}" not found')
         del _USER_STORE[key]
     log.info("dropUser: %s@%s", user, db_name)
     return {"ok": 1.0}
@@ -97,7 +97,7 @@ def _cmd_update_user(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences
     key = f"{db_name}.{user}"
     with _USER_STORE_LOCK:
         if key not in _USER_STORE:
-            return make_error("UserNotFound", f"User \"{user}@{db_name}\" not found")
+            return make_error("UserNotFound", f'User "{user}@{db_name}" not found')
         if "roles" in cmd:
             _USER_STORE[key]["roles"] = cmd["roles"]
         if "mechanisms" in cmd:

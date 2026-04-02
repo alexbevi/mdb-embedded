@@ -75,18 +75,21 @@ class TestUnknownCommand:
 
 class TestInsert:
     def test_insert_single(self, ctx):
-        resp = dispatch(ctx, {
-            "insert": "things", "documents": [{"name": "alpha"}], "$db": "testdb"
-        })
+        resp = dispatch(
+            ctx, {"insert": "things", "documents": [{"name": "alpha"}], "$db": "testdb"}
+        )
         assert resp["ok"] == 1.0
         assert resp["n"] == 1
 
     def test_insert_multiple(self, ctx):
-        resp = dispatch(ctx, {
-            "insert": "things",
-            "documents": [{"x": 1}, {"x": 2}, {"x": 3}],
-            "$db": "testdb",
-        })
+        resp = dispatch(
+            ctx,
+            {
+                "insert": "things",
+                "documents": [{"x": 1}, {"x": 2}, {"x": 3}],
+                "$db": "testdb",
+            },
+        )
         assert resp["n"] == 3
 
     def test_insert_via_doc_sequence(self, ctx):
@@ -106,75 +109,87 @@ class TestFind:
         assert resp["cursor"]["id"] == 0
 
     def test_find_returns_inserted_docs(self, ctx):
-        dispatch(ctx, {
-            "insert": "items",
-            "documents": [{"val": 1}, {"val": 2}, {"val": 3}],
-            "$db": "testdb",
-        })
+        dispatch(
+            ctx,
+            {
+                "insert": "items",
+                "documents": [{"val": 1}, {"val": 2}, {"val": 3}],
+                "$db": "testdb",
+            },
+        )
         resp = dispatch(ctx, {"find": "items", "filter": {}, "$db": "testdb"})
         assert resp["ok"] == 1.0
         batch = resp["cursor"]["firstBatch"]
         assert len(batch) == 3
 
     def test_find_with_filter(self, ctx):
-        dispatch(ctx, {
-            "insert": "items",
-            "documents": [{"val": 1}, {"val": 2}, {"val": 3}],
-            "$db": "testdb",
-        })
-        resp = dispatch(ctx, {
-            "find": "items", "filter": {"val": {"$gt": 1}}, "$db": "testdb"
-        })
+        dispatch(
+            ctx,
+            {
+                "insert": "items",
+                "documents": [{"val": 1}, {"val": 2}, {"val": 3}],
+                "$db": "testdb",
+            },
+        )
+        resp = dispatch(ctx, {"find": "items", "filter": {"val": {"$gt": 1}}, "$db": "testdb"})
         batch = resp["cursor"]["firstBatch"]
         assert len(batch) == 2
 
     def test_find_with_sort_and_limit(self, ctx):
-        dispatch(ctx, {
-            "insert": "items",
-            "documents": [{"v": 3}, {"v": 1}, {"v": 2}],
-            "$db": "testdb",
-        })
-        resp = dispatch(ctx, {
-            "find": "items",
-            "filter": {},
-            "sort": {"v": 1},
-            "limit": 2,
-            "$db": "testdb",
-        })
+        dispatch(
+            ctx,
+            {
+                "insert": "items",
+                "documents": [{"v": 3}, {"v": 1}, {"v": 2}],
+                "$db": "testdb",
+            },
+        )
+        resp = dispatch(
+            ctx,
+            {
+                "find": "items",
+                "filter": {},
+                "sort": {"v": 1},
+                "limit": 2,
+                "$db": "testdb",
+            },
+        )
         batch = resp["cursor"]["firstBatch"]
         assert len(batch) == 2
         assert batch[0]["v"] == 1
         assert batch[1]["v"] == 2
 
     def test_find_with_projection(self, ctx):
-        dispatch(ctx, {
-            "insert": "items",
-            "documents": [{"a": 1, "b": 2}],
-            "$db": "testdb",
-        })
-        resp = dispatch(ctx, {
-            "find": "items", "filter": {}, "projection": {"a": 1}, "$db": "testdb"
-        })
+        dispatch(
+            ctx,
+            {
+                "insert": "items",
+                "documents": [{"a": 1, "b": 2}],
+                "$db": "testdb",
+            },
+        )
+        resp = dispatch(
+            ctx, {"find": "items", "filter": {}, "projection": {"a": 1}, "$db": "testdb"}
+        )
         doc = resp["cursor"]["firstBatch"][0]
         assert "a" in doc
         assert "b" not in doc
 
     def test_find_single_batch(self, ctx):
-        dispatch(ctx, {
-            "insert": "items",
-            "documents": [{"v": i} for i in range(10)],
-            "$db": "testdb",
-        })
-        resp = dispatch(ctx, {
-            "find": "items", "filter": {}, "singleBatch": True, "$db": "testdb"
-        })
+        dispatch(
+            ctx,
+            {
+                "insert": "items",
+                "documents": [{"v": i} for i in range(10)],
+                "$db": "testdb",
+            },
+        )
+        resp = dispatch(ctx, {"find": "items", "filter": {}, "singleBatch": True, "$db": "testdb"})
         assert resp["cursor"]["id"] == 0
         assert len(resp["cursor"]["firstBatch"]) == 10
 
     def test_find_objectid_converted(self, ctx):
-        dispatch(ctx, {
-            "insert": "items", "documents": [{"x": 1}], "$db": "testdb"
-        })
+        dispatch(ctx, {"insert": "items", "documents": [{"x": 1}], "$db": "testdb"})
         resp = dispatch(ctx, {"find": "items", "filter": {}, "$db": "testdb"})
         doc = resp["cursor"]["firstBatch"][0]
         assert isinstance(doc["_id"], BsonObjectId)
@@ -182,16 +197,22 @@ class TestFind:
 
 class TestUpdate:
     def test_update_one(self, ctx):
-        dispatch(ctx, {
-            "insert": "items",
-            "documents": [{"name": "a", "v": 1}],
-            "$db": "testdb",
-        })
-        resp = dispatch(ctx, {
-            "update": "items",
-            "updates": [{"q": {"name": "a"}, "u": {"$set": {"v": 99}}}],
-            "$db": "testdb",
-        })
+        dispatch(
+            ctx,
+            {
+                "insert": "items",
+                "documents": [{"name": "a", "v": 1}],
+                "$db": "testdb",
+            },
+        )
+        resp = dispatch(
+            ctx,
+            {
+                "update": "items",
+                "updates": [{"q": {"name": "a"}, "u": {"$set": {"v": 99}}}],
+                "$db": "testdb",
+            },
+        )
         assert resp["ok"] == 1.0
         assert resp["nModified"] == 1
 
@@ -199,73 +220,95 @@ class TestUpdate:
         assert found["cursor"]["firstBatch"][0]["v"] == 99
 
     def test_update_multi(self, ctx):
-        dispatch(ctx, {
-            "insert": "items",
-            "documents": [{"t": "x", "v": 1}, {"t": "x", "v": 2}],
-            "$db": "testdb",
-        })
-        resp = dispatch(ctx, {
-            "update": "items",
-            "updates": [{"q": {"t": "x"}, "u": {"$inc": {"v": 10}}, "multi": True}],
-            "$db": "testdb",
-        })
+        dispatch(
+            ctx,
+            {
+                "insert": "items",
+                "documents": [{"t": "x", "v": 1}, {"t": "x", "v": 2}],
+                "$db": "testdb",
+            },
+        )
+        resp = dispatch(
+            ctx,
+            {
+                "update": "items",
+                "updates": [{"q": {"t": "x"}, "u": {"$inc": {"v": 10}}, "multi": True}],
+                "$db": "testdb",
+            },
+        )
         assert resp["nModified"] == 2
 
 
 class TestDelete:
     def test_delete_one(self, ctx):
-        dispatch(ctx, {
-            "insert": "items",
-            "documents": [{"a": 1}, {"a": 2}],
-            "$db": "testdb",
-        })
-        resp = dispatch(ctx, {
-            "delete": "items",
-            "deletes": [{"q": {"a": 1}, "limit": 1}],
-            "$db": "testdb",
-        })
+        dispatch(
+            ctx,
+            {
+                "insert": "items",
+                "documents": [{"a": 1}, {"a": 2}],
+                "$db": "testdb",
+            },
+        )
+        resp = dispatch(
+            ctx,
+            {
+                "delete": "items",
+                "deletes": [{"q": {"a": 1}, "limit": 1}],
+                "$db": "testdb",
+            },
+        )
         assert resp["ok"] == 1.0
         assert resp["n"] == 1
 
     def test_delete_many(self, ctx):
-        dispatch(ctx, {
-            "insert": "items",
-            "documents": [{"a": 1}, {"a": 1}, {"a": 2}],
-            "$db": "testdb",
-        })
-        resp = dispatch(ctx, {
-            "delete": "items",
-            "deletes": [{"q": {"a": 1}, "limit": 0}],
-            "$db": "testdb",
-        })
+        dispatch(
+            ctx,
+            {
+                "insert": "items",
+                "documents": [{"a": 1}, {"a": 1}, {"a": 2}],
+                "$db": "testdb",
+            },
+        )
+        resp = dispatch(
+            ctx,
+            {
+                "delete": "items",
+                "deletes": [{"q": {"a": 1}, "limit": 0}],
+                "$db": "testdb",
+            },
+        )
         assert resp["n"] == 2
 
 
 class TestCount:
     def test_count_all(self, ctx):
-        dispatch(ctx, {
-            "insert": "items", "documents": [{"x": 1}, {"x": 2}], "$db": "testdb"
-        })
+        dispatch(ctx, {"insert": "items", "documents": [{"x": 1}, {"x": 2}], "$db": "testdb"})
         resp = dispatch(ctx, {"count": "items", "$db": "testdb"})
         assert resp["n"] == 2
 
     def test_count_with_query(self, ctx):
-        dispatch(ctx, {
-            "insert": "items",
-            "documents": [{"x": 1}, {"x": 2}, {"x": 3}],
-            "$db": "testdb",
-        })
+        dispatch(
+            ctx,
+            {
+                "insert": "items",
+                "documents": [{"x": 1}, {"x": 2}, {"x": 3}],
+                "$db": "testdb",
+            },
+        )
         resp = dispatch(ctx, {"count": "items", "query": {"x": {"$gte": 2}}, "$db": "testdb"})
         assert resp["n"] == 2
 
 
 class TestDistinct:
     def test_distinct_values(self, ctx):
-        dispatch(ctx, {
-            "insert": "items",
-            "documents": [{"c": "a"}, {"c": "b"}, {"c": "a"}],
-            "$db": "testdb",
-        })
+        dispatch(
+            ctx,
+            {
+                "insert": "items",
+                "documents": [{"c": "a"}, {"c": "b"}, {"c": "a"}],
+                "$db": "testdb",
+            },
+        )
         resp = dispatch(ctx, {"distinct": "items", "key": "c", "$db": "testdb"})
         assert resp["ok"] == 1.0
         assert sorted(resp["values"]) == ["a", "b"]
@@ -276,21 +319,20 @@ class TestDistinct:
 
 class TestCursors:
     def test_batched_find_and_get_more(self, ctx):
-        dispatch(ctx, {
-            "insert": "items",
-            "documents": [{"i": n} for n in range(10)],
-            "$db": "testdb",
-        })
-        resp = dispatch(ctx, {
-            "find": "items", "filter": {}, "batchSize": 3, "$db": "testdb"
-        })
+        dispatch(
+            ctx,
+            {
+                "insert": "items",
+                "documents": [{"i": n} for n in range(10)],
+                "$db": "testdb",
+            },
+        )
+        resp = dispatch(ctx, {"find": "items", "filter": {}, "batchSize": 3, "$db": "testdb"})
         cursor_id = resp["cursor"]["id"]
         assert cursor_id != 0
         assert len(resp["cursor"]["firstBatch"]) == 3
 
-        resp2 = dispatch(ctx, {
-            "getMore": cursor_id, "collection": "items", "$db": "testdb"
-        })
+        resp2 = dispatch(ctx, {"getMore": cursor_id, "collection": "items", "$db": "testdb"})
         assert resp2["ok"] == 1.0
         assert len(resp2["cursor"]["nextBatch"]) > 0
 
@@ -300,19 +342,18 @@ class TestCursors:
         assert resp["code"] == 43
 
     def test_kill_cursors(self, ctx):
-        dispatch(ctx, {
-            "insert": "items",
-            "documents": [{"i": n} for n in range(10)],
-            "$db": "testdb",
-        })
-        resp = dispatch(ctx, {
-            "find": "items", "filter": {}, "batchSize": 2, "$db": "testdb"
-        })
+        dispatch(
+            ctx,
+            {
+                "insert": "items",
+                "documents": [{"i": n} for n in range(10)],
+                "$db": "testdb",
+            },
+        )
+        resp = dispatch(ctx, {"find": "items", "filter": {}, "batchSize": 2, "$db": "testdb"})
         cursor_id = resp["cursor"]["id"]
 
-        kill_resp = dispatch(ctx, {
-            "killCursors": "items", "cursors": [cursor_id], "$db": "testdb"
-        })
+        kill_resp = dispatch(ctx, {"killCursors": "items", "cursors": [cursor_id], "$db": "testdb"})
         assert cursor_id in kill_resp["cursorsKilled"]
 
 
@@ -321,11 +362,14 @@ class TestCursors:
 
 class TestIndexCommands:
     def test_create_and_list_indexes(self, ctx):
-        dispatch(ctx, {
-            "createIndexes": "items",
-            "indexes": [{"key": {"name": 1}, "name": "name_1"}],
-            "$db": "testdb",
-        })
+        dispatch(
+            ctx,
+            {
+                "createIndexes": "items",
+                "indexes": [{"key": {"name": 1}, "name": "name_1"}],
+                "$db": "testdb",
+            },
+        )
         resp = dispatch(ctx, {"listIndexes": "items", "$db": "testdb"})
         assert resp["ok"] == 1.0
         names = [idx["name"] for idx in resp["cursor"]["firstBatch"]]
@@ -333,14 +377,15 @@ class TestIndexCommands:
         assert "name_1" in names
 
     def test_drop_index(self, ctx):
-        dispatch(ctx, {
-            "createIndexes": "items",
-            "indexes": [{"key": {"x": 1}, "name": "x_1"}],
-            "$db": "testdb",
-        })
-        resp = dispatch(ctx, {
-            "dropIndexes": "items", "index": "x_1", "$db": "testdb"
-        })
+        dispatch(
+            ctx,
+            {
+                "createIndexes": "items",
+                "indexes": [{"key": {"x": 1}, "name": "x_1"}],
+                "$db": "testdb",
+            },
+        )
+        resp = dispatch(ctx, {"dropIndexes": "items", "index": "x_1", "$db": "testdb"})
         assert resp["ok"] == 1.0
 
 
@@ -349,24 +394,30 @@ class TestIndexCommands:
 
 class TestAggregate:
     def test_simple_pipeline(self, ctx):
-        dispatch(ctx, {
-            "insert": "items",
-            "documents": [
-                {"dept": "eng", "v": 10},
-                {"dept": "eng", "v": 20},
-                {"dept": "sales", "v": 5},
-            ],
-            "$db": "testdb",
-        })
-        resp = dispatch(ctx, {
-            "aggregate": "items",
-            "pipeline": [
-                {"$match": {"dept": "eng"}},
-                {"$group": {"_id": "$dept", "total": {"$sum": "$v"}}},
-            ],
-            "cursor": {},
-            "$db": "testdb",
-        })
+        dispatch(
+            ctx,
+            {
+                "insert": "items",
+                "documents": [
+                    {"dept": "eng", "v": 10},
+                    {"dept": "eng", "v": 20},
+                    {"dept": "sales", "v": 5},
+                ],
+                "$db": "testdb",
+            },
+        )
+        resp = dispatch(
+            ctx,
+            {
+                "aggregate": "items",
+                "pipeline": [
+                    {"$match": {"dept": "eng"}},
+                    {"$group": {"_id": "$dept", "total": {"$sum": "$v"}}},
+                ],
+                "cursor": {},
+                "$db": "testdb",
+            },
+        )
         assert resp["ok"] == 1.0
         batch = resp["cursor"]["firstBatch"]
         assert len(batch) == 1
@@ -385,9 +436,7 @@ class TestAdmin:
         assert "mydb" in names
 
     def test_list_collections(self, ctx):
-        dispatch(ctx, {
-            "insert": "stuff", "documents": [{"x": 1}], "$db": "testdb"
-        })
+        dispatch(ctx, {"insert": "stuff", "documents": [{"x": 1}], "$db": "testdb"})
         resp = dispatch(ctx, {"listCollections": 1, "$db": "testdb"})
         assert resp["ok"] == 1.0
 
@@ -396,16 +445,12 @@ class TestAdmin:
         assert resp["ok"] == 1.0
 
     def test_drop_collection(self, ctx):
-        dispatch(ctx, {
-            "insert": "todrop", "documents": [{"a": 1}], "$db": "testdb"
-        })
+        dispatch(ctx, {"insert": "todrop", "documents": [{"a": 1}], "$db": "testdb"})
         resp = dispatch(ctx, {"drop": "todrop", "$db": "testdb"})
         assert resp["ok"] == 1.0
 
     def test_coll_stats(self, ctx):
-        dispatch(ctx, {
-            "insert": "items", "documents": [{"x": 1}], "$db": "testdb"
-        })
+        dispatch(ctx, {"insert": "items", "documents": [{"x": 1}], "$db": "testdb"})
         resp = dispatch(ctx, {"collStats": "items", "$db": "testdb"})
         assert resp["ok"] == 1.0
         assert resp["count"] == 1
@@ -433,9 +478,7 @@ class TestStubs:
         assert resp["ok"] == 1.0
 
     def test_explain(self, ctx):
-        resp = dispatch(ctx, {
-            "explain": {"find": "items", "filter": {}}, "$db": "testdb"
-        })
+        resp = dispatch(ctx, {"explain": {"find": "items", "filter": {}}, "$db": "testdb"})
         assert resp["ok"] == 1.0
         assert "queryPlanner" in resp
 
@@ -445,105 +488,116 @@ class TestStubs:
 
 class TestFindAndModify:
     def test_find_and_delete(self, ctx):
-        dispatch(ctx, {
-            "insert": "fam", "documents": [{"x": 1}, {"x": 2}], "$db": "testdb"
-        })
-        resp = dispatch(ctx, {
-            "findAndModify": "fam", "query": {"x": 1}, "remove": True, "$db": "testdb"
-        })
+        dispatch(ctx, {"insert": "fam", "documents": [{"x": 1}, {"x": 2}], "$db": "testdb"})
+        resp = dispatch(
+            ctx, {"findAndModify": "fam", "query": {"x": 1}, "remove": True, "$db": "testdb"}
+        )
         assert resp["ok"] == 1.0
         assert resp["value"]["x"] == 1
         found = dispatch(ctx, {"find": "fam", "filter": {}, "$db": "testdb"})
         assert len(found["cursor"]["firstBatch"]) == 1
 
     def test_find_and_update(self, ctx):
-        dispatch(ctx, {
-            "insert": "fam", "documents": [{"x": 1, "y": 10}], "$db": "testdb"
-        })
-        resp = dispatch(ctx, {
-            "findAndModify": "fam",
-            "query": {"x": 1},
-            "update": {"$set": {"y": 99}},
-            "new": True,
-            "$db": "testdb",
-        })
+        dispatch(ctx, {"insert": "fam", "documents": [{"x": 1, "y": 10}], "$db": "testdb"})
+        resp = dispatch(
+            ctx,
+            {
+                "findAndModify": "fam",
+                "query": {"x": 1},
+                "update": {"$set": {"y": 99}},
+                "new": True,
+                "$db": "testdb",
+            },
+        )
         assert resp["ok"] == 1.0
         assert resp["value"]["y"] == 99
 
     def test_find_and_replace(self, ctx):
-        dispatch(ctx, {
-            "insert": "fam", "documents": [{"x": 1, "y": 10}], "$db": "testdb"
-        })
-        resp = dispatch(ctx, {
-            "findAndModify": "fam",
-            "query": {"x": 1},
-            "update": {"x": 1, "y": 999, "replaced": True},
-            "$db": "testdb",
-        })
+        dispatch(ctx, {"insert": "fam", "documents": [{"x": 1, "y": 10}], "$db": "testdb"})
+        resp = dispatch(
+            ctx,
+            {
+                "findAndModify": "fam",
+                "query": {"x": 1},
+                "update": {"x": 1, "y": 999, "replaced": True},
+                "$db": "testdb",
+            },
+        )
         assert resp["ok"] == 1.0
 
     def test_find_and_modify_with_sort(self, ctx):
-        dispatch(ctx, {
-            "insert": "fam",
-            "documents": [{"g": "a", "v": 3}, {"g": "a", "v": 1}, {"g": "a", "v": 2}],
-            "$db": "testdb",
-        })
-        resp = dispatch(ctx, {
-            "findAndModify": "fam",
-            "query": {"g": "a"},
-            "sort": {"v": 1},
-            "update": {"$set": {"picked": True}},
-            "new": True,
-            "$db": "testdb",
-        })
+        dispatch(
+            ctx,
+            {
+                "insert": "fam",
+                "documents": [{"g": "a", "v": 3}, {"g": "a", "v": 1}, {"g": "a", "v": 2}],
+                "$db": "testdb",
+            },
+        )
+        resp = dispatch(
+            ctx,
+            {
+                "findAndModify": "fam",
+                "query": {"g": "a"},
+                "sort": {"v": 1},
+                "update": {"$set": {"picked": True}},
+                "new": True,
+                "$db": "testdb",
+            },
+        )
         assert resp["ok"] == 1.0
         assert resp["value"]["v"] == 1
         assert resp["value"]["picked"] is True
 
     def test_find_and_modify_upsert_insert(self, ctx):
-        resp = dispatch(ctx, {
-            "findAndModify": "fam",
-            "query": {"key": "missing"},
-            "update": {"$set": {"val": 42}},
-            "upsert": True,
-            "new": True,
-            "$db": "testdb",
-        })
+        resp = dispatch(
+            ctx,
+            {
+                "findAndModify": "fam",
+                "query": {"key": "missing"},
+                "update": {"$set": {"val": 42}},
+                "upsert": True,
+                "new": True,
+                "$db": "testdb",
+            },
+        )
         assert resp["ok"] == 1.0
         assert resp["value"]["val"] == 42
         assert resp["value"]["key"] == "missing"
 
     def test_find_and_modify_fields_projection(self, ctx):
-        dispatch(ctx, {
-            "insert": "fam", "documents": [{"a": 1, "b": 2, "c": 3}], "$db": "testdb"
-        })
-        resp = dispatch(ctx, {
-            "findAndModify": "fam",
-            "query": {"a": 1},
-            "update": {"$set": {"b": 99}},
-            "new": True,
-            "fields": {"a": 1, "b": 1},
-            "$db": "testdb",
-        })
+        dispatch(ctx, {"insert": "fam", "documents": [{"a": 1, "b": 2, "c": 3}], "$db": "testdb"})
+        resp = dispatch(
+            ctx,
+            {
+                "findAndModify": "fam",
+                "query": {"a": 1},
+                "update": {"$set": {"b": 99}},
+                "new": True,
+                "fields": {"a": 1, "b": 1},
+                "$db": "testdb",
+            },
+        )
         assert resp["ok"] == 1.0
         assert "a" in resp["value"]
         assert "b" in resp["value"]
         assert "c" not in resp["value"]
 
     def test_find_and_modify_no_match_returns_null(self, ctx):
-        resp = dispatch(ctx, {
-            "findAndModify": "fam",
-            "query": {"missing": True},
-            "update": {"$set": {"x": 1}},
-            "$db": "testdb",
-        })
+        resp = dispatch(
+            ctx,
+            {
+                "findAndModify": "fam",
+                "query": {"missing": True},
+                "update": {"$set": {"x": 1}},
+                "$db": "testdb",
+            },
+        )
         assert resp["ok"] == 1.0
         assert resp["value"] is None
 
     def test_find_and_modify_requires_update_or_remove(self, ctx):
-        resp = dispatch(ctx, {
-            "findAndModify": "fam", "query": {}, "$db": "testdb"
-        })
+        resp = dispatch(ctx, {"findAndModify": "fam", "query": {}, "$db": "testdb"})
         assert resp["ok"] == 0
         assert resp["code"] == 72
 
@@ -553,11 +607,14 @@ class TestFindAndModify:
 
 class TestUpdateUpsert:
     def test_upsert_creates_document(self, ctx):
-        resp = dispatch(ctx, {
-            "update": "upcoll",
-            "updates": [{"q": {"key": "new"}, "u": {"$set": {"val": 1}}, "upsert": True}],
-            "$db": "testdb",
-        })
+        resp = dispatch(
+            ctx,
+            {
+                "update": "upcoll",
+                "updates": [{"q": {"key": "new"}, "u": {"$set": {"val": 1}}, "upsert": True}],
+                "$db": "testdb",
+            },
+        )
         assert resp["ok"] == 1.0
         assert resp["n"] == 1
         assert len(resp.get("upserted", [])) == 1
@@ -567,14 +624,17 @@ class TestUpdateUpsert:
         assert found["cursor"]["firstBatch"][0]["val"] == 1
 
     def test_upsert_updates_existing(self, ctx):
-        dispatch(ctx, {
-            "insert": "upcoll", "documents": [{"key": "exist", "val": 0}], "$db": "testdb"
-        })
-        resp = dispatch(ctx, {
-            "update": "upcoll",
-            "updates": [{"q": {"key": "exist"}, "u": {"$set": {"val": 99}}, "upsert": True}],
-            "$db": "testdb",
-        })
+        dispatch(
+            ctx, {"insert": "upcoll", "documents": [{"key": "exist", "val": 0}], "$db": "testdb"}
+        )
+        resp = dispatch(
+            ctx,
+            {
+                "update": "upcoll",
+                "updates": [{"q": {"key": "exist"}, "u": {"$set": {"val": 99}}, "upsert": True}],
+                "$db": "testdb",
+            },
+        )
         assert resp["nModified"] == 1
         assert "upserted" not in resp
 
@@ -584,12 +644,8 @@ class TestUpdateUpsert:
 
 class TestDropDatabase:
     def test_drop_database_clears_collections(self, ctx):
-        dispatch(ctx, {
-            "insert": "c1", "documents": [{"x": 1}], "$db": "dropme"
-        })
-        dispatch(ctx, {
-            "insert": "c2", "documents": [{"y": 2}], "$db": "dropme"
-        })
+        dispatch(ctx, {"insert": "c1", "documents": [{"x": 1}], "$db": "dropme"})
+        dispatch(ctx, {"insert": "c2", "documents": [{"y": 2}], "$db": "dropme"})
         resp = dispatch(ctx, {"dropDatabase": 1, "$db": "dropme"})
         assert resp["ok"] == 1.0
         assert resp["dropped"] == "dropme"
@@ -603,14 +659,15 @@ class TestDropDatabase:
 
 class TestDropCollectionComplete:
     def test_drop_removes_indexes(self, ctx):
-        dispatch(ctx, {
-            "insert": "dropcoll", "documents": [{"x": 1}], "$db": "testdb"
-        })
-        dispatch(ctx, {
-            "createIndexes": "dropcoll",
-            "indexes": [{"key": {"x": 1}, "name": "x_1"}],
-            "$db": "testdb",
-        })
+        dispatch(ctx, {"insert": "dropcoll", "documents": [{"x": 1}], "$db": "testdb"})
+        dispatch(
+            ctx,
+            {
+                "createIndexes": "dropcoll",
+                "indexes": [{"key": {"x": 1}, "name": "x_1"}],
+                "$db": "testdb",
+            },
+        )
         resp = dispatch(ctx, {"drop": "dropcoll", "$db": "testdb"})
         assert resp["ok"] == 1.0
 
@@ -620,9 +677,7 @@ class TestDropCollectionComplete:
 
 class TestDbStats:
     def test_db_stats_returns_counts(self, ctx):
-        dispatch(ctx, {
-            "insert": "statcoll", "documents": [{"x": 1}, {"x": 2}], "$db": "testdb"
-        })
+        dispatch(ctx, {"insert": "statcoll", "documents": [{"x": 1}, {"x": 2}], "$db": "testdb"})
         resp = dispatch(ctx, {"dbStats": 1, "$db": "testdb"})
         assert resp["ok"] == 1.0
         assert resp["db"] == "testdb"
@@ -687,11 +742,14 @@ class TestGetParameter:
 class TestCollMod:
     def test_coll_mod_with_validator(self, ctx):
         dispatch(ctx, {"create": "modcoll", "$db": "testdb"})
-        resp = dispatch(ctx, {
-            "collMod": "modcoll",
-            "validator": {"$jsonSchema": {"required": ["name"]}},
-            "$db": "testdb",
-        })
+        resp = dispatch(
+            ctx,
+            {
+                "collMod": "modcoll",
+                "validator": {"$jsonSchema": {"required": ["name"]}},
+                "$db": "testdb",
+            },
+        )
         assert resp["ok"] == 1.0
 
 
@@ -700,31 +758,31 @@ class TestCollMod:
 
 class TestRenameCollection:
     def test_rename_collection(self, ctx):
-        dispatch(ctx, {
-            "insert": "src", "documents": [{"x": 1}, {"x": 2}], "$db": "testdb"
-        })
-        resp = dispatch(ctx, {
-            "renameCollection": "testdb.src",
-            "to": "testdb.dst",
-            "$db": "admin",
-        })
+        dispatch(ctx, {"insert": "src", "documents": [{"x": 1}, {"x": 2}], "$db": "testdb"})
+        resp = dispatch(
+            ctx,
+            {
+                "renameCollection": "testdb.src",
+                "to": "testdb.dst",
+                "$db": "admin",
+            },
+        )
         assert resp["ok"] == 1.0
 
         found = dispatch(ctx, {"find": "dst", "filter": {}, "$db": "testdb"})
         assert len(found["cursor"]["firstBatch"]) == 2
 
     def test_rename_to_existing_fails(self, ctx):
-        dispatch(ctx, {
-            "insert": "s1", "documents": [{"x": 1}], "$db": "testdb"
-        })
-        dispatch(ctx, {
-            "insert": "s2", "documents": [{"y": 2}], "$db": "testdb"
-        })
-        resp = dispatch(ctx, {
-            "renameCollection": "testdb.s1",
-            "to": "testdb.s2",
-            "$db": "admin",
-        })
+        dispatch(ctx, {"insert": "s1", "documents": [{"x": 1}], "$db": "testdb"})
+        dispatch(ctx, {"insert": "s2", "documents": [{"y": 2}], "$db": "testdb"})
+        resp = dispatch(
+            ctx,
+            {
+                "renameCollection": "testdb.s1",
+                "to": "testdb.s2",
+                "$db": "admin",
+            },
+        )
         assert resp["ok"] == 0
         assert resp["code"] == 48
 
@@ -751,9 +809,7 @@ class TestDiagnostics:
         assert resp["ok"] == 1.0
 
     def test_validate(self, ctx):
-        dispatch(ctx, {
-            "insert": "valcoll", "documents": [{"x": 1}], "$db": "testdb"
-        })
+        dispatch(ctx, {"insert": "valcoll", "documents": [{"x": 1}], "$db": "testdb"})
         resp = dispatch(ctx, {"validate": "valcoll", "$db": "testdb"})
         assert resp["ok"] == 1.0
         assert resp["valid"] is True
@@ -764,9 +820,7 @@ class TestDiagnostics:
         assert resp["ok"] == 1.0
 
     def test_map_reduce_rejected(self, ctx):
-        resp = dispatch(ctx, {
-            "mapReduce": "coll", "map": "", "reduce": "", "$db": "testdb"
-        })
+        resp = dispatch(ctx, {"mapReduce": "coll", "map": "", "reduce": "", "$db": "testdb"})
         assert resp["ok"] == 0
         assert resp["code"] == 115
 
@@ -776,12 +830,15 @@ class TestDiagnostics:
 
 class TestAdminAggregate:
     def test_aggregate_current_op(self, ctx):
-        resp = dispatch(ctx, {
-            "aggregate": 1,
-            "pipeline": [{"$currentOp": {}}],
-            "cursor": {},
-            "$db": "admin",
-        })
+        resp = dispatch(
+            ctx,
+            {
+                "aggregate": 1,
+                "pipeline": [{"$currentOp": {}}],
+                "cursor": {},
+                "$db": "admin",
+            },
+        )
         assert resp["ok"] == 1.0
         assert resp["cursor"]["firstBatch"] == []
 
@@ -800,35 +857,42 @@ class TestDefaultDb:
 
 class TestErrorPaths:
     def test_duplicate_key_error_via_wire(self, ctx):
-        dispatch(ctx, {
-            "insert": "errcoll", "documents": [{"_id": "dup", "x": 1}], "$db": "testdb"
-        })
-        dispatch(ctx, {
-            "createIndexes": "errcoll",
-            "indexes": [{"key": {"x": 1}, "name": "x_1", "unique": True}],
-            "$db": "testdb",
-        })
-        resp = dispatch(ctx, {
-            "insert": "errcoll", "documents": [{"_id": "dup2", "x": 1}], "$db": "testdb"
-        })
+        dispatch(ctx, {"insert": "errcoll", "documents": [{"_id": "dup", "x": 1}], "$db": "testdb"})
+        dispatch(
+            ctx,
+            {
+                "createIndexes": "errcoll",
+                "indexes": [{"key": {"x": 1}, "name": "x_1", "unique": True}],
+                "$db": "testdb",
+            },
+        )
+        resp = dispatch(
+            ctx, {"insert": "errcoll", "documents": [{"_id": "dup2", "x": 1}], "$db": "testdb"}
+        )
         assert resp.get("writeErrors")
         assert resp["writeErrors"][0]["code"] == 11000
 
     def test_hello_with_sasl_supported_mechs(self, ctx):
-        resp = dispatch(ctx, {
-            "hello": 1,
-            "saslSupportedMechs": "testdb.user",
-            "$db": "admin",
-        })
+        resp = dispatch(
+            ctx,
+            {
+                "hello": 1,
+                "saslSupportedMechs": "testdb.user",
+                "$db": "admin",
+            },
+        )
         assert resp["ok"] == 1.0
         assert resp["saslSupportedMechs"] == ["SCRAM-SHA-1", "SCRAM-SHA-256"]
 
     def test_hello_compression_negotiation(self, ctx):
-        resp = dispatch(ctx, {
-            "hello": 1,
-            "compression": ["zlib"],
-            "$db": "admin",
-        })
+        resp = dispatch(
+            ctx,
+            {
+                "hello": 1,
+                "compression": ["zlib"],
+                "$db": "admin",
+            },
+        )
         assert resp["ok"] == 1.0
         assert "compression" in resp
         assert "zlib" in resp["compression"]

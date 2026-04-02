@@ -5,19 +5,18 @@ import platform
 import sys
 from datetime import UTC, datetime
 
-from ._registry import (
-    MAX_BSON_OBJECT_SIZE,
-    MAX_MESSAGE_SIZE,
-    MAX_WRITE_BATCH_SIZE,
-    _GIT_VERSION,
-    _TOPOLOGY_PROCESS_ID,
-    _register,
-    log,
-)
 from .._types import CommandDoc, DocSequences, ResponseDoc
 from ..context import ConnectionContext, get_total_memory_mb
 from ..errors import make_error
 from ..msg import _COMPRESSOR_IDS, available_compressors
+from ._registry import (
+    _GIT_VERSION,
+    _TOPOLOGY_PROCESS_ID,
+    MAX_BSON_OBJECT_SIZE,
+    MAX_MESSAGE_SIZE,
+    MAX_WRITE_BATCH_SIZE,
+    _register,
+)
 
 
 @_register("hello", "ismaster", "isMaster")
@@ -97,7 +96,9 @@ def _cmd_get_log(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) ->
 
 
 @_register("getFreeMonitoringStatus", help="Report the state of free monitoring")
-def _cmd_free_monitoring(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -> ResponseDoc:
+def _cmd_free_monitoring(
+    ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences
+) -> ResponseDoc:
     return {"state": ctx.free_monitoring.state, "ok": 1.0}
 
 

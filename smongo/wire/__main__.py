@@ -7,7 +7,9 @@ from . import WireServer
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="smongo wire protocol server -- Small MongoDB, real protocol")
+    parser = argparse.ArgumentParser(
+        description="smongo wire protocol server -- Small MongoDB, real protocol"
+    )
     parser.add_argument(
         "--db-path",
         default="local_wt_data",
@@ -21,7 +23,9 @@ def main() -> None:
     level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(level=level, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
-    print(f"smongo wire server on {args.host}:{args.port}  (db: {args.db_path})  -- small but mighty")
+    print(
+        f"smongo wire server on {args.host}:{args.port}  (db: {args.db_path})  -- small but mighty"
+    )
     server = WireServer(args.db_path, args.host, args.port)
     server.serve_forever()
 

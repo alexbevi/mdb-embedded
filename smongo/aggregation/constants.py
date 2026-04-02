@@ -7,7 +7,8 @@ import os
 import sys
 import tempfile
 from collections import defaultdict
-from typing import Any, Iterator
+from collections.abc import Iterator
+from typing import Any
 
 DEFAULT_MAX_PIPELINE_DOCS = 100_000
 MAX_PIPELINE_STAGES = 50
@@ -58,6 +59,7 @@ def _iter_jsonl_file(path: str) -> Iterator[dict[str, Any]]:
 
 class _KeyedDoc:
     """Wrapper for heapq comparison that uses (key, tiebreaker) ordering."""
+
     __slots__ = ("doc", "key", "tie")
 
     def __init__(self, doc: dict[str, Any], key: Any, tie: int) -> None:
@@ -97,7 +99,7 @@ class DiskSpillSorter:
             return docs
 
         for i in range(0, len(docs), self._CHUNK_SIZE):
-            chunk = docs[i:i + self._CHUNK_SIZE]
+            chunk = docs[i : i + self._CHUNK_SIZE]
             chunk.sort(key=self._key_fn, reverse=self._reverse)
             path = _write_chunk_to_file(chunk)
             self._tmpfiles.append(path)
@@ -110,9 +112,7 @@ class DiskSpillSorter:
 
     def _merge_files(self) -> Iterator[dict[str, Any]]:
         """K-way merge across all temp files using a heap."""
-        iters: list[Iterator[dict[str, Any]]] = [
-            _iter_jsonl_file(p) for p in self._tmpfiles
-        ]
+        iters: list[Iterator[dict[str, Any]]] = [_iter_jsonl_file(p) for p in self._tmpfiles]
 
         if self._reverse:
             yield from self._merge_reverse(iters)
@@ -136,7 +136,7 @@ class DiskSpillSorter:
 
     def _merge_reverse(self, iters: list[Iterator[dict[str, Any]]]) -> Iterator[dict[str, Any]]:
         """Max-heap merge for reverse (descending) sorts."""
-        heap: list[_KeyedDoc] = []
+        heap: list[_NegKeyedDoc] = []
         for idx, it in enumerate(iters):
             doc = next(it, None)
             if doc is not None:
@@ -167,6 +167,7 @@ class DiskSpillSorter:
 
 class _NegKeyedDoc:
     """Inverted comparison wrapper for max-heap emulation via heapq (min-heap)."""
+
     __slots__ = ("inner",)
 
     def __init__(self, inner: _KeyedDoc) -> None:
@@ -198,7 +199,11 @@ class DiskSpillGrouper:
 
     def add(self, key: Any, doc: dict[str, Any]) -> None:
         """Buffer a document under its group key."""
-        str_key = json.dumps(key, sort_keys=True, default=str) if isinstance(key, (dict, list)) else str(key)
+        str_key = (
+            json.dumps(key, sort_keys=True, default=str)
+            if isinstance(key, dict | list)
+            else str(key)
+        )
         self._buckets[str_key].append(doc)
         self._total_buffered += 1
         if self._total_buffered >= self._FLUSH_THRESHOLD:

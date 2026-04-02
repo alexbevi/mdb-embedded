@@ -54,7 +54,7 @@ except ImportError:
 try:
     import zstandard as _zstd
 except ImportError:
-    _zstd = None  # type: ignore[assignment]
+    _zstd = None
 
 
 class ProtocolError(Exception):
@@ -190,6 +190,7 @@ def encode_reply(
 
 # -- OP_COMPRESSED (opcode 2012) -------------------------------------------
 
+
 def decode_compressed(data: bytes | bytearray) -> bytes:
     """Decode an OP_COMPRESSED message and return the decompressed inner message.
 
@@ -204,7 +205,7 @@ def decode_compressed(data: bytes | bytearray) -> bytes:
     offset += 4
     compressor_id = data[offset]
     offset += 1
-    compressed_data = data[offset:header.length]
+    compressed_data = data[offset : header.length]
 
     decompressed = _decompress(compressor_id, compressed_data, uncompressed_size)
 
@@ -229,13 +230,12 @@ def encode_compressed(data: bytes, compressor_id: int) -> bytes:
     payload += compressed
 
     length = HEADER_SIZE + len(payload)
-    out_header = struct.pack(
-        "<iiii", length, header.request_id, header.response_to, OP_COMPRESSED
-    )
+    out_header = struct.pack("<iiii", length, header.request_id, header.response_to, OP_COMPRESSED)
     return out_header + payload
 
 
 # -- compression helpers ---------------------------------------------------
+
 
 def _decompress(compressor_id: int, data: bytes | bytearray, expected_size: int) -> bytes:
     if expected_size < 0 or expected_size > MAX_MSG_SIZE:
@@ -256,15 +256,13 @@ def _decompress(compressor_id: int, data: bytes | bytearray, expected_size: int)
     if compressor_id == COMPRESSOR_ZLIB:
         result = zlib.decompress(data, zlib.MAX_WBITS, expected_size)
         if len(result) != expected_size:
-            raise ProtocolError(
-                f"zlib decompressed size {len(result)} != declared {expected_size}"
-            )
-        return result
+            raise ProtocolError(f"zlib decompressed size {len(result)} != declared {expected_size}")
+        return bytes(result)
     if compressor_id == COMPRESSOR_ZSTD:
         if _zstd is None:
             raise ProtocolError("zstd compression not available (install zstandard)")
         reader = _zstd.ZstdDecompressor()
-        return reader.decompress(data, max_output_size=expected_size)
+        return bytes(reader.decompress(data, max_output_size=expected_size))
     raise ProtocolError(f"unknown compressor id: {compressor_id}")
 
 
@@ -281,7 +279,7 @@ def _compress(compressor_id: int, data: bytes) -> bytes:
         if _zstd is None:
             raise ProtocolError("zstd compression not available")
         compressor = _zstd.ZstdCompressor()
-        return compressor.compress(data)
+        return bytes(compressor.compress(data))
     raise ProtocolError(f"unknown compressor id: {compressor_id}")
 
 
@@ -297,6 +295,7 @@ def available_compressors() -> list[str]:
 
 # -- CRC-32C helpers -------------------------------------------------------
 
+
 def _validate_checksum(data: bytes | bytearray, msg_length: int) -> None:
     """Validate the trailing CRC-32C checksum of an OP_MSG.
 
@@ -308,9 +307,7 @@ def _validate_checksum(data: bytes | bytearray, msg_length: int) -> None:
     expected = struct.unpack_from("<I", data, msg_length - 4)[0]
     actual = _crc32c(bytes(msg_body))
     if actual != expected:
-        raise ChecksumMismatch(
-            f"CRC-32C mismatch: expected {expected:#010x}, got {actual:#010x}"
-        )
+        raise ChecksumMismatch(f"CRC-32C mismatch: expected {expected:#010x}, got {actual:#010x}")
 
 
 def _compute_checksum(data: bytes | bytearray) -> int:

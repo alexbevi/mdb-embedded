@@ -15,7 +15,6 @@ import tempfile
 
 from smongo import MongoClient
 
-
 PEOPLE = [
     {
         "name": "Alice Chen",
@@ -178,18 +177,24 @@ def _run(people) -> None:
 
     # ── Combining operators: complex compound query ─────────
     print("\n── complex: active, age>30, led a project for 10+ months ──")
-    for d in people.find({
-        "active": True,
-        "age": {"$gt": 30},
-        "projects": {"$elemMatch": {"role": "lead", "months": {"$gte": 10}}},
-    }):
-        lead_projects = [p["name"] for p in d["projects"] if p["role"] == "lead" and p["months"] >= 10]
+    for d in people.find(
+        {
+            "active": True,
+            "age": {"$gt": 30},
+            "projects": {"$elemMatch": {"role": "lead", "months": {"$gte": 10}}},
+        }
+    ):
+        lead_projects = [
+            p["name"] for p in d["projects"] if p["role"] == "lead" and p["months"] >= 10
+        ]
         print(f"  {d['name']:20s}  age={d['age']}  leads={lead_projects}")
 
     # ── Dot-notation into nested docs ─────────────────────────
     print("\n── dot-notation: address.zip starts with '1' (NYC area) ──")
     for d in people.find({"address.zip": {"$regex": "^1"}}):
-        print(f"  {d['name']:20s}  {d['address']['city']}, {d['address']['state']} {d['address']['zip']}")
+        print(
+            f"  {d['name']:20s}  {d['address']['city']}, {d['address']['state']} {d['address']['zip']}"
+        )
 
     print()
 

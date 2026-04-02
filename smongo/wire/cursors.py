@@ -16,9 +16,20 @@ MAX_WRITE_BATCH_SIZE = 100_000
 
 
 class _CursorState:
-    __slots__ = ("batch_size", "change_stream", "created_at", "docs", "last_accessed", "ns", "offset", "tailable")
+    __slots__ = (
+        "batch_size",
+        "change_stream",
+        "created_at",
+        "docs",
+        "last_accessed",
+        "ns",
+        "offset",
+        "tailable",
+    )
 
-    def __init__(self, ns: str, docs: list[Any], offset: int, batch_size: int, *, change_stream: Any = None) -> None:
+    def __init__(
+        self, ns: str, docs: list[Any], offset: int, batch_size: int, *, change_stream: Any = None
+    ) -> None:
         self.ns = ns
         self.docs = docs
         self.offset = offset
@@ -61,7 +72,9 @@ class CursorRegistry:
         if self._reaper_thread:
             self._reaper_thread.join(timeout=2)
 
-    def create(self, ns: str, docs: list[Any], batch_size: int | None = None) -> tuple[int, list[Any]]:
+    def create(
+        self, ns: str, docs: list[Any], batch_size: int | None = None
+    ) -> tuple[int, list[Any]]:
         """Register docs and return (cursor_id, first_batch).
 
         If all docs fit in one batch, cursor_id is 0 (exhausted).
@@ -124,7 +137,9 @@ class CursorRegistry:
             self._cursors[cursor_id] = _CursorState(ns, [], 0, bs, change_stream=stream)
         return cursor_id
 
-    def get_more_change_stream(self, cursor_id: int, batch_size: int | None = None, max_await_ms: int = 1000) -> tuple[int | None, list[Any] | None]:
+    def get_more_change_stream(
+        self, cursor_id: int, batch_size: int | None = None, max_await_ms: int = 1000
+    ) -> tuple[int | None, list[Any] | None]:
         """Drain pending events from a change-stream cursor."""
         with self._lock:
             state = self._cursors.get(cursor_id)

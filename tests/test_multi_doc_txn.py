@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import threading
-
 import pytest
 
 from smongo.storage import LocalClient
-from smongo.storage.transaction import TransactionSession, get_active_txn_session, _txn_state
+from smongo.storage.transaction import TransactionSession, _txn_state, get_active_txn_session
 
 
 @pytest.fixture
