@@ -74,6 +74,7 @@ module = [
     "wiredtiger",
     "crc32c",
     "snappy",
+    "zstandard",
     "usearch.*",
 ]
 ignore_missing_imports = true
