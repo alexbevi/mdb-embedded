@@ -54,7 +54,7 @@ except ImportError:
 try:
     import zstandard as _zstd
 except ImportError:
-    _zstd = None
+    _zstd = None  # type: ignore[assignment]
 
 
 class ProtocolError(Exception):

@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from .collection import LocalCollection, TTLReaper
+from .._compat import WTError as _WTError
+from .collection import _TTL_DELETE_BATCH_SIZE, LocalCollection, TTLReaper
 from .engine import LocalClient, LocalDB
 from .locking import ReadWriteLock
 from .results import DeleteResult, InsertResult, UpdateResult
@@ -29,6 +30,7 @@ def __getattr__(name: str) -> Any:
 
 
 __all__ = [
+    "_TTL_DELETE_BATCH_SIZE",
     "BulkWriteResult",
     "DeleteResult",
     "InsertResult",
@@ -40,5 +42,6 @@ __all__ = [
     "TTLReaper",
     "TransactionSession",
     "UpdateResult",
+    "_WTError",
     "get_active_txn_session",
 ]

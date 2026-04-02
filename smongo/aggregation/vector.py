@@ -9,12 +9,12 @@ from ..query import compile_query, get_value
 try:
     import numpy as _np
 except ImportError:  # pragma: no cover - numpy is expected in normal runtime
-    _np = None
+    _np = None  # type: ignore[assignment]
 
 try:
     from usearch.index import Index as _USearchIndex
 except ImportError:  # pragma: no cover - optional fast backend
-    _USearchIndex = None
+    _USearchIndex = None  # type: ignore[assignment, misc]
 
 
 def _vector_search_numpy(

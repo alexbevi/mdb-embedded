@@ -27,7 +27,7 @@ from .profiler import (
     Profiler,
     TopStats,
 )
-from .sessions import SessionRegistry
+from .sessions import SessionRegistry, TooManySessions  # noqa: F401
 from .transactions import (
     SessionTransaction,
     TransactionError,

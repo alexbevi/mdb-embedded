@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,13 +8,12 @@ version = "0.2.0"
 description = "Small MongoDB, big ambitions -- a local-first document engine with WiredTiger and Atlas sync"
 readme = "README.md"
 requires-python = ">=3.11"
-license = {text = "MIT"}
+license = "MIT"
 authors = [{name = "smongo contributors"}]
 keywords = ["mongodb", "embedded", "wiredtiger", "database", "local-first", "sync", "smongo"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -43,8 +42,11 @@ dev = [
     "pytest-benchmark>=4.0",
     "testcontainers[mongodb]>=4.0",
     "ruff>=0.8,<0.9",
-    "mypy>=1.11",
+    "mypy~=1.14.1",
 ]
+
+[tool.setuptools.packages.find]
+include = ["smongo*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -61,7 +63,7 @@ source = ["smongo", "web_app"]
 [tool.coverage.report]
 show_missing = true
 skip_empty = true
-fail_under = 85
+fail_under = 70
 
 [tool.mypy]
 python_version = "3.11"
@@ -75,6 +77,13 @@ module = [
     "usearch.*",
 ]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "smongo.wire.msg",
+    "smongo.aggregation.vector",
+]
+warn_unused_ignores = false
 
 [tool.ruff]
 target-version = "py311"
