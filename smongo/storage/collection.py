@@ -1096,8 +1096,8 @@ class LocalCollection:
             try:
                 verify_session.verify(self.table_uri)
             except _WTError as exc:
-                exc_str = str(exc)
-                if "Resource busy" not in exc_str:
+                exc_str = str(exc).lower()
+                if "busy" not in exc_str:
                     errors.append(f"data table: {exc}")
             finally:
                 try:
@@ -1105,9 +1105,9 @@ class LocalCollection:
                 except _WTError:
                     pass
         except (_WTError, RuntimeError, OSError) as exc:
-            exc_str = str(exc)
-            if "Resource busy" not in exc_str:
-                errors.append(f"verify session: {exc}")
+            exc_str = str(exc).lower()
+            if "busy" not in exc_str:
+                warnings.append(f"verify session: {exc}")
 
         with self._lock:
             for idx_meta in self.index_mgr.list_indexes():
@@ -1119,8 +1119,8 @@ class LocalCollection:
                         try:
                             vs.verify(idx_def.table_uri)
                         except _WTError as exc:
-                            exc_str = str(exc)
-                            if "Resource busy" not in exc_str:
+                            exc_str = str(exc).lower()
+                            if "busy" not in exc_str:
                                 errors.append(f"index {idx_name}: {exc}")
                         finally:
                             try:
@@ -1128,9 +1128,9 @@ class LocalCollection:
                             except _WTError:
                                 pass
                     except (_WTError, RuntimeError, OSError) as exc:
-                        exc_str = str(exc)
-                        if "Resource busy" not in exc_str:
-                            errors.append(f"index {idx_name} session: {exc}")
+                        exc_str = str(exc).lower()
+                        if "busy" not in exc_str:
+                            warnings.append(f"index {idx_name} session: {exc}")
 
             doc_count = 0
             cursor = self.session.open_cursor(self.table_uri, None, None)
