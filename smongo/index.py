@@ -8,121 +8,33 @@ us O(log n) lookups, range scans, and ordered iteration.
 Supports standard, unique, sparse, TTL, text, hashed, partial, and wildcard indexes.
 """
 
-import hashlib
 import json
-import re
-import struct
-import unicodedata
 from typing import Any
+
+from smongo._smongo_core import (
+    DuplicateKeyError,
+    encode_index_key,
+    encode_index_key_prefix,
+)
+from smongo._smongo_core import (
+    invert_encoded as _invert_encoded,
+)
+from smongo._smongo_core import (
+    rs_flatten_doc as _flatten_doc,
+)
+from smongo._smongo_core import (
+    rs_hash_value as _hash_value,
+)
+from smongo._smongo_core import (
+    rs_tokenize as _tokenize,
+)
+from smongo._smongo_core import (
+    sortable_encode as _sortable_encode,
+)
 
 from ._compat import WTError as _WTError
 from ._types import Document, Filter
-from .objectid import ObjectId
 from .query import compile_query, get_value
-
-_HEX_INVERT = str.maketrans("0123456789abcdef", "fedcba9876543210")
-
-
-class DuplicateKeyError(Exception):
-    """Raised when an insert or update violates a unique index constraint."""
-
-
-# ------------------------------------------------------------------
-# Sortable key encoding
-# ------------------------------------------------------------------
-# Type prefixes ensure cross-type ordering: None < Number < String < Bool
-# Within numbers, IEEE 754 double with sign-bit flip gives correct order.
-# Everything is hex-encoded so keys are valid C strings (no null bytes).
-
-
-def _sortable_encode(value: Any) -> str:
-    """Encode a single value into a lexicographically sortable hex string."""
-    if value is None:
-        return "00"
-    if isinstance(value, ObjectId):
-        return "15" + str(value)
-    if isinstance(value, bool):
-        return "30" if not value else "31"
-    if isinstance(value, int | float):
-        packed = struct.pack(">d", float(value))
-        b = bytearray(packed)
-        if b[0] & 0x80:  # negative: invert all bits
-            b = bytearray(~x & 0xFF for x in b)
-        else:  # non-negative: flip sign bit
-            b[0] ^= 0x80
-        return "1" + b.hex()
-    if isinstance(value, str):
-        return "2" + value.encode("utf-8").hex()
-    return "2" + json.dumps(value, sort_keys=True).encode("utf-8").hex()
-
-
-def _invert_encoded(s: str) -> str:
-    """Invert a hex-encoded key to reverse sort order (for descending indexes)."""
-    return s.translate(_HEX_INVERT)
-
-
-def encode_index_key(field_values: list[Any], doc_id: str, directions: list[int]) -> str:
-    """
-    Build a composite B-Tree key from field values, doc _id, and sort directions.
-    The key is a pipe-separated sequence of encoded segments.
-    """
-    parts: list[str] = []
-    for val, direction in zip(field_values, directions):
-        encoded = _sortable_encode(val)
-        if direction == -1:
-            encoded = _invert_encoded(encoded)
-        parts.append(encoded)
-    parts.append(doc_id)
-    return "|".join(parts)
-
-
-def encode_index_key_prefix(field_values: list[Any], directions: list[int]) -> str:
-    """Encode just the field values (no _id), for prefix matching."""
-    parts: list[str] = []
-    for val, direction in zip(field_values, directions):
-        encoded = _sortable_encode(val)
-        if direction == -1:
-            encoded = _invert_encoded(encoded)
-        parts.append(encoded)
-    return "|".join(parts) + "|"
-
-
-# ------------------------------------------------------------------
-# Text tokenizer
-# ------------------------------------------------------------------
-
-_WORD_RE = re.compile(r"[a-zA-Z0-9]+")
-
-
-def _tokenize(text: str) -> list[str]:
-    """Tokenize a string for text search: lowercase + normalize + split on non-alphanum."""
-    text = unicodedata.normalize("NFKD", text)
-    return [w.lower() for w in _WORD_RE.findall(text)]
-
-
-def _hash_value(value: Any) -> str:
-    """Deterministic hash of a BSON-ish value for hashed indexes."""
-    raw = json.dumps(value, sort_keys=True, default=str).encode("utf-8")
-    return hashlib.md5(raw).hexdigest()
-
-
-def _flatten_doc(doc: Document, prefix: str = "") -> list[tuple[str, Any]]:
-    """Flatten a document into a list of (dot-path, leaf-value) pairs."""
-    result: list[tuple[str, Any]] = []
-    for k, v in doc.items():
-        path = f"{prefix}.{k}" if prefix else k
-        if isinstance(v, dict):
-            result.extend(_flatten_doc(v, path))
-        elif isinstance(v, list):
-            for i, item in enumerate(v):
-                if isinstance(item, dict):
-                    result.extend(_flatten_doc(item, f"{path}.{i}"))
-                else:
-                    result.append((path, item))
-        else:
-            result.append((path, v))
-    return result
-
 
 # ------------------------------------------------------------------
 # Index definition
@@ -235,6 +147,12 @@ class IndexManager:
             if d == "hashed":
                 idx_type = "hashed"
                 break
+            if d in ("2dsphere", "2d"):
+                raise NotImplementedError(
+                    f"{d} indexes are planned but not yet implemented; "
+                    "$geoNear aggregation works without an index. "
+                    "See WHATSNEXT.md for the geospatial roadmap."
+                )
             if _f == "$**":
                 idx_type = "wildcard"
                 break

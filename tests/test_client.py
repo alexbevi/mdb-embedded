@@ -13,17 +13,11 @@ class TestMongoClient:
         assert client.mode == "local"
         assert client.get_local_client() is not None
 
-    def test_local_empty_path_defaults(self, monkeypatch):
-        captured = {}
-
-        class FakeLocalClient:
-            def __init__(self, db_path, **kwargs):
-                captured["db_path"] = db_path
-
-        monkeypatch.setattr(client_mod, "LocalClient", FakeLocalClient)
+    def test_local_empty_path_defaults(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         client = MongoClient("local://")
         assert client.mode == "local"
-        assert captured["db_path"] == "local_wt_data"
+        client.close()
 
     def test_get_db(self, tmp_path):
         client = MongoClient(f"local://{tmp_path}/wt")

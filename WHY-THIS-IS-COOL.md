@@ -123,7 +123,7 @@ This isn't a nice-to-have. It's what prevents data corruption in concurrent, cra
 
 Most embedded databases materialize every matching document into a list, even when you only need the first one. A `find_one()` on a million-document collection deserializes a million BSON blobs just to return `[0]`.
 
-smongo's read path is **streaming**. `Collection.find()` returns a `Cursor` backed by a `StreamingCursor` that pulls documents from WiredTiger one at a time:
+smongo's read path is **streaming**. `Collection.find()` returns a `Cursor` backed by a `RustStreamingCursor` that pulls documents from WiredTiger one at a time:
 
 - `find({}).limit(10)` → deserializes **exactly 10** BSON documents, not the entire collection
 - `find_one({"city": "NYC"})` → deserializes **exactly 1** document, then stops
@@ -205,9 +205,9 @@ This matters for edge deployments where you can't trust the input source. The sc
 
 ---
 
-## 13. Runtime dependencies (no MongoDB server)
+## 13. Minimal Runtime Dependencies
 
-Only two runtime dependencies: **WiredTiger** for storage and **PyMongo** for BSON encoding. **No running MongoDB server** is required.
+Three runtime components: **WiredTiger** for storage, **PyMongo** for BSON encoding, and the compiled **Rust extension** (`_smongo_core` via PyO3/maturin) that provides the performance-critical engine. **No running MongoDB server** is required.
 
 For local-only mode:
 
@@ -222,7 +222,7 @@ Add `flask` for the dashboard. Add `numpy` and `usearch` for vector search. Sync
 
 ---
 
-## 14. 960+ Tests Across Every Layer
+## 14. 1,090 Tests Across Every Layer
 
 The test suite covers the full stack:
 
@@ -230,7 +230,7 @@ The test suite covers the full stack:
 |---|---|---|
 | `test_query.py` | Query compilation, all operators, dot-notation, update engine, expressions |
 | `test_storage.py` | CRUD, transactions, thread safety, BSON roundtrip, TTL, find_one_and_* |
-| `test_streaming.py` | StreamingCursor (all plan types), lazy Cursor, find_one, count, islice, parity |
+| `test_streaming.py` | RustStreamingCursor (all plan types), lazy Cursor, find_one, count, islice, parity |
 | `test_index.py` | Key encoding, index CRUD, query planner scoring, index scan execution |
 | `test_aggregation.py` | All 25+ stages, cursor chaining, projection, multi-stage pipelines |
 | `test_oplog.py` | Append, read, compaction, change streams |
@@ -239,8 +239,16 @@ The test suite covers the full stack:
 | `test_objectid.py` | Construction, parsing, timestamp extraction, ordering |
 | `test_schema.py` | All $jsonSchema constraints |
 | `test_wire_*.py` | Message framing, 80+ commands, cursor batching, BSON codec, PyMongo integration |
+| `test_auth.py` / `test_rbac.py` | TLS, SCRAM-SHA-256, RBAC roles, auth gate, user persistence |
+| `test_audit.py` | Audit logging, JSON format, auth event capture |
 
 Plus integration tests against real MongoDB via Docker and benchmark suites for performance regression.
+
+---
+
+## 15. Free-Threaded Python Ready
+
+smongo's Rust extension is compatible with CPython 3.13t (free-threaded, no GIL). The module declares `#[pymodule(gil_used = false)]`, all Python-valued caches use `PyOnceLock` (deadlock-free under stop-the-world events), and all `unsafe impl Send/Sync` blocks document Rust-native synchronization rather than relying on the GIL. This means smongo can take advantage of true multi-threaded Python execution as the ecosystem moves beyond the GIL.
 
 ---
 

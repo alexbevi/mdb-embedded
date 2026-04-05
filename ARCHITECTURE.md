@@ -30,18 +30,18 @@ The result is not a mock. It is not SQLite pretending to be Mongo. It is **Wired
 │                                                                      │
 │  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────┐ │
 │  │ MQL Compiler │  │ Query Planner │  │  Aggregation │  │  Schema  │ │
-│  │ query/       │  │ index.py      │  │  Pipeline    │  │ Validator│ │
-│  │              │  │               │  │  aggregation/│  │ schema.py│ │
-│  │ compile_query│  │ plan()        │  │              │  │          │ │
-│  │ apply_update │  │ score_index() │  │              │  │ $json    │ │
-│  │ resolve_expr │  │ execute_scan()│  │  25+ stages  │  │ Schema   │ │
+│  │ Rust +       │  │ RustQuery-    │  │  Pipeline    │  │ Validator│ │
+│  │ query/ shims │  │ Planner       │  │  aggregation/│  │ schema.rs│ │
+│  │              │  │               │  │              │  │          │ │
+│  │ compile_query│  │ plan()        │  │              │  │ $json    │ │
+│  │ apply_update │  │ score_index() │  │  25+ stages  │  │ Schema   │ │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └────┬─────┘ │
 │         │                 │                  │               │       │
 │         ▼                 ▼                  ▼               ▼       │
 │  ┌──────────────────────────────────────────────────────────────────┐│
-│  │                    Storage Layer (storage/)                     ││
+│  │                    Storage Layer (Rust via PyO3)                 ││
 │  │                                                                  ││
-│  │  LocalClient → LocalDB → LocalCollection                        ││
+│  │  RustLocalClient → RustLocalDB → RustLocalCollection             ││
 │  │      │              │            │                               ││
 │  │      │              │            ├── Data Table: table:{db}_{col}││
 │  │      │              │            ├── Oplog Table: table:__oplog_ ││
@@ -80,6 +80,8 @@ The result is not a mock. It is not SQLite pretending to be Mongo. It is **Wired
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
+WiredTiger work in the oplog, admin commands, and storage layer uses typed `RustWtSession` / `RustWtCursor` borrow via `pub(crate)` Rust methods, not per-operation Python method dispatch on the PyO3 cursor wrapper.
+
 ---
 
 ## 1. WiredTiger: The Same Engine That Powers MongoDB
@@ -92,7 +94,7 @@ This is not "MongoDB-like" storage. This **is** MongoDB's storage.
 
 ### Table Architecture
 
-The data table uses `key_format=S, value_format=u` — string keys mapping to **raw BSON bytes**. Documents are encoded via `bson.encode()` (PyMongo's C-optimized codec) and decoded via `bson.decode()`. This preserves MongoDB type fidelity (int32 vs int64 vs double, ObjectId, datetime, etc.) and avoids the serialization overhead of JSON. Oplog and index metadata tables remain `key_format=S, value_format=S` (JSON strings) for debuggability.
+The data table uses `key_format=S, value_format=u` — string keys mapping to **raw BSON bytes**. Documents are encoded via `bson.encode()` (PyMongo's C-optimized codec) and decoded via `bson.decode()`. The wire protocol path uses a single-pass raw BSON codec in Rust (`raw_bson.rs`) that bypasses PyMongo entirely. This preserves MongoDB type fidelity (int32 vs int64 vs double, ObjectId, datetime, etc.) and avoids the serialization overhead of JSON. Oplog and index metadata tables remain `key_format=S, value_format=S` (JSON strings) for debuggability.
 
 ```
 WiredTiger Data Directory
@@ -103,9 +105,9 @@ WiredTiger Data Directory
 └── table:__sync_checkpoint              # Sync progress markers
 ```
 
-Each `LocalCollection` opens its own WiredTiger **session** (from the shared connection) and protects it with a **per-collection `ReadWriteLock` + `threading.Lock`**:
+Each `RustLocalCollection` opens its own WiredTiger **session** (from the shared connection) and protects it with a **per-collection `ReadWriteLock`**:
 
-- **Thread safety**: A `ReadWriteLock` allows concurrent readers while serializing writers. An inner `threading.Lock` protects WiredTiger session cursor operations. `LocalDB` also holds a lock protecting its `_collections` dict.
+- **Thread safety**: A Rust `ReadWriteLock` (GIL-independent `Mutex`+`Condvar`) allows concurrent readers while serializing writers. `RustLocalDB` holds a `Mutex`-guarded collection cache.
 - **Isolation**: Each collection's cursor operations don't interfere with others.
 - **Crash safety**: WiredTiger's checkpointing ensures data survives process crashes.
 - **B-tree ordering**: Primary keys are stored in sorted order, enabling efficient range scans.
@@ -114,7 +116,7 @@ Each `LocalCollection` opens its own WiredTiger **session** (from the shared con
 
 Every write — insert, update, delete — is wrapped in a **WiredTiger transaction** that ensures atomicity across the data table, all affected index tables, and the oplog. If any step fails (e.g. a unique index violation during update), the entire transaction is rolled back cleanly.
 
-For updates and deletes, the **query planner accelerates document matching**: the new `_find_matching_docs(query)` method reuses the same `QueryPlanner` that powers `find()` — using `pk_lookup` (O(log n) by `_id`), `index_scan` (O(log n + k) via B-tree range), or `collection_scan` (O(n) fallback) — so that writes against indexed fields never scan the entire collection.
+For updates and deletes, the **query planner accelerates document matching**: `RustQueryPlanner` reuses the same plan scoring that powers `find()` -- using `pk_lookup` (O(log n) by `_id`), `index_scan` (O(log n + k) via B-tree range), or `collection_scan` (O(n) fallback) -- so that writes against indexed fields never scan the entire collection.
 
 ```
 Application write
@@ -165,15 +167,15 @@ Application: coll.find({"city": "NYC"}).limit(10)
     ▼
 ┌──────────────────────────────────────────┐
 │  Collection.find()  (client.py)          │
-│  → calls LocalCollection.find_streaming()│
+│  → creates RustStreamingCursor            │
 │  → wraps result in Cursor(iterable)      │
 └────────────────┬─────────────────────────┘
                  ▼
 ┌──────────────────────────────────────────┐
-│  StreamingCursor.__iter__()              │
+│  RustStreamingCursor.__iter__()          │
 │                                          │
 │  1. Acquire read lock                    │
-│  2. Consult QueryPlanner.plan(query)     │
+│  2. Consult RustQueryPlanner.plan(query) │
 │  3. Branch on plan_type:                 │
 │     ├── pk_lookup   → single cursor.search(), yield 0-1 docs
 │     ├── index_scan  → walk index B-tree, yield per-id lookup
@@ -195,7 +197,7 @@ Application: coll.find({"city": "NYC"}).limit(10)
 
 **Why this matters**: A `find({}).limit(10)` on a million-document collection deserializes exactly 10 BSON documents. `find_one()` deserializes exactly 1. `count_documents()` iterates the WiredTiger cursor without building a list. The streaming path uses the same query planner as the materialized `find()`, so index scans, PK lookups, and `$or`-union plans all benefit.
 
-The materialized `LocalCollection.find(query) → list[Document]` remains available for internal callers (write paths, wire protocol commands that need the full list for sorting), but the public `Collection.find()` facade and the wire protocol `find` command both use the streaming path.
+The materialized `RustLocalCollection.find(query) → list[Document]` remains available for internal callers (write paths and other code that needs a full list). The public `Collection.find()` facade uses the streaming path above (`RustStreamingCursor` plus Python `Cursor` for sort, skip, limit, and projection). **Wire `find`** does not: the wire command applies sort, skip, limit, and projection in Rust with no Python `Cursor` (see §5 Command Dispatcher).
 
 ### Primary Key Lookups
 
@@ -285,7 +287,7 @@ The winning index's bounds are compiled into WiredTiger-domain keys. The planner
 
 ---
 
-## 3. The MQL Compiler: MongoDB's Query Language in Pure Python
+## 3. The MQL Compiler: MongoDB's Query Language
 
 ### Query Compilation
 
@@ -443,20 +445,26 @@ Users:         usersInfo, rolesInfo, createUser, dropUser, updateUser
 Diagnostic:    currentOp, killOp, top, profile, connPoolStats, lockInfo,
                listCommands, replSetGetConfig, replSetGetStatus
 Sync:          client.sync, setFreeMonitoring, shardingState
-Auth:          saslStart, saslContinue (graceful rejection — embedded mode)
+Auth:          saslStart, saslContinue, connectionStatus (SCRAM-SHA-256 auth + RBAC in RustWireServer)
 ```
+
+**Read-path dispatch:** `find` and `aggregate` are fully handled in Rust: `find` performs sort, skip, limit, and projection without a Python `Cursor`, and `aggregate` calls `aggregate_pipeline` directly. The wire command path therefore has no Python method dispatch for those read operations.
 
 ### BSON Boundary Normalization
 
-The wire layer maintains a clean boundary between the BSON world (drivers) and the JSON world (engine):
+The wire layer maintains a clean boundary between the BSON world (drivers) and the engine world (Python dicts with `smongo.ObjectId`, floats, regex dicts).
 
-**Inbound** (`normalize_inbound`): `bson.ObjectId` → `str`, `Decimal128` → `float`, `Regex` → `{"$regex", "$options"}` dict.
+Since P8, the wire path uses a **single-pass raw BSON codec** (`rust/src/raw_bson.rs`) that converts directly between wire bytes and engine-ready Python dicts -- no intermediate `bson::Document` allocation and no second normalization walk.
 
-**Outbound** (`normalize_outbound`): 24-character hex string `_id` values → `bson.ObjectId` for proper BSON encoding on the wire.
+**Decode (wire bytes → engine):** `raw_decode_document` parses BSON bytes inline: `ObjectId` → `smongo.ObjectId`, `DateTime` → Python `datetime`, `Decimal128` → `float`, `Regex` → `{"$regex", "$options"}` dict.
+
+**Encode (engine → wire bytes):** `raw_encode_document` serializes Python dicts to BSON bytes inline: `smongo.ObjectId` → 12-byte OID, `_id` 24-char hex → ObjectId, `datetime` → BSON DateTime.
+
+The Python-facing `normalize_inbound` / `normalize_outbound` functions in `wire_codec.rs` remain available for the LocalClient path but are no longer called on the wire hot path.
 
 ### Connection Model
 
-Each TCP connection gets its own daemon thread with a private `ConnectionContext`. The server shares a single `LocalClient` (and thus a single WiredTiger connection) and a single `CursorRegistry` across all connections. Cursor IDs are random 63-bit integers with an idle reaper (600s default).
+Each TCP connection gets its own task (Tokio async) with a private `ConnectionContext`. TLS is supported via rustls when `tls_cert_file`/`tls_key_file` are provided. SCRAM-SHA-256 authentication and RBAC are enforced when `auth_required=True`. The server shares a single `RustLocalClient` (and thus a single WiredTiger connection) and a single `CursorRegistry` across all connections. Cursor IDs are random 63-bit integers with an idle reaper (600s default).
 
 The server advertises itself as wire version 0–21, maxBsonObjectSize of 16MB, and maxMessageSizeBytes of 48MB — matching production MongoDB's capabilities.
 
@@ -496,6 +504,8 @@ Every write operation appends a structured entry to the collection's oplog table
 
 The oplog key is `{time_ns:020d}-{uuid4}`, ensuring **lexicographic time ordering** in WiredTiger's B-tree while remaining globally unique.
 
+Oplog read/write (`OplogWriter.log`, `OplogReader.read_all`, and related paths) uses typed `RustWtSession` / `RustWtCursor` borrow for WiredTiger cursor work, bypassing Python method dispatch for all 47 oplog cursor operations. `OplogHub` registers listeners as `Py<ChangeStream>` instead of `Py<PyAny>`.
+
 ### Oplog Compaction
 
 The oplog grows with every mutation. For long-running embedded deployments, unbounded growth is a disk-space and performance problem. The oplog now supports bounded growth:
@@ -503,7 +513,7 @@ The oplog grows with every mutation. For long-running embedded deployments, unbo
 - **`OplogWriter.truncate_before(key)`**: Delete all entries lexicographically before a given key (used by sync after pushing entries to Atlas).
 - **`OplogWriter.truncate_count(max_entries)`**: Keep only the last N entries, deleting the oldest.
 - **`OplogReader.count()`** / **`OplogReader.oldest_key()`**: Monitoring primitives.
-- **`LocalCollection.compact_oplog(keep=1000)`**: Public API for manual compaction.
+- **`RustLocalCollection.compact_oplog(keep=1000)`**: Public API for manual compaction.
 - **Auto-compact after sync push**: When `oplog_auto_compact` is enabled (default), `SyncManager._push()` calls `truncate_before(last_pushed_key)` after each successful push cycle, reclaiming space for entries safely stored in Atlas.
 
 ### Change Streams
@@ -728,7 +738,7 @@ In hybrid mode, the client constructs a `SyncManager` and starts it automaticall
 
 The `Collection` wrapper provides the full MongoDB API surface: `find`, `find_one`, `insert_one`, `insert_many`, `update_one`, `update_many`, `delete_one`, `delete_many`, `find_one_and_update`, `find_one_and_replace`, `find_one_and_delete`, `bulk_write`, `aggregate`, `count_documents`, `watch`, `create_index`, `drop_index`, `list_indexes`, `explain`, `get_oplog`.
 
-In local mode, **`find()` returns a lazy `Cursor`** backed by a `StreamingCursor`. Documents are deserialized from WiredTiger only as the cursor is consumed. **`find_one()`** delegates to `LocalCollection.find_one()` which stops after the first match. **`count_documents()`** delegates to `LocalCollection.count()` which iterates without building a list (and uses `count_fast()` for empty queries to skip BSON deserialization entirely). **`aggregate()`** pulls its input documents from `find_streaming()` rather than `get_all()`.
+In local mode, **`find()` returns a lazy `Cursor`** backed by a `RustStreamingCursor`. Documents are deserialized from WiredTiger only as the cursor is consumed. **`find_one()`** delegates to `RustLocalCollection.find_one()` which stops after the first match. **`count_documents()`** delegates to `RustLocalCollection.count()` which iterates without building a list. **`aggregate()`** pulls its input documents lazily via streaming cursors rather than materializing everything into memory.
 
 `bulk_write` accepts a list of operation descriptors (`InsertOne`, `UpdateOne`, `UpdateMany`, `DeleteOne`, `DeleteMany`, `ReplaceOne`) and executes them in order (or unordered), returning a `BulkWriteResult` with `inserted_count`, `matched_count`, `modified_count`, and `deleted_count`.
 
@@ -797,12 +807,13 @@ smongo/
 │                         #   ReplaceOne, BulkWriteResult
 ├── client.py             # MongoClient (local/remote/hybrid), Database, Collection,
 │                         #   streaming find/find_one/count, bulk_write, find_one_and_*
-├── storage/              # WiredTiger storage engine package
-│   ├── engine.py         #   LocalClient, LocalDB
-│   ├── collection.py     #   LocalCollection (CRUD, txns, streaming find_one/count)
-│   ├── locking.py        #   ReadWriteLock
+├── _smongo_core/         # Compiled Rust extension (PyO3) -- the actual engine
+├── storage/              # Runtime helpers used by the Rust engine
+│   ├── engine.py         #   LocalClient/LocalDB (Python interface, delegates to Rust)
+│   ├── collection.py     #   TTLReaper (used by RustLocalCollection)
+│   ├── locking.py        #   ReadWriteLock (Python fallback; runtime uses Rust)
 │   ├── results.py        #   InsertResult, UpdateResult, DeleteResult
-│   ├── streaming.py      #   StreamingCursor (all plan types: PK, index, $in, or_union, scan)
+│   ├── streaming.py      #   StreamingCursor (Python fallback; runtime uses RustStreamingCursor)
 │   └── helpers.py        #   BSON encode/decode helpers
 ├── query/                # MQL compiler package
 │   ├── compiler.py       #   compile_query, query operators
@@ -815,7 +826,7 @@ smongo/
 │   ├── joins.py          #   $lookup, $graphLookup, $unionWith
 │   ├── output.py         #   $facet, $out, $merge
 │   └── vector.py         #   $vectorSearch (NumPy / USearch)
-├── index.py              # IndexManager, QueryPlanner, key encoding, DuplicateKeyError
+├── index.py              # Index key encoding, helpers, DuplicateKeyError (runtime: RustIndexManager, RustQueryPlanner)
 ├── oplog.py              # OplogWriter (with compaction), OplogReader, ChangeStream
 ├── sync.py               # SyncManager, conflict resolvers, checkpoint persistence,
 │                         #   metrics, exponential backoff, selective sync filters
@@ -839,6 +850,6 @@ smongo/
     ├── sessions.py       #   SessionRegistry
     ├── transactions.py   #   Transaction state, undo journal
     ├── profiler.py       #   Profiler, OpTracker, TopStats
-    ├── bson_codec.py     #   BSON ↔ JSON normalization at the wire boundary
+    ├── bson_codec.py     #   BSON ↔ engine type normalization (LocalClient path; wire path uses raw_bson.rs)
     └── errors.py         #   Mongo-compatible error response formatting
 ```

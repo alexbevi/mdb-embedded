@@ -6,10 +6,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsnappy-dev liblz4-dev libzstd-dev zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Rust toolchain (needed to compile the PyO3 extension via maturin)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
 WORKDIR /app
 
 COPY pyproject.toml requirements.txt ./
+COPY rust/ rust/
 COPY smongo/ smongo/
+COPY LICENSE LICENSE
 RUN pip install --no-cache-dir -e ".[web]"
 
 COPY templates/ templates/

@@ -1,39 +1,8 @@
-from __future__ import annotations
+"""Read-write lock for collection-level concurrency.
 
-import threading
+Implementation lives in Rust (_smongo_core); this module re-exports it.
+"""
 
+from smongo._smongo_core import ReadWriteLock
 
-class ReadWriteLock:
-    """Allow concurrent readers, exclusive writers.
-
-    Uses a condition variable so writers wait for readers to drain
-    and readers wait for an active writer to finish.
-    """
-
-    def __init__(self) -> None:
-        self._cond = threading.Condition(threading.Lock())
-        self._readers = 0
-        self._writer = False
-
-    def acquire_read(self) -> None:
-        with self._cond:
-            while self._writer:
-                self._cond.wait()
-            self._readers += 1
-
-    def release_read(self) -> None:
-        with self._cond:
-            self._readers -= 1
-            if self._readers == 0:
-                self._cond.notify_all()
-
-    def acquire_write(self) -> None:
-        with self._cond:
-            while self._writer or self._readers > 0:
-                self._cond.wait()
-            self._writer = True
-
-    def release_write(self) -> None:
-        with self._cond:
-            self._writer = False
-            self._cond.notify_all()
+__all__ = ["ReadWriteLock"]

@@ -155,10 +155,11 @@ class TestLsidOperationTime:
         assert "operationTime" in resp
         assert "$clusterTime" in resp
 
-    def test_no_lsid_no_operation_time(self, ctx):
+    def test_no_lsid_still_has_operation_time(self, ctx):
         resp = dispatch(ctx, {"ping": 1, "$db": "admin"})
         assert resp["ok"] == 1.0
-        assert "operationTime" not in resp
+        assert "operationTime" in resp
+        assert "$clusterTime" in resp
 
     def test_cluster_time_has_signature(self, ctx):
         lsid = {"id": Binary(uuid.uuid4().bytes, subtype=4)}

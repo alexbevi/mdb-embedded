@@ -164,6 +164,8 @@ _HANDLERS[command_name](ctx, body_doc, doc_sequences)
 response_doc → encode_msg() → send over TCP
 ```
 
+**Performance / Rust dispatch:** Wire `find` and `aggregate` bypass the Python aggregation `Cursor` entirely. For `find`, sort, skip, limit, and projection are applied in Rust before the first batch is sent; for `aggregate`, the handler calls the Rust `aggregate_pipeline` directly. Admin and diagnostic paths that touch WiredTiger for metadata, statistics, user tables, and checkpoints likewise use typed Rust borrow on `RustWtSession` / `RustWtCursor` instead of per-call Python method dispatch on WT cursors.
+
 ### Registered Commands (80+)
 
 | Category | Commands |
@@ -219,25 +221,41 @@ This guarantees the wire layer always returns valid BSON -- it never drops a con
 
 ## BSON Boundary Normalization
 
-The wire protocol operates in BSON land (with `bson.ObjectId`, `Decimal128`, `Regex` objects). The embedded engine operates in Python dict land (with string IDs, floats, regex dicts). The `bson_codec.py` module sits at the boundary and translates in both directions.
+The wire protocol operates in BSON land (binary BSON over TCP). The embedded engine operates in Python dict land (with `smongo.ObjectId`, floats, regex dicts). Since P8, a **single-pass raw BSON codec** (`rust/src/raw_bson.rs`) handles the conversion directly between wire bytes and engine-ready Python dicts, without intermediate `bson::Document` allocation.
 
-### Inbound (Wire → Engine)
+### Decode (Wire bytes → Engine dicts)
 
-```
-bson.ObjectId("660a1b2c3d4e5f6789012345") → "660a1b2c3d4e5f6789012345"
-Decimal128("3.14")                         → 3.14
-Regex("^abc", "i")                         → {"$regex": "^abc", "$options": "i"}
-```
-
-### Outbound (Engine → Wire)
+`raw_decode_document` parses BSON binary format byte-by-byte and emits engine types inline:
 
 ```
-_id: "660a1b2c3d4e5f6789012345" (24-char hex) → bson.ObjectId(...)
-_id: "custom_string_id"                         → "custom_string_id" (unchanged)
-_id: 42                                          → 42 (unchanged)
+BSON ObjectId (12 bytes)  → smongo.ObjectId
+BSON DateTime (i64 ms)    → Python datetime.datetime (UTC)
+BSON Decimal128 (16 bytes)→ float
+BSON Regex (two cstrings) → {"$regex": pattern, "$options": flags}
+BSON Int32/Int64/Double   → int / int / float
+BSON String               → str
+BSON Document / Array     → dict / list (recursive)
+BSON Binary               → bytes
 ```
 
-The outbound conversion only promotes `_id` fields that look like ObjectId hex strings (exactly 24 valid hex characters). Non-ObjectId string IDs, integer IDs, and other types pass through unchanged.
+### Encode (Engine dicts → Wire bytes)
+
+`raw_encode_document` serializes Python dicts directly to BSON bytes:
+
+```
+smongo.ObjectId                             → BSON ObjectId (12 bytes)
+_id: "660a1b2c3d4e5f6789012345" (24 hex)   → BSON ObjectId (promoted)
+_id: "custom_string_id"                     → BSON String (unchanged)
+_id: 42                                     → BSON Int32 (unchanged)
+datetime.datetime                           → BSON DateTime
+int (fits i32)                              → BSON Int32
+int (large)                                 → BSON Int64
+float                                       → BSON Double
+```
+
+The outbound `_id` promotion only applies when the value is exactly 24 valid hex characters. All other types pass through unchanged.
+
+The Python-facing `normalize_inbound` / `normalize_outbound` functions remain available in `bson_codec.py` for the LocalClient path but are no longer called on the wire hot path.
 
 ---
 
@@ -250,7 +268,7 @@ The outbound conversion only promotes `_id` fields that look like ObjectId hex s
 │  ┌───────────────┐    ┌───────────────────────────────────┐  │
 │  │ Accept Thread  │    │ Shared State                       │ │
 │  │ (1 per server)│    │                                     │ │
-│  │               │    │  LocalClient (WiredTiger connection) │ │
+│  │               │    │  RustLocalClient (WiredTiger via FFI) │ │
 │  │ Accepts TCP   │    │  CursorRegistry (cross-connection)  │ │
 │  │ connections   │    │  SyncManager (optional)              │ │
 │  └───────┬───────┘    └───────────────────────────────────┘  │
@@ -268,12 +286,12 @@ The outbound conversion only promotes `_id` fields that look like ObjectId hex s
 └──────────────────────────────────────────────────────────────┘
 ```
 
-Each TCP connection spawns a **daemon thread** with its own `ConnectionContext`. The context caches `LocalDB` instances (and thus WiredTiger sessions) for the lifetime of the connection. The server socket has a 1-second timeout on `accept()` so the accept loop checks the shutdown flag regularly.
+Each TCP connection is handled by a Tokio async task with its own `ConnectionContext`. The context caches `RustLocalDB` instances (and thus WiredTiger sessions) for the lifetime of the connection. A `Semaphore` limits concurrent connections.
 
-The server shares a single `LocalClient` and `CursorRegistry` across all connections. Thread safety comes from:
-- Per-collection locks in `LocalCollection`
-- A `threading.Lock` in `CursorRegistry`
-- A `threading.Lock` in `LocalDB` for collection creation
+The server shares a single `RustLocalClient` and `CursorRegistry` across all connections. Thread safety comes from:
+- Per-collection `ReadWriteLock` in `RustLocalCollection`
+- `Mutex`-guarded state in `CursorRegistry`
+- `Mutex`-guarded collection cache in `RustLocalDB`
 
 ---
 

@@ -6,7 +6,6 @@ to prevent echo loops during bidirectional sync.  Supports truncation
 for bounded growth in long-running deployments.
 """
 
-import hashlib
 import json
 import logging
 import threading
@@ -14,36 +13,14 @@ import time
 import uuid
 from typing import Any
 
+from smongo._smongo_core import doc_checksum as _doc_checksum
+from smongo._smongo_core import ejson_default as _ejson_default
+from smongo._smongo_core import ejson_object_hook as _ejson_object_hook
+
 from ._compat import WTError as _WTError
 from ._types import Document, Pipeline
-from .objectid import ObjectId
 
 log = logging.getLogger("smongo.oplog")
-
-
-def _ejson_default(obj: object) -> object:
-    """JSON encoder that preserves ObjectId via ``$oid`` (Extended JSON)."""
-    if isinstance(obj, ObjectId):
-        return {"$oid": str(obj)}
-    return str(obj)
-
-
-def _ejson_object_hook(d: dict[str, Any]) -> dict[str, Any] | ObjectId:
-    """JSON decoder that restores ObjectId from ``{"$oid": ...}``."""
-    if len(d) == 1 and "$oid" in d:
-        try:
-            return ObjectId(d["$oid"])
-        except (ValueError, TypeError):
-            pass
-    return d
-
-
-def _doc_checksum(doc: Document | None) -> str | None:
-    """Stable hash of a document for integrity verification."""
-    if doc is None:
-        return None
-    raw = json.dumps(doc, sort_keys=True, default=str)
-    return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
 class OplogHub:

@@ -700,6 +700,38 @@ class TestResolveExprType:
         assert resolve_expr({}, {"$type": [1, 2]}) == "array"
 
 
+class TestResolveExprMeta:
+    """$meta -- Atlas compatibility for vectorSearchScore, textScore, etc."""
+
+    def test_vector_search_score(self):
+        doc = {"name": "Alice", "_vectorScore": 0.95}
+        assert resolve_expr(doc, {"$meta": "vectorSearchScore"}) == 0.95
+
+    def test_text_score(self):
+        doc = {"_textScore": 3.14}
+        assert resolve_expr(doc, {"$meta": "textScore"}) == 3.14
+
+    def test_search_score(self):
+        doc = {"_searchScore": 0.87}
+        assert resolve_expr(doc, {"$meta": "searchScore"}) == 0.87
+
+    def test_missing_score_returns_none(self):
+        assert resolve_expr({}, {"$meta": "vectorSearchScore"}) is None
+
+    def test_meta_in_set_context(self):
+        doc = {"text": "hello", "_vectorScore": 0.42}
+        result = resolve_expr(doc, {"score": {"$meta": "vectorSearchScore"}})
+        assert result == {"score": 0.42}
+
+    def test_unsupported_meta_keyword_raises(self):
+        with pytest.raises(ValueError, match="Unsupported \\$meta keyword"):
+            resolve_expr({}, {"$meta": "bogus"})
+
+    def test_meta_non_string_raises(self):
+        with pytest.raises(ValueError, match="\\$meta requires a string"):
+            resolve_expr({}, {"$meta": 123})
+
+
 class TestResolveExprPlainDict:
     def test_dict_literal_resolved(self):
         result = resolve_expr({"a": 1, "b": 2}, {"x": "$a", "y": "$b"})

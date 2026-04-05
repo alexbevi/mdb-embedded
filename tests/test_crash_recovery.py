@@ -12,7 +12,7 @@ import os
 
 import pytest
 
-from smongo.storage import LocalClient
+from smongo._smongo_core import RustLocalClient
 
 # ── Harness helpers ──────────────────────────────────────────────────
 
@@ -28,9 +28,9 @@ def run_and_crash(db_path: str, writer_fn, timeout: int = 30, args_extra: tuple 
     return p.exitcode or 0
 
 
-def _reopen_client(db_path: str) -> LocalClient:
+def _reopen_client(db_path: str) -> RustLocalClient:
     """Reopen a durable client on the same directory (WT recovery runs)."""
-    return LocalClient(db_path, durable=True)
+    return RustLocalClient(db_path, durable=True)
 
 
 # ── Writer functions (run in child process) ──────────────────────────
@@ -38,7 +38,7 @@ def _reopen_client(db_path: str) -> LocalClient:
 
 def _writer_committed(db_path: str) -> None:
     """Insert 200 docs, commit, then crash."""
-    client = LocalClient(db_path, durable=True)
+    client = RustLocalClient(db_path, durable=True)
     db = client.get_db("testdb")
     coll = db.get_collection("committed")
     for i in range(200):
@@ -49,7 +49,7 @@ def _writer_committed(db_path: str) -> None:
 
 def _writer_uncommitted(db_path: str) -> None:
     """Begin a WT transaction, insert docs, crash WITHOUT committing."""
-    client = LocalClient(db_path, durable=True)
+    client = RustLocalClient(db_path, durable=True)
     session = client.conn.open_session()
     session.begin_transaction()
     db = client.get_db("testdb")
@@ -67,7 +67,7 @@ def _writer_uncommitted(db_path: str) -> None:
 
 def _writer_with_index(db_path: str) -> None:
     """Create index, insert docs, checkpoint, crash."""
-    client = LocalClient(db_path, durable=True)
+    client = RustLocalClient(db_path, durable=True)
     db = client.get_db("testdb")
     coll = db.get_collection("indexed")
     coll.create_index([("v", 1)])
@@ -79,7 +79,7 @@ def _writer_with_index(db_path: str) -> None:
 
 def _writer_checkpoint_then_more(db_path: str) -> None:
     """Write batch 1, checkpoint, write batch 2 (no checkpoint), crash."""
-    client = LocalClient(db_path, durable=True)
+    client = RustLocalClient(db_path, durable=True)
     db = client.get_db("testdb")
     coll = db.get_collection("partial")
     for i in range(50):
@@ -100,7 +100,7 @@ def _writer_checkpoint_then_more(db_path: str) -> None:
 
 def _writer_cycle(db_path: str, cycle: int) -> None:
     """Write 10 docs for a given cycle, checkpoint, crash."""
-    client = LocalClient(db_path, durable=True)
+    client = RustLocalClient(db_path, durable=True)
     db = client.get_db("testdb")
     coll = db.get_collection("cycles")
     for i in range(10):
@@ -111,7 +111,7 @@ def _writer_cycle(db_path: str, cycle: int) -> None:
 
 def _writer_multi_doc_txn_crash(db_path: str) -> None:
     """Start multi-doc txn across 2 collections, crash before commit."""
-    client = LocalClient(db_path, durable=True)
+    client = RustLocalClient(db_path, durable=True)
     db = client.get_db("testdb")
     db.get_collection("mc_a")
     db.get_collection("mc_b")
@@ -155,7 +155,7 @@ class TestCrashRecovery:
 
     def test_uncommitted_data_lost(self, crash_dir):
         """Data written inside an uncommitted WT txn is not visible."""
-        client0 = LocalClient(crash_dir, durable=True)
+        client0 = RustLocalClient(crash_dir, durable=True)
         db0 = client0.get_db("testdb")
         db0.get_collection("uncommitted")
         client0.close()
@@ -201,7 +201,7 @@ class TestCrashRecovery:
 
     def test_multi_doc_txn_crash(self, crash_dir):
         """Multi-doc txn that crashes before commit: both colls unmodified."""
-        client0 = LocalClient(crash_dir, durable=True)
+        client0 = RustLocalClient(crash_dir, durable=True)
         db0 = client0.get_db("testdb")
         db0.get_collection("mc_a")
         db0.get_collection("mc_b")

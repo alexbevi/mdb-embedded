@@ -189,9 +189,9 @@ Step 8 is important: the index provides **acceleration**, not **full pushdown**.
 
 ## Streaming Reads Use the Planner
 
-The `StreamingCursor` -- the lazy iterator behind `Collection.find()`, `find_one()`, and `count_documents()` -- consults the query planner on every call. Its `__iter__` branches on `plan.plan_type`:
+The `RustStreamingCursor` -- the lazy iterator behind `Collection.find()`, `find_one()`, and `count_documents()` -- consults the `RustQueryPlanner` on every call. Its `__iter__` branches on `plan.plan_type`:
 
-| Plan Type | StreamingCursor Behavior |
+| Plan Type | RustStreamingCursor Behavior |
 |---|---|
 | **`pk_lookup`** | Single `cursor.search()`, yield 0 or 1 doc |
 | **`index_scan`** | Walk index B-tree, look up each doc by `_id` one at a time, yield those passing the MQL filter |

@@ -14,7 +14,10 @@ from smongo import MongoClient as EmbeddedClient
 @pytest.fixture
 def _web_app(tmp_path):
     """Import web_app once per test and rewire to an isolated WT dir."""
-    import web_app as wa
+    try:
+        import web_app as wa
+    except RuntimeError:
+        pytest.skip("web_app requires exclusive WiredTiger access to local_wt_data")
 
     old_client = wa.client
     old_cache = wa._collections_cache.copy()

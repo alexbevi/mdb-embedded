@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from smongo.storage import LocalClient
+from smongo._smongo_core import RustLocalClient
 from smongo.storage.transaction import TransactionSession, _txn_state, get_active_txn_session
 
 
 @pytest.fixture
 def client(tmp_path):
-    c = LocalClient(str(tmp_path / "wt"), durable=False)
+    c = RustLocalClient(str(tmp_path / "wt"), durable=False)
     yield c
     _txn_state.session = None
     c.close()

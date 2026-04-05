@@ -1,5 +1,6 @@
 """Integration test -- start a real WireServer and connect with pymongo."""
 
+import socket
 import threading
 import time
 
@@ -15,38 +16,44 @@ from pymongo.errors import (
 from smongo.wire.server import WireServer
 
 
-@pytest.fixture(scope="module")
-def wire_server(tmp_path_factory):
+def _find_free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _wait_for_port(host: str, port: int, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=0.5):
+                return
+        except OSError:
+            time.sleep(0.1)
+    raise TimeoutError(f"Port {port} not open after {timeout}s")
+
+
+@pytest.fixture(scope="class")
+def wire_env(tmp_path_factory):
+    """Start a fresh WireServer for each test class."""
     db_path = str(tmp_path_factory.mktemp("wire_wt"))
-    server = WireServer(db_path, host="127.0.0.1", port=0)
-
-    server._server_socket = __import__("socket").socket(
-        __import__("socket").AF_INET, __import__("socket").SOCK_STREAM
-    )
-    server._server_socket.setsockopt(
-        __import__("socket").SOL_SOCKET, __import__("socket").SO_REUSEADDR, 1
-    )
-    server._server_socket.bind(("127.0.0.1", 0))
-    server.port = server._server_socket.getsockname()[1]
-    server._server_socket.listen(128)
-    server._server_socket.settimeout(1.0)
-
-    server._cursor_registry.start_reaper()
-    server._session_registry.start_reaper()
-    server._accept_thread = threading.Thread(
-        target=server._accept_loop, daemon=True, name="wire-accept-test"
-    )
-    server._accept_thread.start()
-
-    time.sleep(0.1)
-    yield server
+    port = _find_free_port()
+    server = WireServer(db_path, host="127.0.0.1", port=port)
+    server.start()
+    _wait_for_port("127.0.0.1", port)
+    yield server, port
     server.stop()
+    time.sleep(0.3)
+
+
+_coll_counter = 0
 
 
 @pytest.fixture
-def client(wire_server):
-    uri = f"mongodb://127.0.0.1:{wire_server.port}/?directConnection=true"
-    c = PyMongoClient(uri, serverSelectionTimeoutMS=3000)
+def client(wire_env):
+    server, port = wire_env
+    uri = f"mongodb://127.0.0.1:{port}/?directConnection=true"
+    c = PyMongoClient(uri, serverSelectionTimeoutMS=5000)
     yield c
     c.close()
 
@@ -58,9 +65,9 @@ def db(client):
 
 @pytest.fixture
 def coll(db):
-    col = db["items"]
-    col.delete_many({})
-    return col
+    global _coll_counter
+    _coll_counter += 1
+    return db[f"items_{_coll_counter}"]
 
 
 class TestPymongoCRUD:
@@ -236,15 +243,16 @@ class TestPymongoErrors:
 
 
 class TestPymongoConcurrent:
-    def test_concurrent_connections(self, wire_server):
+    def test_concurrent_connections(self, wire_env):
         """Multiple pymongo clients can connect and operate simultaneously."""
-        uri = f"mongodb://127.0.0.1:{wire_server.port}/?directConnection=true"
+        server, port = wire_env
+        uri = f"mongodb://127.0.0.1:{port}/?directConnection=true"
         results = []
         errors = []
 
         def worker(n):
             try:
-                c = PyMongoClient(uri, serverSelectionTimeoutMS=3000)
+                c = PyMongoClient(uri, serverSelectionTimeoutMS=5000)
                 db = c["conctest"]
                 coll = db[f"coll_{n}"]
                 coll.insert_one({"worker": n})

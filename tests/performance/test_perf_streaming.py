@@ -5,7 +5,7 @@ the benefit of the streaming architecture for common access patterns.
 
 Uses two fixture layers:
 - perf_collection (Collection facade) for client-level API benchmarks
-- perf_local_collection (LocalCollection) for storage-level streaming
+- perf_local_collection (RustRustLocalCollection) for storage-level streaming
 """
 
 import random
@@ -13,14 +13,14 @@ import random
 import pytest
 
 from smongo.aggregation import Cursor
-from smongo.storage import LocalClient
+from smongo._smongo_core import RustLocalClient
 
 pytestmark = pytest.mark.performance
 
 
 @pytest.fixture
 def local_client(tmp_path):
-    return LocalClient(str(tmp_path / "stream_wt"))
+    return RustLocalClient(str(tmp_path / "stream_wt"))
 
 
 @pytest.fixture
@@ -45,7 +45,7 @@ def indexed_local_coll(populated_local_coll):
 
 
 def test_find_one_streaming_vs_full(benchmark, perf_collection, docs_10k):
-    """find_one via the client facade (delegates to LocalCollection.find_one)."""
+    """find_one via the client facade (delegates to RustLocalCollection.find_one)."""
     perf_collection.insert_many(docs_10k)
     perf_collection.create_index([("city", 1)])
 
@@ -81,17 +81,17 @@ def test_find_limit_10(benchmark, perf_collection, docs_10k):
 
 
 def test_streaming_find_one(benchmark, indexed_local_coll):
-    """LocalCollection.find_one via streaming -- single doc deserialized."""
+    """RustLocalCollection.find_one via streaming -- single doc deserialized."""
     benchmark(lambda: indexed_local_coll.find_one({"city": "city_3"}))
 
 
 def test_streaming_count_empty(benchmark, populated_local_coll):
-    """LocalCollection.count({}) -- fast path, no BSON decode."""
+    """RustLocalCollection.count({}) -- fast path, no BSON decode."""
     benchmark(lambda: populated_local_coll.count({}))
 
 
 def test_streaming_count_filtered(benchmark, indexed_local_coll):
-    """LocalCollection.count with filter -- iterates without list."""
+    """RustLocalCollection.count with filter -- iterates without list."""
     benchmark(lambda: indexed_local_coll.count({"age": {"$gt": 50}}))
 
 

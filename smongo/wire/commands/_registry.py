@@ -7,7 +7,7 @@ import threading
 import time
 from collections.abc import Callable
 
-from bson import Binary, Timestamp
+from bson import Binary, Int64, Timestamp
 from bson import ObjectId as BsonObjectId
 
 from ..._compat import WTError as _WTError
@@ -237,12 +237,11 @@ def dispatch(
         )
         ctx.last_plan_summary = ""
 
-    if lsid is not None:
-        ts = _next_timestamp()
-        resp["operationTime"] = ts
-        resp["$clusterTime"] = {
-            "clusterTime": ts,
-            "signature": {"hash": Binary(b"\x00" * 20), "keyId": 0},
-        }
+    ts = _next_timestamp()
+    resp["operationTime"] = ts
+    resp["$clusterTime"] = {
+        "clusterTime": ts,
+        "signature": {"hash": Binary(b"\x00" * 20), "keyId": Int64(0)},
+    }
 
     return resp

@@ -1,6 +1,6 @@
 # MQL Compiler
 
-**A pure-Python compiler that translates MongoDB query dictionaries into executable predicates, document mutators, and expression evaluators.**
+**A Rust-accelerated compiler that translates MongoDB query dictionaries into executable predicates, document mutators, and expression evaluators.** The `query/` Python package serves as the reference specification; at runtime, all compilation and evaluation is handled by the compiled Rust extension (`_smongo_core`).
 
 ---
 
@@ -14,7 +14,7 @@ The language has three distinct subsystems:
 2. **Update operators** -- mutate documents: `{"$set": {"status": "active"}, "$inc": {"logins": 1}}`
 3. **Aggregation expressions** -- compute values: `{"$concat": ["$firstName", " ", "$lastName"]}`
 
-smongo implements all three in the `query/` package. This package is the brain of the engine -- every read, write, aggregation, and sync operation flows through it. The package is split into focused modules: `compiler.py` (query predicates), `update.py` (document mutation), `expressions.py` (aggregation expressions), and `paths.py` (dot-notation traversal).
+smongo implements all three in the `query/` package (Python reference) and `rust/src/query_*.rs` (runtime Rust). Every read, write, aggregation, and sync operation flows through the MQL subsystem. The Python package is split into focused modules: `compiler.py` (query predicates), `update.py` (document mutation), `expressions.py` (aggregation expressions), and `paths.py` (dot-notation traversal). Each has a corresponding Rust implementation that handles all execution at runtime.
 
 ---
 

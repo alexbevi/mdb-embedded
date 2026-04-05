@@ -16,3 +16,18 @@ repos:
           - pymongo>=4.6
         pass_filenames: false
         entry: mypy smongo/ web_app.py --strict
+
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --manifest-path rust/Cargo.toml --
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --manifest-path rust/Cargo.toml -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false

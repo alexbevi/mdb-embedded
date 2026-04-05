@@ -17,7 +17,7 @@ class LocalClient:
         if not wt:
             raise ImportError("wiredtiger required for local embedded mode")
         os.makedirs(db_path, exist_ok=True)
-        config = "create"
+        config = "create,statistics=(fast)"
         if durable:
             try:
                 import snappy as _snappy  # noqa: F401

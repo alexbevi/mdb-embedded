@@ -36,39 +36,14 @@ try:
 except ImportError:
     BsonObjectId = None  # type: ignore[misc, assignment]
 
+from smongo._smongo_core import from_pymongo as _from_pymongo
+from smongo._smongo_core import to_pymongo as _to_pymongo
+
 from ._types import Document, Predicate
 from .index import DuplicateKeyError
-from .objectid import ObjectId as EngineObjectId
 from .query import compile_query
 
 log = logging.getLogger("smongo.sync")
-
-
-# ------------------------------------------------------------------
-# Type bridge: engine ObjectId <-> bson ObjectId for PyMongo
-# ------------------------------------------------------------------
-
-
-def _to_pymongo(value: Any) -> Any:
-    """Recursively convert engine ObjectId to bson.ObjectId for PyMongo."""
-    if isinstance(value, EngineObjectId):
-        return BsonObjectId(str(value)) if BsonObjectId is not None else str(value)
-    if isinstance(value, dict):
-        return {k: _to_pymongo(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_to_pymongo(v) for v in value]
-    return value
-
-
-def _from_pymongo(value: Any) -> Any:
-    """Recursively convert bson.ObjectId to engine ObjectId after PyMongo read."""
-    if BsonObjectId is not None and isinstance(value, BsonObjectId):
-        return EngineObjectId(str(value))
-    if isinstance(value, dict):
-        return {k: _from_pymongo(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_from_pymongo(v) for v in value]
-    return value
 
 
 # ------------------------------------------------------------------

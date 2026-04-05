@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=77.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["maturin>=1.0"]
+build-backend = "maturin"
 
 [project]
 name = "smongo"
-version = "0.2.0"
+version = "0.8.0"
 description = "Small MongoDB, big ambitions -- a local-first document engine with WiredTiger and Atlas sync"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -12,11 +12,12 @@ license = "MIT"
 authors = [{name = "smongo contributors"}]
 keywords = ["mongodb", "embedded", "wiredtiger", "database", "local-first", "sync", "smongo"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Database",
     "Topic :: Database :: Database Engines/Servers",
     "Typing :: Typed",
@@ -27,7 +28,7 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/smongo/smongo"
+Repository = "https://github.com/ranfysvalle02/mdb-embedded"
 
 [project.scripts]
 smongo-wire = "smongo.wire.__main__:main"
@@ -45,8 +46,11 @@ dev = [
     "mypy~=1.14.1",
 ]
 
-[tool.setuptools.packages.find]
-include = ["smongo*"]
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "smongo._smongo_core"
+manifest-path = "rust/Cargo.toml"
+python-source = "."
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -76,6 +80,7 @@ module = [
     "snappy",
     "zstandard",
     "usearch.*",
+    "smongo._smongo_core",
 ]
 ignore_missing_imports = true
 
@@ -107,6 +112,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["B011", "B017", "SIM300", "F841"]
+
 
 [tool.ruff.lint.isort]
 known-first-party = ["smongo"]

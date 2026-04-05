@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from bson import Int64
+
 from .._types import CommandDoc, DocSequences, ResponseDoc
 from ..context import ConnectionContext
 from ..errors import error_response, make_error
@@ -96,7 +98,7 @@ def _cmd_set_profiling(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequenc
 def _cmd_read_profile(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -> ResponseDoc:
     limit = cmd.get("limit", 100)
     entries = ctx.profiler.get_entries(limit)
-    return {"cursor": {"id": 0, "ns": "admin.system.profile", "firstBatch": entries}, "ok": 1.0}
+    return {"cursor": {"id": Int64(0), "ns": "admin.system.profile", "firstBatch": entries}, "ok": 1.0}
 
 
 @_register("shardingState")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from bson import Int64
+
 from ...aggregation import Cursor
 from .._types import CommandDoc, DocSequences, ResponseDoc
 from ..bson_codec import normalize_inbound, normalize_outbound_docs
@@ -21,11 +23,11 @@ def _cmd_aggregate(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) 
         if pipeline and "$currentOp" in pipeline[0]:
             ns = f"{db_name}.$cmd.aggregate"
             return {
-                "cursor": {"id": 0, "ns": ns, "firstBatch": []},
+                "cursor": {"id": Int64(0), "ns": ns, "firstBatch": []},
                 "ok": 1.0,
             }
         return {
-            "cursor": {"id": 0, "ns": f"{db_name}.$cmd.aggregate", "firstBatch": []},
+            "cursor": {"id": Int64(0), "ns": f"{db_name}.$cmd.aggregate", "firstBatch": []},
             "ok": 1.0,
         }
 
@@ -36,7 +38,38 @@ def _cmd_aggregate(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) 
         change_pipeline = pipeline[1:] if len(pipeline) > 1 else None
         stream = coll.watch(change_pipeline)
         cursor_id = ctx.cursor_registry.create_change_stream(ns, stream, batch_size)
-        return {"cursor": {"id": cursor_id, "ns": ns, "firstBatch": []}, "ok": 1.0}
+        return {"cursor": {"id": Int64(cursor_id), "ns": ns, "firstBatch": []}, "ok": 1.0}
+
+    if pipeline and "$collStats" in pipeline[0]:
+        spec = pipeline[0]["$collStats"]
+        stats = coll.storage_stats()
+        doc: dict[str, object] = {"ns": ns}
+        if "storageStats" in spec:
+            count = stats["count"]
+            doc["storageStats"] = {
+                "count": count,
+                "size": stats["dataSize"],
+                "avgObjSize": stats["dataSize"] // max(count, 1),
+                "storageSize": stats["storageSize"],
+                "freeStorageSize": 0,
+                "nindexes": stats["nindexes"],
+                "totalIndexSize": stats["totalIndexSize"],
+                "totalSize": stats["storageSize"] + stats["totalIndexSize"],
+                "indexSizes": stats["indexSizes"],
+                "scaleFactor": 1,
+                "wiredTiger": stats.get("wiredTiger", {}),
+            }
+        if "count" in spec:
+            doc["count"] = stats["count"]
+        remaining = pipeline[1:]
+        if remaining:
+            coll_getter = lambda name: ctx.get_db(db_name).get_collection(name)  # noqa: E731
+            result_docs = normalize_outbound_docs(
+                Cursor([doc], collection_getter=coll_getter).aggregate(remaining)
+            )
+        else:
+            result_docs = normalize_outbound_docs([doc])
+        return {"cursor": {"id": Int64(0), "ns": ns, "firstBatch": result_docs}, "ok": 1.0}
 
     docs = coll.get_all()
     coll_getter = lambda name: ctx.get_db(db_name).get_collection(name)
@@ -44,7 +77,7 @@ def _cmd_aggregate(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) 
     result_docs = normalize_outbound_docs(result)
 
     cursor_id, first_batch = ctx.cursor_registry.create(ns, result_docs, batch_size)
-    return {"cursor": {"id": cursor_id, "ns": ns, "firstBatch": first_batch}, "ok": 1.0}
+    return {"cursor": {"id": Int64(cursor_id), "ns": ns, "firstBatch": first_batch}, "ok": 1.0}
 
 
 @_register("mapReduce", "mapreduce")

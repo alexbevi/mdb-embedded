@@ -1,33 +1,18 @@
+"""Aggregation output stages ($facet, $out, $merge).
+
+$facet lives in Rust (_smongo_core).  $out and $merge remain in Python
+because they perform collection-level I/O that Rust delegates back here.
+"""
+
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Any
 
-from .._types import CollectionGetter, Document, Pipeline
-from .constants import DEFAULT_MAX_PIPELINE_DOCS
+from smongo._smongo_core import facet_stage  # noqa: F401
+
+from .._types import CollectionGetter, Document
 
 _OUT_BATCH_SIZE = 1_000
-
-
-def facet_stage(
-    docs: list[Document],
-    spec: dict[str, Pipeline],
-    collection_getter: CollectionGetter | None = None,
-    *,
-    max_pipeline_docs: int = DEFAULT_MAX_PIPELINE_DOCS,
-) -> list[Document]:
-    """
-    $facet -- run multiple sub-pipelines against the same input documents.
-    Returns a single document whose keys are the facet names and values
-    are the arrays of results from each sub-pipeline.
-    """
-    from .cursor import Cursor
-
-    result: Document = {}
-    for facet_name, pipeline in spec.items():
-        sub_cursor = Cursor(deepcopy(docs), collection_getter=collection_getter)
-        result[facet_name] = sub_cursor.aggregate(pipeline, max_pipeline_docs=max_pipeline_docs)
-    return [result]
 
 
 def out_stage(

@@ -1003,9 +1003,7 @@ class LocalCollection:
             with self._lock:
                 stat_cursor = self.session.open_cursor(stat_uri, None, "statistics=(fast)")
                 while stat_cursor.next() == 0:
-                    desc: str = stat_cursor[0]
-                    _name: str = stat_cursor[1]
-                    val: int = stat_cursor[2]
+                    desc, _name, val = stat_cursor.get_value()
                     key = desc.lower().replace(" ", "_").replace("-", "_")
                     stats[key] = val
                 stat_cursor.close()
@@ -1031,8 +1029,9 @@ class LocalCollection:
                             "statistics=(fast)",
                         )
                         while sc.next() == 0:
-                            if "file_size_in_bytes" in sc[0].lower():
-                                idx_sizes[idx_name] = sc[2]
+                            desc, _name, val = sc.get_value()
+                            if "file_size_in_bytes" in desc.lower():
+                                idx_sizes[idx_name] = val
                                 break
                         sc.close()
                     except (_WTError, RuntimeError, OSError, KeyError):

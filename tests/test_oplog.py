@@ -363,7 +363,7 @@ class TestOplogCompaction:
         assert reader.oldest_key() == k1
 
     def test_compact_oplog_on_collection(self, local_collection):
-        """Test compact_oplog from the LocalCollection level."""
+        """Test compact_oplog from the collection level."""
         for i in range(20):
             local_collection.insert_one({"_id": f"co{i}"})
         oplog_before = local_collection.get_oplog()

@@ -61,7 +61,7 @@ Every write -- insert, update, delete -- is wrapped in a **WiredTiger transactio
 
 ## Read Path (Materialized)
 
-These benchmarks use `LocalCollection.find()` which materializes all matching documents into a Python list. This is the baseline for comparison with the streaming path.
+These benchmarks use `Collection.find()` (backed by `RustLocalCollection`) which materializes all matching documents into a Python list. This is the baseline for comparison with the streaming path.
 
 | Benchmark | What it measures | Mean | Rounds |
 |---|---|---:|---:|
@@ -100,7 +100,7 @@ All aggregation benchmarks use the client-level `aggregate()` API, which feeds d
 
 ## Streaming Architecture
 
-The streaming benchmarks measure the lazy read path introduced in v0.2.0. `StreamingCursor` yields documents one at a time from WiredTiger; `Cursor` applies `skip`/`limit` via `itertools.islice` when no sorting is needed.
+The streaming benchmarks measure the lazy read path introduced in v0.2.0. At the `MongoClient` level, `Collection.find()` uses `StreamingCursor` (Python) which delegates to the Rust query planner and BSON decoding. When using `RustLocalClient` directly, `RustStreamingCursor` yields documents one at a time from WiredTiger with zero Python overhead. Both paths apply `skip`/`limit` via `itertools.islice` when no sorting is needed.
 
 ### Client-Level API
 
@@ -115,10 +115,10 @@ The streaming benchmarks measure the lazy read path introduced in v0.2.0. `Strea
 
 | Benchmark | What it measures | Mean | Rounds |
 |---|---|---:|---:|
-| `test_streaming_find_one` | `LocalCollection.find_one({"city": "city_3"})` (indexed) | 1.92 ms | 488 |
-| `test_streaming_count_empty` | `LocalCollection.count({})` (fast path, no BSON decode) | 2.60 ms | 378 |
-| `test_streaming_count_filtered` | `LocalCollection.count({"age": {"$gt": 50}})` | 26.3 ms | 40 |
-| `test_streaming_limit_10` | `StreamingCursor({}).limit(10)` via Cursor | 36.8 us | 13,209 |
+| `test_streaming_find_one` | `RustLocalCollection.find_one({"city": "city_3"})` (indexed) | 1.92 ms | 488 |
+| `test_streaming_count_empty` | `RustLocalCollection.count({})` (fast path, no BSON decode) | 2.60 ms | 378 |
+| `test_streaming_count_filtered` | `RustLocalCollection.count({"age": {"$gt": 50}})` | 26.3 ms | 40 |
+| `test_streaming_limit_10` | `find_streaming({}).limit(10)` via Cursor | 36.8 us | 13,209 |
 | `test_streaming_index_scan` | `find_streaming({"city": "city_5"})` (1K matches) | 7.0 ms | 142 |
 | `test_streaming_pk_lookup` | `find_streaming({"_id": target})` (single doc) | 11.7 us | 12,739 |
 | `test_streaming_in_scan` | `find_streaming({"city": {"$in": [...]}})` (3K matches) | 21.9 ms | 47 |
@@ -165,6 +165,26 @@ Streaming benchmarks do not have thresholds yet -- they will be tightened once b
 
 ---
 
+## Interop Dispatch Overhead
+
+These benchmarks isolate the Rust/Python dispatch path: command parsing, handler lookup, `CursorRegistry` interaction, and BSON normalization. They run against a 200-document collection to keep data overhead low and focus on per-command fixed costs.
+
+| Benchmark | What it measures | Mean | Ops/sec |
+|---|---|---:|---:|
+| `test_dispatch_findandmodify` | `findAndModify` with `$inc` (dispatch + WT round-trip) | 64 us | 15,600 |
+| `test_dispatch_insert_delete_cycle` | `insert_one` + `delete_one` pair | 91 us | 11,000 |
+| `test_dispatch_find_simple` | `find` with filter + `limit(10)` | 287 us | 3,490 |
+| `test_dispatch_find_all` | `find({})` materializing 200 docs | 361 us | 2,770 |
+| `test_dispatch_count` | `count_documents` with filter | 378 us | 2,650 |
+| `test_dispatch_aggregate_small` | 3-stage pipeline (`$match` + `$group` + `$sort`) | 457 us | 2,190 |
+
+**Key observations**:
+- Single-doc write commands (`findAndModify`, `insert_one`) complete in ~60-90 us end-to-end, including WiredTiger I/O.
+- The per-dispatch overhead (command lookup, context access, cursor registration) is <20 us -- dominated by the actual data operation.
+- All module lookups, handler resolution, and cursor registration use Rust-native paths (no `py.import()`, no Python method dispatch for `CursorRegistry`).
+
+---
+
 ## Running Benchmarks
 
 ```bash
@@ -195,16 +215,17 @@ pytest tests/performance/ -m performance --benchmark-compare=baseline
 
 ---
 
-## Where Python Is the Bottleneck
+## Where Python Is Still the Bottleneck
 
-These benchmarks show where the Python runtime is the limiting factor:
+BSON serialization, query compilation, index operations, wire compression, and most CRUD are now handled entirely in Rust via `_smongo_core`. All hot-path module imports are cached (`PyOnceLock` for Python objects, `OnceLock` for Rust-only data), the handler signature is fully typed (`ConnectionContext`), and `CursorRegistry` operations are called directly from Rust. The remaining Python-bound costs are:
 
-1. **BSON serialization** (~60% of write time): `bson.encode()` and `bson.decode()` are C-accelerated via PyMongo but still cross the Python/C boundary per document.
-2. **Collection scan filtering** (~35ms for 10K docs): The compiled MQL predicate is a Python closure evaluated per document. A Rust predicate would be 10-50x faster.
-3. **Aggregation accumulators** (~40ms for `$group` on 10K): Hash-based grouping with per-doc field access via Python dicts.
-4. **Pipeline materialization**: Each aggregation stage produces a full `list[Document]`. A Rust pipeline could use zero-copy iterators between stages.
+1. **Aggregation accumulators** (~40ms for `$group` on 10K): Hash-based grouping with per-doc field access via Python dicts. Rust pipeline stages exist for many operators but the fallback Python path is still used for some complex expressions.
+2. **Pipeline materialization**: Each aggregation stage produces a full `list[Document]`. A fully Rust pipeline could use zero-copy iterators between stages.
+3. **PyO3 boundary crossings**: Callbacks from Rust into Python (e.g. oplog writes, aggregation accumulator dispatch) add per-call overhead that would disappear with pure-Rust equivalents.
+4. **User-facing `Cursor` only on the Python API**: Wire protocol `find` and `aggregate` no longer route through the Python `Cursor` class. For wire `find`, sort, skip, limit, and projection are applied in Rust before batches are returned. Wire `aggregate` calls `aggregate_pipeline` directly. The Python `Cursor` remains only for the user-facing Python API (`Collection.find()` and chained `.sort()` / `.skip()` / `.limit()` / projection there).
+5. **Oplog and admin WiredTiger paths**: Oplog and admin/metadata WiredTiger operations are fully typed at the Rust boundary (no Python dispatch for WT cursor operations in those hot paths).
 
-The [FUTURE_PLANS.md](FUTURE_PLANS.md) documents the Strangler Fig migration to Rust, where each of these bottlenecks will be eliminated while preserving the same Python API via PyO3.
+See [FUTUREPLANS.md](FUTUREPLANS.md) for the roadmap on eliminating the remaining Python-bound stages.
 
 ---
 

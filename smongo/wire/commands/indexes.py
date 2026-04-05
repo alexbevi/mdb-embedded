@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from bson import Int64
+
 from .._types import CommandDoc, DocSequences, ResponseDoc
 from ..context import ConnectionContext
 from ..errors import make_error
@@ -39,7 +41,7 @@ def _cmd_list_indexes(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequence
     )
     return {
         "cursor": {
-            "id": cursor_id,
+            "id": Int64(cursor_id),
             "ns": f"{db_name}.$cmd.listIndexes.{coll_name}",
             "firstBatch": first_batch,
         },

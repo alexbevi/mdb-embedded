@@ -8,6 +8,7 @@ from .constants import (
     MemoryLimitExceeded,
 )
 from .cursor import Cursor, _apply_projection, _optimize_pipeline
+from .geo import geo_near_stage
 from .output import _OUT_BATCH_SIZE, out_stage
 from .stages import sort_stage, unwind_stage
 
@@ -21,6 +22,7 @@ __all__ = [
     "MemoryLimitExceeded",
     "_apply_projection",
     "_optimize_pipeline",
+    "geo_near_stage",
     "out_stage",
     "sort_stage",
     "unwind_stage",

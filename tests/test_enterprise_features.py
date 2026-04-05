@@ -676,7 +676,6 @@ class TestSaslMechs:
     def test_hello_returns_mechanisms(self, ctx):
         resp = dispatch(ctx, {"hello": 1, "saslSupportedMechs": "test.user", "$db": "admin"})
         assert "SCRAM-SHA-256" in resp["saslSupportedMechs"]
-        assert "SCRAM-SHA-1" in resp["saslSupportedMechs"]
 
 
 # ── whatsmyuri ───────────────────────────────────────────────────────

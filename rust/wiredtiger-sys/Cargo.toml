@@ -1,0 +1,12 @@
+[package]
+name = "wiredtiger-sys"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+description = "Raw FFI bindings to WiredTiger, loaded from the pip-installed SWIG extension via dlopen"
+
+[dependencies]
+libloading = "0.8"
+
+[build-dependencies]
+cc = "1"

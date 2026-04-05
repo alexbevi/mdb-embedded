@@ -45,7 +45,9 @@ class TestHandshake:
 
     def test_ping(self, ctx):
         resp = dispatch(ctx, {"ping": 1, "$db": "admin"})
-        assert resp == {"ok": 1.0}
+        assert resp["ok"] == 1.0
+        assert "operationTime" in resp
+        assert "$clusterTime" in resp
 
     def test_build_info(self, ctx):
         resp = dispatch(ctx, {"buildInfo": 1, "$db": "admin"})

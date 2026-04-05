@@ -5,6 +5,61 @@ All notable changes to smongo will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+> **Note**: Entries below describe the state of the codebase at the time of each release. References to Python classes like `LocalCollection`, `StreamingCursor`, etc. in older entries reflect APIs that have since been replaced by their Rust equivalents (`RustLocalCollection`, `RustStreamingCursor`, etc.).
+
+## [0.4.0] - 2026-04-05
+
+### Added — Security & Enterprise Features
+
+- **TLS + SCRAM-SHA-256 authentication**: `WireServer(auth_required=True, tls_cert_file=..., tls_key_file=...)` enables TLS (rustls) and SCRAM auth. The Python `WireServer` auto-delegates to `RustWireServer` when security features are requested.
+- **Role-based access control (RBAC)**: `grantRolesToUser` / `revokeRolesFromUser` with built-in roles (`read`, `readWrite`, `dbAdmin`, `root`). Auth gate blocks unauthenticated commands (except handshake).
+- **Audit logging**: `configure_audit(path)` writes structured JSON audit events (auth, command execution) via `smongo.audit` logger.
+- **Free-threaded Python (3.13t+)**: Module declares `#[pymodule(gil_used = false)]`. Python-valued statics migrated to `PyOnceLock`. `unsafe impl Send/Sync` safety comments updated to reference Rust-native synchronization. CI job for `python3.13t` with `PYTHON_GIL=0`.
+
+### Added — Atlas Compatibility & AI Integration
+
+- **`$meta` expression operator** (`query_expressions.rs`): Supports `{"$meta": "vectorSearchScore"}`, `"textScore"`, `"searchScore"`, and `"indexKey"`. Maps to smongo's internal score fields (`_vectorScore`, `_textScore`, etc.), enabling transparent compatibility with Atlas-targeted pipelines from LangChain, LlamaIndex, and other AI frameworks.
+- **`$project` exclusion projection** (`aggregation.rs`): Fixed `$project` stage to correctly handle exclusion projections (e.g. `{"$project": {"embedding": 0}}`). Previously, exclusion specs produced empty documents; now the stage copies all fields and removes only the excluded ones, matching MongoDB server behavior.
+- **AI examples** (`examples/ai_examples/`): Four wire-protocol-based examples demonstrating smongo as an invisible drop-in for AI workloads:
+  - `01_vector_search_rag.py` -- RAG pipeline with `$vectorSearch` over standard PyMongo
+  - `02_chat_memory.py` -- AI chat history store with cross-session search and analytics
+  - `03_langchain_rag_chain.py` -- Official `MongoDBAtlasVectorSearch` class with zero custom code
+  - `04_crewai_agent_tool.py` -- CrewAI agent tools querying smongo via standard PyMongo
+
+### Fixed
+
+- **`$clusterTime` always present**: `operationTime` and `$clusterTime` are now attached to every wire response, not only when an `lsid` is present. This matches real `mongod` behavior (since 3.6) and fixes compatibility with `mongosh`, MongoDB Compass, and drivers that unconditionally expect these fields.
+- `cmd_find` in the Rust wire server now materializes `RustStreamingCursor` into a list before slice operations, fixing TypeError when the wire `find` command is used without a sort.
+- `WireServer` now auto-creates a `RustLocalClient` (instead of Python `LocalClient`) when delegating to `RustWireServer`, fixing type mismatch on the Rust dispatch path.
+- `smongo.audit` component added to `StructuredJSONFormatter`'s component map, so audit log entries emit `"c": "AUDIT"` instead of `"DEFAULT"`.
+- Test isolation fix: `TestUsersInfo.test_returns_users_list` clears the global user store before assertions.
+
+### Changed
+
+- 80 Rust tests (up from 67), 1,017 Python tests (up from ~960). Total: 1,097.
+- 50 Rust source files, 54 Python source files. ~24,100 Rust LOC, ~9,000 Python LOC.
+
+## [0.3.0] - 2026-04-04
+
+### Changed — Interop Elimination (Priorities 1-5, 7-8)
+
+- **P1**: Wire `find` performs sort, skip, limit, and projection in Rust; wire `aggregate` calls `aggregate_pipeline` directly. The Python `Cursor` is removed from the wire dispatch path.
+- **P2**: All 47 oplog `call_method` sites replaced with typed `RustWtSession` / `RustWtCursor` borrow. `OplogHub` uses `Py<ChangeStream>` instead of `Py<PyAny>`.
+- **P3**: Admin WiredTiger operations (metadata walks, statistics, user persistence, checkpoint) use typed borrow. `CachedSystemInfo` caches platform/OS info. `cached_pid()`. `BTreeSet` replaces Python `set()` in `listDatabases`. `list_collection_names()` uses a direct Rust call.
+- **P4**: Eight class attributes cached via `OnceLock` macros (`bson.ObjectId`, `bson.Decimal128`, `bson.Regex`, `builtins.int` / `float` / `round`, `datetime.datetime`, `datetime.timezone.utc`). `wire_codec.rs` and `query_expressions.rs` updated.
+- **P5**: `bson_helpers::shallow_copy_dict` replaces five `dict.copy()` Python dispatch calls in `local_collection.rs`.
+- **P7**: `$jsonSchema` validation ported to Rust (`schema.rs`). `ValidationError` is now a Rust-defined PyO3 exception. `local_collection.rs` calls `crate::schema::validate_document` directly -- zero Python dispatch on validated writes. `smongo_schema` cached module removed. `CachedImports.validation_err` field removed.
+- **P8**: BSON boundary normalization moved to raw byte level (`rust/src/raw_bson.rs`). Wire decode now goes directly from BSON bytes to engine-ready `PyDict` in a single pass -- no intermediate `bson::Document` allocation and no `normalize_inbound` walk. Wire encode goes directly from `PyDict` to BSON bytes -- no intermediate `bson::Document` and no `normalize_outbound` walk. `ObjectId::from_raw()` avoids hex encode/decode overhead. All CRUD and aggregate handlers updated; `to_bson`/`from_bson` pyfunctions delegate to raw codec.
+
+### Added
+
+- `cached_attr!` and `cached_nested_attr!` macros in `cached_modules.rs`
+- `CachedSystemInfo` struct for process-level platform/OS caching
+- `RustWtSession::open_session_typed()` on `RustLocalClient`
+- `pub(crate)` typed methods on `RustWtSession` (`create_typed`, `checkpoint_typed`, `close_typed`) and `RustWtCursor` (various)
+- `rust/src/schema.rs` -- full `$jsonSchema` validation engine with `ValidationError` exception
+- `rust/src/raw_bson.rs` -- single-pass raw BSON byte decoder and encoder with inline engine-type conversion
+
 ## [0.2.0] - 2026-04-01
 
 ### Changed — Streaming Architecture
@@ -81,4 +136,4 @@ the rest.
 - `py.typed` marker for PEP 561 compliance
 - Docker and docker-compose support
 - GitHub Actions CI/CD pipeline
-- 960+ tests with pytest
+- 955+ tests (at time of release) with pytest

@@ -105,28 +105,21 @@ coll.update({"_id": "2"}, {"$set": {"email": "alice@example.com"}})
 
 ## Thread Safety: Per-Collection Locking
 
-Every `LocalCollection` uses a two-tier locking model: a `ReadWriteLock` that allows concurrent readers while serializing writers, and a `threading.Lock` for session-level cursor operations:
+Every `RustLocalCollection` uses a **per-collection `ReadWriteLock`** (Rust `Mutex`+`Condvar`, GIL-releasing) that allows concurrent readers while serializing writers:
 
-```python
-class LocalCollection:
-    def __init__(self, ...):
-        self._lock = threading.Lock()
-        self._rwlock = ReadWriteLock()
-        ...
-
-    def insert_one(self, doc, *, _internal=False):
-        # ... validation happens outside the lock ...
-
-        with self._rwlock.acquire_write():
-            with self._lock:
-                self._with_transaction(_do)
-
-        return self.Result(1, [doc["_id"]])
+```
+RustLocalCollection
+├── ReadWriteLock (Rust)     ← concurrent readers, exclusive writers
+├── WtSession                ← per-collection WiredTiger session
+├── RustIndexManager         ← owns index WiredTiger cursors
+└── TXN_SESSION_OVERRIDE     ← thread-local for transaction session routing
 ```
 
-The `ReadWriteLock` allows multiple concurrent `find()` calls (readers) to proceed in parallel, while write operations (`insert`, `update`, `delete`, `find_one_and_*`) acquire exclusive access. The inner `threading.Lock` serializes WiredTiger session cursor operations. This is sufficient for the embedded use case where write contention is low.
+The `ReadWriteLock` allows multiple concurrent `find()` calls (readers) to proceed in parallel, while write operations (`insert`, `update`, `delete`, `find_one_and_*`) acquire exclusive access. WiredTiger session cursor operations are serialized per collection. This is sufficient for the embedded use case where write contention is low.
 
-`LocalDB` also holds a separate lock protecting its `_collections` dictionary, so concurrent `get_collection()` calls don't race.
+`RustLocalDB` holds a `Mutex`-guarded collection cache, so concurrent `get_collection()` calls don't race.
+
+For multi-document transactions, a `thread_local!` static (`TXN_SESSION_OVERRIDE`) temporarily overrides the per-collection WiredTiger session with the transaction-specific session. All read and write operations within a transaction automatically route through this override, ensuring ACID isolation.
 
 ### What Runs Outside the Lock
 
@@ -219,7 +212,7 @@ The version is written to the oplog with every mutation. The sync layer uses it 
 
 ## Index Maintenance Within Transactions
 
-Indexes are maintained transactionally. The `IndexManager` methods are called inside the WiredTiger transaction:
+Indexes are maintained transactionally. The `RustIndexManager` methods are called inside the WiredTiger transaction:
 
 ### Insert Path
 

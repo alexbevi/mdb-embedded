@@ -9,7 +9,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from bson import Binary
+from bson import Binary, Int64
 
 from ..._compat import WTError as _WTError
 from .._types import CommandDoc, DocSequences, ResponseDoc
@@ -108,7 +108,7 @@ def _cmd_list_collections(
     batch_size = cmd.get("cursor", {}).get("batchSize", 101)
     cursor_id, first_batch = ctx.cursor_registry.create(ns, result, batch_size)
     return {
-        "cursor": {"id": cursor_id, "ns": ns, "firstBatch": first_batch},
+        "cursor": {"id": Int64(cursor_id), "ns": ns, "firstBatch": first_batch},
         "ok": 1.0,
     }
 
@@ -355,16 +355,8 @@ def _cmd_server_status(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequenc
 
     wt_stats: dict[str, Any] = {}
     try:
-        session = ctx.local_client.conn.open_session()
-        cursor = session.open_cursor("statistics:", None, "statistics=(fast)")
-        while cursor.next() == 0:
-            desc: str = cursor[0]
-            val: int = cursor[2]
-            key = desc.lower().replace(" ", "_").replace("-", "_")
-            wt_stats[key] = val
-        cursor.close()
-        session.close()
-    except (_WTError, RuntimeError, OSError, KeyError):
+        wt_stats = dict(ctx.local_client.connection_stats())
+    except (AttributeError, _WTError, RuntimeError, OSError, KeyError):
         pass
 
     resp: ResponseDoc = {

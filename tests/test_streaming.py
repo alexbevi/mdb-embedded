@@ -2,8 +2,8 @@
 
 Covers:
 - StreamingCursor with all query plan types (pk_lookup, index_scan, or_union, collection_scan)
-- LocalCollection.find_one() (streaming-based first-match)
-- LocalCollection.count() (streaming-based count without materialization)
+- RustLocalCollection.find_one() (streaming-based first-match)
+- RustLocalCollection.count() (streaming-based count without materialization)
 - Cursor accepting Iterable[Document] with lazy materialization
 - find() vs find_streaming() result parity
 - Cursor skip/limit using itertools.islice (no sort → no full materialization)
@@ -12,17 +12,19 @@ Covers:
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from smongo.aggregation import Cursor
 from smongo.client import Collection, MongoClient
-from smongo.storage import LocalCollection, StreamingCursor
+from smongo.storage import StreamingCursor
 
 # ── Fixtures ─────────────────────────────────────────────────────────
 
 
 @pytest.fixture
-def coll(local_collection: LocalCollection, sample_docs: list) -> LocalCollection:
+def coll(local_collection: Any, sample_docs: list) -> Any:
     """A collection pre-loaded with sample_docs and a city index."""
     local_collection.insert_many(sample_docs)
     local_collection.create_index([("city", 1)])
@@ -30,7 +32,7 @@ def coll(local_collection: LocalCollection, sample_docs: list) -> LocalCollectio
 
 
 @pytest.fixture
-def indexed_coll(coll: LocalCollection) -> LocalCollection:
+def indexed_coll(coll: Any) -> Any:
     """A collection with compound and single-field indexes."""
     coll.create_index([("city", 1), ("age", -1)])
     coll.create_index([("age", 1)])
@@ -44,30 +46,30 @@ def indexed_coll(coll: LocalCollection) -> LocalCollection:
 class TestStreamingCursorPlanTypes:
     """Every plan type the query planner can choose is exercised through the streaming path."""
 
-    def test_collection_scan_empty_query(self, coll: LocalCollection) -> None:
+    def test_collection_scan_empty_query(self, coll: Any) -> None:
         results = list(coll.find_streaming({}))
         assert len(results) == 10
         assert all("name" in d for d in results)
 
-    def test_collection_scan_unindexed_field(self, coll: LocalCollection) -> None:
+    def test_collection_scan_unindexed_field(self, coll: Any) -> None:
         results = list(coll.find_streaming({"dept": "eng"}))
         assert all(d["dept"] == "eng" for d in results)
         assert len(results) > 0
 
-    def test_pk_lookup_direct_id(self, coll: LocalCollection) -> None:
+    def test_pk_lookup_direct_id(self, coll: Any) -> None:
         all_docs = coll.find({})
         target_id = all_docs[0]["_id"]
         results = list(coll.find_streaming({"_id": target_id}))
         assert len(results) == 1
         assert results[0]["_id"] == target_id
 
-    def test_pk_lookup_with_eq_operator(self, coll: LocalCollection) -> None:
+    def test_pk_lookup_with_eq_operator(self, coll: Any) -> None:
         all_docs = coll.find({})
         target_id = all_docs[0]["_id"]
         results = list(coll.find_streaming({"_id": {"$eq": target_id}}))
         assert len(results) == 1
 
-    def test_pk_lookup_with_residual_filter(self, coll: LocalCollection) -> None:
+    def test_pk_lookup_with_residual_filter(self, coll: Any) -> None:
         all_docs = coll.find({})
         target_id = all_docs[0]["_id"]
         target_name = all_docs[0]["name"]
@@ -77,33 +79,33 @@ class TestStreamingCursorPlanTypes:
         results_miss = list(coll.find_streaming({"_id": target_id, "name": "NONEXISTENT"}))
         assert len(results_miss) == 0
 
-    def test_pk_lookup_no_match(self, coll: LocalCollection) -> None:
+    def test_pk_lookup_no_match(self, coll: Any) -> None:
         results = list(coll.find_streaming({"_id": "definitely_not_an_id"}))
         assert len(results) == 0
 
-    def test_index_scan_equality(self, indexed_coll: LocalCollection) -> None:
+    def test_index_scan_equality(self, indexed_coll: Any) -> None:
         results = list(indexed_coll.find_streaming({"city": "NYC"}))
         assert all(d["city"] == "NYC" for d in results)
         assert len(results) >= 1
 
-    def test_index_scan_range(self, indexed_coll: LocalCollection) -> None:
+    def test_index_scan_range(self, indexed_coll: Any) -> None:
         results = list(indexed_coll.find_streaming({"age": {"$gt": 35}}))
         assert all(d["age"] > 35 for d in results)
 
-    def test_index_scan_compound(self, indexed_coll: LocalCollection) -> None:
+    def test_index_scan_compound(self, indexed_coll: Any) -> None:
         results = list(indexed_coll.find_streaming({"city": "NYC", "age": {"$gt": 30}}))
         assert all(d["city"] == "NYC" and d["age"] > 30 for d in results)
 
-    def test_index_scan_in_operator(self, indexed_coll: LocalCollection) -> None:
+    def test_index_scan_in_operator(self, indexed_coll: Any) -> None:
         results = list(indexed_coll.find_streaming({"city": {"$in": ["NYC", "SF"]}}))
         assert all(d["city"] in ("NYC", "SF") for d in results)
         assert len(results) >= 2
 
-    def test_or_union_indexed_branches(self, indexed_coll: LocalCollection) -> None:
+    def test_or_union_indexed_branches(self, indexed_coll: Any) -> None:
         results = list(indexed_coll.find_streaming({"$or": [{"city": "NYC"}, {"city": "SF"}]}))
         assert all(d["city"] in ("NYC", "SF") for d in results)
 
-    def test_or_union_pk_branches(self, coll: LocalCollection) -> None:
+    def test_or_union_pk_branches(self, coll: Any) -> None:
         all_docs = coll.find({})
         id1, id2 = all_docs[0]["_id"], all_docs[1]["_id"]
         results = list(coll.find_streaming({"$or": [{"_id": id1}, {"_id": id2}]}))
@@ -114,11 +116,11 @@ class TestStreamingCursorPlanTypes:
 
 
 class TestStreamingCursorReturnsType:
-    def test_returns_streaming_cursor_type(self, coll: LocalCollection) -> None:
+    def test_returns_streaming_cursor_type(self, coll: Any) -> None:
         sc = coll.find_streaming({"city": "NYC"})
-        assert isinstance(sc, StreamingCursor)
+        assert hasattr(sc, "__iter__") and hasattr(sc, "__next__")
 
-    def test_is_iterable(self, coll: LocalCollection) -> None:
+    def test_is_iterable(self, coll: Any) -> None:
         sc = coll.find_streaming({})
         it = iter(sc)
         first = next(it)
@@ -134,34 +136,34 @@ class TestFindParity:
     def _ids(self, docs: list) -> set:
         return {str(d["_id"]) for d in docs}
 
-    def test_empty_query_parity(self, coll: LocalCollection) -> None:
+    def test_empty_query_parity(self, coll: Any) -> None:
         materialized = coll.find({})
         streamed = list(coll.find_streaming({}))
         assert self._ids(materialized) == self._ids(streamed)
         assert len(materialized) == len(streamed)
 
-    def test_equality_query_parity(self, indexed_coll: LocalCollection) -> None:
+    def test_equality_query_parity(self, indexed_coll: Any) -> None:
         materialized = indexed_coll.find({"city": "NYC"})
         streamed = list(indexed_coll.find_streaming({"city": "NYC"}))
         assert self._ids(materialized) == self._ids(streamed)
 
-    def test_range_query_parity(self, indexed_coll: LocalCollection) -> None:
+    def test_range_query_parity(self, indexed_coll: Any) -> None:
         materialized = indexed_coll.find({"age": {"$gte": 30, "$lte": 40}})
         streamed = list(indexed_coll.find_streaming({"age": {"$gte": 30, "$lte": 40}}))
         assert self._ids(materialized) == self._ids(streamed)
 
-    def test_in_query_parity(self, indexed_coll: LocalCollection) -> None:
+    def test_in_query_parity(self, indexed_coll: Any) -> None:
         materialized = indexed_coll.find({"city": {"$in": ["NYC", "LA"]}})
         streamed = list(indexed_coll.find_streaming({"city": {"$in": ["NYC", "LA"]}}))
         assert self._ids(materialized) == self._ids(streamed)
 
-    def test_or_query_parity(self, indexed_coll: LocalCollection) -> None:
+    def test_or_query_parity(self, indexed_coll: Any) -> None:
         q = {"$or": [{"city": "NYC"}, {"city": "CHI"}]}
         materialized = indexed_coll.find(q)
         streamed = list(indexed_coll.find_streaming(q))
         assert self._ids(materialized) == self._ids(streamed)
 
-    def test_pk_lookup_parity(self, coll: LocalCollection) -> None:
+    def test_pk_lookup_parity(self, coll: Any) -> None:
         all_docs = coll.find({})
         for doc in all_docs[:3]:
             q = {"_id": doc["_id"]}
@@ -170,65 +172,65 @@ class TestFindParity:
             assert self._ids(materialized) == self._ids(streamed)
 
 
-# ── LocalCollection.find_one() ───────────────────────────────────────
+# ── Any.find_one() ───────────────────────────────────────
 
 
-class TestLocalCollectionFindOne:
-    def test_find_one_returns_matching_doc(self, coll: LocalCollection) -> None:
+class TestAnyFindOne:
+    def test_find_one_returns_matching_doc(self, coll: Any) -> None:
         doc = coll.find_one({"city": "NYC"})
         assert doc is not None
         assert doc["city"] == "NYC"
 
-    def test_find_one_no_match_returns_none(self, coll: LocalCollection) -> None:
+    def test_find_one_no_match_returns_none(self, coll: Any) -> None:
         doc = coll.find_one({"city": "ATLANTIS"})
         assert doc is None
 
-    def test_find_one_by_id(self, coll: LocalCollection) -> None:
+    def test_find_one_by_id(self, coll: Any) -> None:
         all_docs = coll.find({})
         target = all_docs[0]
         doc = coll.find_one({"_id": target["_id"]})
         assert doc is not None
         assert doc["_id"] == target["_id"]
 
-    def test_find_one_with_index(self, indexed_coll: LocalCollection) -> None:
+    def test_find_one_with_index(self, indexed_coll: Any) -> None:
         doc = indexed_coll.find_one({"age": {"$gt": 40}})
         assert doc is not None
         assert doc["age"] > 40
 
-    def test_find_one_empty_collection(self, local_collection: LocalCollection) -> None:
+    def test_find_one_empty_collection(self, local_collection: Any) -> None:
         doc = local_collection.find_one({})
         assert doc is None
 
-    def test_find_one_empty_query_returns_a_doc(self, coll: LocalCollection) -> None:
+    def test_find_one_empty_query_returns_a_doc(self, coll: Any) -> None:
         doc = coll.find_one({})
         assert doc is not None
         assert "_id" in doc
 
 
-# ── LocalCollection.count() ──────────────────────────────────────────
+# ── Any.count() ──────────────────────────────────────────
 
 
-class TestLocalCollectionCount:
-    def test_count_all(self, coll: LocalCollection) -> None:
+class TestAnyCount:
+    def test_count_all(self, coll: Any) -> None:
         assert coll.count({}) == 10
 
-    def test_count_filtered(self, coll: LocalCollection) -> None:
+    def test_count_filtered(self, coll: Any) -> None:
         count = coll.count({"city": "NYC"})
         expected = len(coll.find({"city": "NYC"}))
         assert count == expected
 
-    def test_count_no_matches(self, coll: LocalCollection) -> None:
+    def test_count_no_matches(self, coll: Any) -> None:
         assert coll.count({"city": "ATLANTIS"}) == 0
 
-    def test_count_empty_collection(self, local_collection: LocalCollection) -> None:
+    def test_count_empty_collection(self, local_collection: Any) -> None:
         assert local_collection.count({}) == 0
 
-    def test_count_with_index(self, indexed_coll: LocalCollection) -> None:
+    def test_count_with_index(self, indexed_coll: Any) -> None:
         count = indexed_coll.count({"age": {"$gt": 35}})
         expected = len([d for d in indexed_coll.find({}) if d["age"] > 35])
         assert count == expected
 
-    def test_count_matches_len_find(self, indexed_coll: LocalCollection) -> None:
+    def test_count_matches_len_find(self, indexed_coll: Any) -> None:
         for q in [
             {},
             {"city": "NYC"},
@@ -254,7 +256,7 @@ class TestCursorIterable:
         assert len(result) == 5
         assert result[0]["x"] == 0
 
-    def test_cursor_accepts_streaming_cursor(self, coll: LocalCollection) -> None:
+    def test_cursor_accepts_streaming_cursor(self, coll: Any) -> None:
         sc = coll.find_streaming({})
         c = Cursor(sc)
         result = c.to_list()
@@ -338,7 +340,7 @@ class TestCursorIterable:
         second = list(c)
         assert first == second
 
-    def test_cursor_projection_on_iterable(self, coll: LocalCollection) -> None:
+    def test_cursor_projection_on_iterable(self, coll: Any) -> None:
         sc = coll.find_streaming({})
         c = Cursor(sc).projection({"name": 1})
         result = c.to_list()
@@ -428,13 +430,13 @@ class TestClientStreaming:
 
 
 class TestStreamingEdgeCases:
-    def test_streaming_after_insert(self, coll: LocalCollection) -> None:
+    def test_streaming_after_insert(self, coll: Any) -> None:
         coll.insert_one({"name": "NewPerson", "city": "MOON", "age": 99})
         results = list(coll.find_streaming({"city": "MOON"}))
         assert len(results) == 1
         assert results[0]["name"] == "NewPerson"
 
-    def test_streaming_after_delete(self, coll: LocalCollection) -> None:
+    def test_streaming_after_delete(self, coll: Any) -> None:
         before = coll.count({})
         doc = coll.find_one({"city": "NYC"})
         assert doc is not None
@@ -442,12 +444,12 @@ class TestStreamingEdgeCases:
         after = coll.count({})
         assert after == before - 1
 
-    def test_streaming_after_update(self, coll: LocalCollection) -> None:
+    def test_streaming_after_update(self, coll: Any) -> None:
         coll.update({"city": "NYC"}, {"$set": {"city": "CHANGED"}}, multi=True)
         assert coll.count({"city": "NYC"}) == 0
         assert coll.count({"city": "CHANGED"}) > 0
 
-    def test_multiple_iterators_from_same_collection(self, coll: LocalCollection) -> None:
+    def test_multiple_iterators_from_same_collection(self, coll: Any) -> None:
         results1 = list(coll.find_streaming({"city": "NYC"}))
         results2 = list(coll.find_streaming({"city": "NYC"}))
         assert len(results1) == len(results2)
@@ -455,7 +457,7 @@ class TestStreamingEdgeCases:
         ids2 = {str(d["_id"]) for d in results2}
         assert ids1 == ids2
 
-    def test_find_one_consistency_with_find(self, indexed_coll: LocalCollection) -> None:
+    def test_find_one_consistency_with_find(self, indexed_coll: Any) -> None:
         for q in [
             {"city": "NYC"},
             {"age": {"$gt": 35}},

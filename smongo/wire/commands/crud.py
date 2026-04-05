@@ -3,6 +3,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from bson import Int64
+
 from ...aggregation import Cursor
 from ...index import DuplicateKeyError
 from ...query import apply_update, get_value
@@ -53,10 +55,10 @@ def _cmd_find(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -> Re
     ns = f"{db_name}.{coll_name}"
 
     if single_batch or batch_size <= 0:
-        return {"cursor": {"id": 0, "ns": ns, "firstBatch": result_docs}, "ok": 1.0}
+        return {"cursor": {"id": Int64(0), "ns": ns, "firstBatch": result_docs}, "ok": 1.0}
 
     cursor_id, first_batch = ctx.cursor_registry.create(ns, result_docs, batch_size)
-    return {"cursor": {"id": cursor_id, "ns": ns, "firstBatch": first_batch}, "ok": 1.0}
+    return {"cursor": {"id": Int64(cursor_id), "ns": ns, "firstBatch": first_batch}, "ok": 1.0}
 
 
 @_register("insert")
@@ -270,9 +272,7 @@ def _cmd_get_more(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -
     db_name = cmd.get("$db", "test")
     batch_size = cmd.get("batchSize")
 
-    with ctx.cursor_registry._lock:
-        state = ctx.cursor_registry._cursors.get(cursor_id)
-        is_tailable = state is not None and state.tailable
+    is_tailable = ctx.cursor_registry.is_tailable(cursor_id)
 
     if is_tailable:
         max_await = cmd.get("maxTimeMS", 1000)
@@ -281,14 +281,14 @@ def _cmd_get_more(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -
             return make_error("CursorNotFound", f"cursor id {cursor_id} not found")
         ns = f"{db_name}.{coll_name}"
         out_batch = normalize_outbound_docs(batch) if batch else []
-        return {"cursor": {"id": new_id, "ns": ns, "nextBatch": out_batch}, "ok": 1.0}
+        return {"cursor": {"id": Int64(new_id or 0), "ns": ns, "nextBatch": out_batch}, "ok": 1.0}
 
     new_id, batch = ctx.cursor_registry.get_more(cursor_id, batch_size)
     if batch is None:
         return make_error("CursorNotFound", f"cursor id {cursor_id} not found")
 
     ns = f"{db_name}.{coll_name}"
-    return {"cursor": {"id": new_id, "ns": ns, "nextBatch": batch}, "ok": 1.0}
+    return {"cursor": {"id": Int64(new_id or 0), "ns": ns, "nextBatch": batch}, "ok": 1.0}
 
 
 @_register("killCursors")

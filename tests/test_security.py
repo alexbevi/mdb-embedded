@@ -34,8 +34,8 @@ class TestSocketTimeout:
         assert 60 <= CONNECTION_TIMEOUT_SEC <= 600
 
     def test_server_sets_timeout(self):
-        """WireServer._connection_loop sets sock.settimeout -- verified by
-        reading the source; here we just confirm the constant is exported."""
+        """The Rust wire server enforces connection timeouts -- we confirm
+        the constant is exported for configuration purposes."""
         assert CONNECTION_TIMEOUT_SEC == 300
 
 
@@ -160,10 +160,10 @@ class TestDecompressionBomb:
 class TestBatchSizeEnforcement:
     @pytest.fixture()
     def ctx(self, tmp_path):
-        from smongo.storage import LocalClient
+        from smongo._smongo_core import RustLocalClient
         from smongo.wire.cursors import CursorRegistry
 
-        client = LocalClient(str(tmp_path / "wt"))
+        client = RustLocalClient(str(tmp_path / "wt"))
         return ConnectionContext(client, 1, ("127.0.0.1", 9999), CursorRegistry())
 
     def test_insert_over_limit(self, ctx):
@@ -363,10 +363,10 @@ class TestSessionRegistryCap:
 class TestNamespaceInDispatch:
     @pytest.fixture()
     def ctx(self, tmp_path):
-        from smongo.storage import LocalClient
+        from smongo._smongo_core import RustLocalClient
         from smongo.wire.cursors import CursorRegistry
 
-        client = LocalClient(str(tmp_path / "wt"))
+        client = RustLocalClient(str(tmp_path / "wt"))
         return ConnectionContext(client, 1, ("127.0.0.1", 9999), CursorRegistry())
 
     def test_find_with_null_byte_coll(self, ctx):

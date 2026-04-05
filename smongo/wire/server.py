@@ -54,7 +54,15 @@ MAX_CONNECTIONS = 1024
 
 
 class WireServer:
-    """MongoDB-compatible wire protocol server backed by the embedded engine."""
+    """MongoDB-compatible wire protocol server backed by the embedded engine.
+
+    When ``auth_required``, ``tls_cert_file``, or ``tls_key_file`` are
+    specified, the server automatically delegates to ``RustWireServer``
+    (Tokio async, TLS via rustls, SCRAM-SHA-256 auth gate).  Otherwise
+    it uses the lightweight Python TCP accept loop.
+    """
+
+    _UNSET = object()
 
     def __init__(
         self,
@@ -64,11 +72,29 @@ class WireServer:
         sync: str | SyncManager | None = None,
         max_connections: int = MAX_CONNECTIONS,
         local_client: LocalClient | None = None,
+        auth_required: bool | object = _UNSET,
+        tls_cert_file: str | None = None,
+        tls_key_file: str | None = None,
+        audit_log: str | None = None,
     ) -> None:
         self.host = host
         self.port = port
 
-        self._local_client = local_client or LocalClient(db_path)
+        if audit_log is not None:
+            from ..audit import configure_audit
+            configure_audit(audit_log)
+
+        auth_was_set = auth_required is not WireServer._UNSET
+        auth_bool = bool(auth_required) if auth_was_set else False
+        self._use_rust_server = auth_was_set or tls_cert_file is not None
+
+        if local_client is not None:
+            self._local_client = local_client
+        elif self._use_rust_server:
+            from smongo._smongo_core import RustLocalClient
+            self._local_client = RustLocalClient(db_path)
+        else:
+            self._local_client = LocalClient(db_path)
         self._owns_local_client = local_client is None
         self._cursor_registry = CursorRegistry()
         self._session_registry = SessionRegistry()
@@ -79,12 +105,6 @@ class WireServer:
         self._log_buffer = LogBuffer()
         self._conn_counter = ConnectionCounter(max_connections)
         self._free_monitoring = FreeMonitoringState()
-        self._shutdown = threading.Event()
-        self._server_socket: socket.socket | None = None
-        self._accept_thread: threading.Thread | None = None
-        self._conn_threads: set[threading.Thread] = set()
-        self._conn_id_gen = count(1)
-        self._conn_semaphore = threading.Semaphore(max_connections)
 
         self._owns_sync_mgr = False
         if isinstance(sync, SyncManager):
@@ -97,9 +117,45 @@ class WireServer:
             self._owns_sync_mgr = True
         else:
             self._sync_mgr = None
+        self._rust_server: object | None = None
+
+        if self._use_rust_server:
+            from smongo._smongo_core import RustWireServer
+
+            self._rust_server = RustWireServer(
+                host,
+                port,
+                self._local_client,
+                self._cursor_registry,
+                self._session_registry,
+                self._op_tracker,
+                self._param_store,
+                self._top_stats,
+                self._profiler,
+                self._log_buffer,
+                self._conn_counter,
+                self._free_monitoring,
+                self._sync_mgr,
+                max_connections,
+                self._owns_sync_mgr,
+                self._owns_local_client,
+                tls_cert_file,
+                tls_key_file,
+                auth_bool,
+            )
+        else:
+            self._shutdown = threading.Event()
+            self._server_socket: socket.socket | None = None
+            self._accept_thread: threading.Thread | None = None
+            self._conn_threads: set[threading.Thread] = set()
+            self._conn_id_gen = count(1)
+            self._conn_semaphore = threading.Semaphore(max_connections)
 
     def start(self) -> None:
         """Bind, listen, and begin accepting connections in a background thread."""
+        if self._use_rust_server:
+            self._rust_server.start()  # type: ignore[union-attr]
+            return
         self._log_buffer.install()
         self._cursor_registry.start_reaper()
         self._session_registry.start_reaper()
@@ -120,6 +176,9 @@ class WireServer:
 
     def stop(self) -> None:
         """Signal shutdown, close the listener, and join connection threads."""
+        if self._use_rust_server:
+            self._rust_server.stop()  # type: ignore[union-attr]
+            return
         self._shutdown.set()
         self._cursor_registry.stop_reaper()
         self._session_registry.stop_reaper()
@@ -140,7 +199,10 @@ class WireServer:
         """Start the server and block until interrupted or stopped."""
         self.start()
         try:
-            self._shutdown.wait()
+            if self._use_rust_server:
+                self._rust_server.serve_forever()  # type: ignore[union-attr]
+            else:
+                self._shutdown.wait()
         except KeyboardInterrupt:
             pass
         finally:

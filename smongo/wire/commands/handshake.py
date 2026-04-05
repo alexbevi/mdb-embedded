@@ -5,6 +5,8 @@ import platform
 import sys
 from datetime import UTC, datetime
 
+from bson import Int64
+
 from .._types import CommandDoc, DocSequences, ResponseDoc
 from ..context import ConnectionContext, get_total_memory_mb
 from ..errors import make_error
@@ -34,7 +36,7 @@ def _cmd_hello(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -> R
     resp: ResponseDoc = {
         "ismaster": True,
         "isWritablePrimary": True,
-        "topologyVersion": {"processId": _TOPOLOGY_PROCESS_ID, "counter": 0},
+        "topologyVersion": {"processId": _TOPOLOGY_PROCESS_ID, "counter": Int64(0)},
         "maxBsonObjectSize": MAX_BSON_OBJECT_SIZE,
         "maxMessageSizeBytes": MAX_MESSAGE_SIZE,
         "maxWriteBatchSize": MAX_WRITE_BATCH_SIZE,

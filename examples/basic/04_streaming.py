@@ -32,8 +32,8 @@ def main() -> None:
 
 
 def _run(sensors) -> None:
-    # ── Seed 10,000 documents ─────────────────────────────────
-    print("── seeding 10,000 sensor readings ──")
+    # ── Seed 2,000 documents ──────────────────────────────────
+    print("── seeding 2,000 sensor readings ──")
     docs = [
         {
             "_id": f"r_{i:05d}",
@@ -42,7 +42,7 @@ def _run(sensors) -> None:
             "humidity": 40 + (i % 40),
             "location": ["floor_1", "floor_2", "floor_3", "roof"][i % 4],
         }
-        for i in range(10_000)
+        for i in range(2_000)
     ]
     sensors.insert_many(docs)
     sensors.create_index([("sensor", 1)])
@@ -56,7 +56,7 @@ def _run(sensors) -> None:
     doc = sensors.find_one({"sensor": "sensor_07"})
     elapsed = (time.perf_counter() - t0) * 1000
     print(f"  found: {doc['_id']}  sensor={doc['sensor']}  temp={doc['temp_c']}C")
-    print(f"  time: {elapsed:.2f}ms (1 BSON decode, not 500)\n")
+    print(f"  time: {elapsed:.2f}ms (1 BSON decode)\n")
 
     # ── count_documents: no list, no BSON decode ──────────────
     print("── count_documents (no intermediate list) ──")
@@ -82,39 +82,7 @@ def _run(sensors) -> None:
         print(f"    {d['_id']}  temp={d['temp_c']}C  humidity={d['humidity']}%")
     print(f"    ... ({len(top_10) - 3} more)\n")
 
-    # compare with materializing everything
-    t0 = time.perf_counter()
-    all_roof = list(sensors.find({"location": "roof"}))
-    elapsed_full = (time.perf_counter() - t0) * 1000
-    print(
-        f"  comparison: materializing ALL {len(all_roof):,} roof readings took {elapsed_full:.2f}ms"
-    )
-    if elapsed_full > 0:
-        print(f"  limit(10) was {elapsed_full / max(elapsed_lazy, 0.001):.0f}x faster\n")
-
-    # ── find().sort().skip().limit(): sort forces materialization ──
-    print("── sort + skip + limit (sort requires full materialization) ──")
-    t0 = time.perf_counter()
-    page = sensors.find({"location": "floor_1"}).sort("temp_c", -1).skip(5).limit(5).to_list()
-    elapsed = (time.perf_counter() - t0) * 1000
-    print("  floor_1 readings, sorted by temp desc, page 2 (skip=5, limit=5):")
-    for d in page:
-        print(f"    {d['_id']}  temp={d['temp_c']}C")
-    print(f"  time: {elapsed:.2f}ms (sort needs all docs, then slices)\n")
-
-    # ── Cursor chaining is lazy until consumed ────────────────
-    print("── cursor chaining is deferred ──")
-    cursor = (
-        sensors.find({"sensor": "sensor_00"})
-        .sort("temp_c", 1)
-        .limit(3)
-        .projection({"temp_c": 1, "_id": 0})
-    )
-    print("  cursor created (not yet evaluated)")
-    results = cursor.to_list()
-    print(f"  .to_list() triggered evaluation: {len(results)} docs")
-    for d in results:
-        print(f"    temp={d['temp_c']}C")
+    print("All reads were lazy -- no unnecessary BSON materialization.")
 
     print()
 

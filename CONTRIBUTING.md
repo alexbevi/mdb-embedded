@@ -5,7 +5,7 @@ Thank you for your interest in contributing to smongo! This document covers the 
 ## Development Setup
 
 ```bash
-git clone https://github.com/smongo/smongo.git
+git clone https://github.com/ranfysvalle02/mdb-embedded.git
 cd smongo
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
@@ -24,13 +24,15 @@ pre-commit install
 
 | Module | Purpose |
 |--------|---------|
-| `smongo/storage/` | WiredTiger storage engine: `LocalCollection`, `LocalDB`, `StreamingCursor` |
-| `smongo/query/` | MQL query compiler, update operators, expression engine |
-| `smongo/aggregation/` | Aggregation pipeline (25+ stages), `Cursor` (lazy `Iterable` input) |
-| `smongo/index.py` | B-Tree/text/hashed/wildcard indexes, query planner |
-| `smongo/client.py` | `MongoClient`, `Database`, `Collection` -- the public API |
-| `smongo/wire/` | MongoDB wire protocol server (OP_MSG), 80+ commands |
-| `smongo/sync.py` | Bidirectional Atlas sync |
+| `rust/` | **The engine.** `RustLocalClient`, `RustLocalDB`, `RustLocalCollection`, `RustIndexManager`, `RustQueryPlanner`, `RustStreamingCursor`, wire command handlers, Tokio TCP server. Direct WiredTiger C FFI. |
+| `smongo/_smongo_core` | Compiled Rust extension (PyO3) -- built from `rust/` via maturin |
+| `smongo/client.py` | `MongoClient`, `Database`, `Collection` -- the public API. Routes `local://` to `LocalClient`. |
+| `smongo/storage/` | Storage layer: `LocalClient`/`LocalDB` (Python, delegates to Rust), `TTLReaper`, result types, locking, transaction session, BSON helpers |
+| `smongo/query/` | MQL compiler, update operators, expression engine (Rust-accelerated) |
+| `smongo/aggregation/` | Aggregation pipeline (25+ stages, Rust-accelerated), `Cursor` (Python lazy wrapper) |
+| `smongo/index.py` | Index key encoding, helpers, `DuplicateKeyError` (`IndexManager`/`QueryPlanner` classes removed; runtime: `RustIndexManager`, `RustQueryPlanner`) |
+| `smongo/wire/` | MongoDB wire protocol server (OP_MSG), 80+ commands (Rust-accelerated) |
+| `smongo/sync.py` | Bidirectional Atlas sync (Python orchestration, Rust utilities) |
 | `smongo/oplog.py` | Oplog writer, reader, change streams |
 | `smongo/schema.py` | `$jsonSchema` document validation |
 
@@ -60,9 +62,9 @@ All tests must pass before a PR can be merged. Target: 100% of new code covered.
 
 ## Adding a New Query/Update Operator
 
-1. Implement in `smongo/query/compiler.py` (`_eval_op` for query ops) or `smongo/query/update.py` (`apply_update` for update ops)
+1. Implement in `rust/src/query_compiler.rs` (`eval_query` for query ops) or `rust/src/query_update.rs` (`apply_update` for update ops). The Python modules in `smongo/query/` are thin shims that delegate to the Rust extension.
 2. Add tests in `tests/test_query.py`
-3. If the operator is also an aggregation expression, add it to `smongo/query/expressions.py` (`resolve_expr` / `_eval_expr_op`)
+3. If the operator is also an aggregation expression, add it to `rust/src/query_expressions.rs` (`eval_expr_op`)
 
 ## Adding a New Aggregation Stage
 
@@ -72,8 +74,22 @@ All tests must pass before a PR can be merged. Target: 100% of new code covered.
 
 ## Adding a New Wire Protocol Command
 
-1. Add a handler in the appropriate `smongo/wire/commands/` sub-module using the `@_register` decorator
-2. Add tests in `tests/test_wire_commands.py`
+**Python fallback path:** Add a handler in `smongo/wire/commands/` using the `@_register` decorator. The Python `WireServer` dispatches via the `_HANDLERS` dict.
+
+**Rust hot path:** Add a handler function in the appropriate `rust/src/wire_commands/` module (e.g. `crud.rs`, `admin.rs`). The handler must match the `HandlerFn` signature:
+
+```rust
+fn cmd_my_command(
+    py: Python<'_>,
+    ctx: &Bound<'_, ConnectionContext>,  // typed, not erased
+    cmd: &Bound<'_, PyDict>,
+    seqs: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> { ... }
+```
+
+Register it in the module's `register()` function. `rs_dispatch` performs a single downcast of `ctx` and routes to the handler via `RUST_HANDLERS`. Field access on `ConnectionContext` is direct (no `getattr`). Frequently-used Python modules are cached via `CachedImports` (Arc-shared, per-connection) and `cached_modules` (`PyOnceLock`, per-process — free-threading-safe).
+
+Add tests in `tests/test_wire_commands.py` or the appropriate existing test file.
 
 ## Commit Messages
 

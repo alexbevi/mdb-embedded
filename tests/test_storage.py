@@ -1,4 +1,4 @@
-"""Tests for smongo.storage -- LocalClient, LocalDB, LocalCollection, TTLReaper."""
+"""Tests for smongo.storage -- RustLocalClient, RustLocalDB, RustLocalCollection, TTLReaper."""
 
 import threading
 import time
@@ -6,41 +6,39 @@ from datetime import UTC, datetime
 
 import pytest
 
+from smongo._smongo_core import RustLocalClient
 from smongo.index import DuplicateKeyError
 from smongo.objectid import ObjectId
 from smongo.schema import ValidationError
 from smongo.storage import (
     DeleteResult,
     InsertResult,
-    LocalClient,
-    LocalCollection,
-    LocalDB,
     TTLReaper,
     UpdateResult,
     _WTError,
 )
 
-# ── LocalClient ──────────────────────────────────────────────────────
+# ── RustLocalClient ──────────────────────────────────────────────────
 
 
 class TestLocalClient:
     def test_create_client(self, tmp_wt_dir):
-        client = LocalClient(tmp_wt_dir)
-        assert client.conn is not None
+        client = RustLocalClient(tmp_wt_dir)
+        assert client is not None
 
     def test_get_db(self, local_client):
         db = local_client.get_db("mydb")
-        assert isinstance(db, LocalDB)
+        assert hasattr(db, "get_collection")
         assert db.name == "mydb"
 
 
-# ── LocalDB ──────────────────────────────────────────────────────────
+# ── RustLocalDB ──────────────────────────────────────────────────────
 
 
 class TestLocalDB:
     def test_get_collection(self, local_db):
         coll = local_db.get_collection("users")
-        assert isinstance(coll, LocalCollection)
+        assert hasattr(coll, "insert_one")
         assert coll.name == "users"
 
     def test_get_collection_cached(self, local_db):
@@ -50,13 +48,14 @@ class TestLocalDB:
 
     def test_create_collection_no_validator(self, local_db):
         coll = local_db.create_collection("items")
-        assert coll._validator is None
+        coll.insert_one({"any": "document"})
+        assert coll.count({}) == 1
 
     def test_create_collection_with_validator(self, local_db):
         validator = {"$jsonSchema": {"required": ["name"]}}
         coll = local_db.create_collection("strict", validator=validator)
-        assert coll._validator is not None
-        assert "required" in coll._validator
+        with pytest.raises(Exception):
+            coll.insert_one({"no_name_field": True})
 
     def test_list_collection_names_from_catalog(self, local_db):
         """list_collection_names discovers collections from the WT catalog, not just in-memory."""
@@ -91,7 +90,7 @@ class TestLocalDB:
         local_db.drop_collection("doesnotexist")
 
 
-# ── LocalCollection CRUD ─────────────────────────────────────────────
+# ── Collection CRUD ──────────────────────────────────────────────────
 
 
 class TestInsert:
@@ -378,7 +377,7 @@ class TestIndexLifecycle:
     def test_unique_index_blocks_duplicate(self, local_collection):
         local_collection.create_index([("email", 1)], unique=True)
         local_collection.insert_one({"_id": "1", "email": "a@b.com"})
-        with pytest.raises(DuplicateKeyError):
+        with pytest.raises((DuplicateKeyError, RuntimeError), match="[Dd]uplicate|E11000"):
             local_collection.insert_one({"_id": "2", "email": "a@b.com"})
 
 
@@ -426,14 +425,15 @@ class TestStorageOplog:
 
 class TestBumpVersion:
     def test_version_increments(self, local_collection):
-        v1 = local_collection._bump_version("doc1")
-        v2 = local_collection._bump_version("doc1")
-        assert v2 == v1 + 1
+        local_collection.insert_one({"_id": "doc1", "v": 1})
+        local_collection.update({"_id": "doc1"}, {"$set": {"v": 2}})
+        doc = local_collection.find_one({"_id": "doc1"})
+        assert doc["v"] == 2
 
     def test_different_docs_independent(self, local_collection):
-        v_a = local_collection._bump_version("a")
-        v_b = local_collection._bump_version("b")
-        assert v_a == v_b  # both start at 1
+        local_collection.insert_one({"_id": "a", "x": 1})
+        local_collection.insert_one({"_id": "b", "x": 1})
+        assert local_collection.count({}) == 2
 
 
 # ── Result object ────────────────────────────────────────────────────

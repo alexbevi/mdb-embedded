@@ -39,6 +39,7 @@ _COMPONENT_MAP: dict[str, str] = {
     "smongo.query": "QUERY",
     "smongo.aggregation": "AGG",
     "smongo.client": "ACCESS",
+    "smongo.audit": "AUDIT",
 }
 
 

@@ -6,17 +6,29 @@ instances (and thus WiredTiger sessions) for the lifetime of the connection.
 Also tracks compression negotiation, logical sessions, per-session transaction
 state with undo-journal rollback, per-connection write result tracking,
 active-operation monitoring, and an operation profiler.
+
+Helper classes (NamespaceError, validate_namespace, LastWriteResult,
+ParameterStore, ConnectionCounter, FreeMonitoringState) live in Rust
+(_smongo_core).  ConnectionContext and LogBuffer remain in Python.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import re
 import subprocess
 import threading
 from itertools import count
 from typing import TYPE_CHECKING, Any
+
+from smongo._smongo_core import (
+    ConnectionCounter,
+    FreeMonitoringState,
+    LastWriteResult,
+    NamespaceError,  # noqa: F401 -- re-exported for _registry.py and tests
+    ParameterStore,
+    validate_namespace,
+)
 
 from ..storage import LocalClient, LocalCollection, LocalDB
 from ..storage.transaction import TransactionSession as _StorageTxnSession
@@ -36,112 +48,6 @@ from .transactions import (
 
 if TYPE_CHECKING:
     from ..sync import SyncManager
-
-_MAX_DB_NAME_LEN = 64
-_MAX_COLL_NAME_LEN = 120
-_INVALID_NS_CHARS = re.compile(r"[\x00/\\]")
-_SYSTEM_PREFIX_EXCEPTIONS = frozenset({"$cmd", "$external"})
-
-
-class NamespaceError(ValueError):
-    """Raised when a database or collection name violates naming rules."""
-
-
-def validate_namespace(db_name: str, coll_name: str) -> None:
-    """Enforce MongoDB namespace naming rules.
-
-    Raises NamespaceError if the names contain forbidden characters, exceed
-    length limits, or are otherwise invalid.
-    """
-    if not isinstance(db_name, str) or not db_name or db_name != db_name.strip():
-        raise NamespaceError(f"invalid database name: {db_name!r}")
-    if len(db_name) > _MAX_DB_NAME_LEN:
-        raise NamespaceError(f"database name exceeds {_MAX_DB_NAME_LEN} characters")
-    if _INVALID_NS_CHARS.search(db_name):
-        raise NamespaceError(f"database name contains forbidden characters: {db_name!r}")
-    if "." in db_name:
-        raise NamespaceError(f"database name cannot contain '.': {db_name!r}")
-    if db_name.startswith("$"):
-        raise NamespaceError(f"database name cannot start with '$': {db_name!r}")
-
-    if not isinstance(coll_name, str) or not coll_name or coll_name != coll_name.strip():
-        raise NamespaceError(f"invalid collection name: {coll_name!r}")
-    if len(coll_name) > _MAX_COLL_NAME_LEN:
-        raise NamespaceError(f"collection name exceeds {_MAX_COLL_NAME_LEN} characters")
-    if _INVALID_NS_CHARS.search(coll_name):
-        raise NamespaceError(f"collection name contains forbidden characters: {coll_name!r}")
-    if coll_name.startswith("$") and coll_name not in _SYSTEM_PREFIX_EXCEPTIONS:
-        raise NamespaceError(f"collection name cannot start with '$': {coll_name!r}")
-    if ".." in coll_name:
-        raise NamespaceError(f"collection name cannot contain '..': {coll_name!r}")
-
-
-# =====================================================================
-# Per-connection last-write tracking (getLastError)
-# =====================================================================
-
-
-class LastWriteResult:
-    """Captures the outcome of the most recent write on a connection."""
-
-    __slots__ = ("err", "n", "n_modified", "op", "upserted_id", "write_errors")
-
-    def __init__(
-        self,
-        *,
-        op: str = "unknown",
-        n: int = 0,
-        n_modified: int = 0,
-        err: str | None = None,
-        upserted_id: Any = None,
-        write_errors: list[dict[str, Any]] | None = None,
-    ) -> None:
-        self.op = op
-        self.n = n
-        self.n_modified = n_modified
-        self.err = err
-        self.upserted_id = upserted_id
-        self.write_errors = write_errors or []
-
-
-# =====================================================================
-# Mutable parameter store (getParameter / setParameter)
-# =====================================================================
-
-
-class ParameterStore:
-    """Thread-safe mutable parameter store for ``getParameter``/``setParameter``."""
-
-    _DEFAULTS: dict[str, Any] = {
-        "featureCompatibilityVersion": {"version": "7.0"},
-        "logLevel": 0,
-        "authenticationMechanisms": [],
-        "quiet": False,
-        "notablescan": False,
-        "maxTransactionLockRequestTimeoutMillis": 5000,
-        "transactionLifetimeLimitSeconds": 60,
-        "cursorTimeoutMillis": 600_000,
-        "internalQueryExecMaxBlockingSortBytes": 104_857_600,
-        "failIndexKeyTooLong": True,
-        "slowOpThresholdMs": 100,
-        "slowOpSampleRate": 1.0,
-    }
-
-    def __init__(self) -> None:
-        self._params: dict[str, Any] = dict(self._DEFAULTS)
-        self._lock = threading.Lock()
-
-    def get(self, name: str) -> Any:
-        with self._lock:
-            return self._params.get(name)
-
-    def get_all(self) -> dict[str, Any]:
-        with self._lock:
-            return dict(self._params)
-
-    def set(self, name: str, value: Any) -> None:
-        with self._lock:
-            self._params[name] = value
 
 
 # =====================================================================
@@ -177,63 +83,6 @@ class LogBuffer(logging.Handler):
         root = logging.getLogger()
         if self not in root.handlers:
             root.addHandler(self)
-
-
-# =====================================================================
-# Connection counter (serverStatus / connPoolStats)
-# =====================================================================
-
-
-class ConnectionCounter:
-    """Thread-safe connection counter shared across all ``ConnectionContext`` instances."""
-
-    def __init__(self, max_connections: int = 1024) -> None:
-        self._current = 0
-        self._total = 0
-        self._max = max_connections
-        self._lock = threading.Lock()
-
-    def connect(self) -> None:
-        with self._lock:
-            self._current += 1
-            self._total += 1
-
-    def disconnect(self) -> None:
-        with self._lock:
-            self._current = max(0, self._current - 1)
-
-    def snapshot(self) -> dict[str, int]:
-        with self._lock:
-            return {
-                "current": self._current,
-                "available": self._max - self._current,
-                "totalCreated": self._total,
-            }
-
-
-# =====================================================================
-# Free monitoring state
-# =====================================================================
-
-
-class FreeMonitoringState:
-    """Tracks whether free monitoring is enabled (setFreeMonitoring/getFreeMonitoringStatus)."""
-
-    def __init__(self) -> None:
-        self._state: str = "disabled"
-        self._lock = threading.Lock()
-
-    @property
-    def state(self) -> str:
-        with self._lock:
-            return self._state
-
-    def set(self, action: str) -> None:
-        with self._lock:
-            if action == "enable":
-                self._state = "enabled"
-            elif action == "disable":
-                self._state = "disabled"
 
 
 # =====================================================================

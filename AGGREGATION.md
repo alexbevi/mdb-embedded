@@ -57,7 +57,7 @@ cursor.limit(5).sort("age", -1)
 
 Internally, `_resolve()` applies them in the correct order: sort → skip → limit → projection.
 
-**Lazy input**: The cursor accepts any `Iterable[Document]` -- including a `StreamingCursor` that pulls documents from WiredTiger one at a time. When `.sort()` is applied, the source is fully materialized (sorting requires the full set). When only `.skip()` and `.limit()` are applied **without** sorting, the cursor uses `itertools.islice` to consume only the required slice from the underlying iterator. This means `find({}).limit(10)` on a large collection deserializes only 10 BSON documents.
+**Lazy input**: The cursor accepts any `Iterable[Document]` -- including a `RustStreamingCursor` that pulls documents from WiredTiger one at a time. When `.sort()` is applied, the source is fully materialized (sorting requires the full set). When only `.skip()` and `.limit()` are applied **without** sorting, the cursor uses `itertools.islice` to consume only the required slice from the underlying iterator. This means `find({}).limit(10)` on a large collection deserializes only 10 BSON documents.
 
 The cursor also serves as the aggregation entry point. The `.aggregate()` method always materializes its input (pipelines process stage-by-stage over full document lists):
 

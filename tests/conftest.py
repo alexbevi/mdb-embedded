@@ -3,9 +3,8 @@
 import os
 
 import pytest
-import wiredtiger as wt
 
-from smongo.storage import LocalClient
+from smongo._smongo_core import RustLocalClient
 
 
 @pytest.fixture
@@ -16,6 +15,9 @@ def tmp_wt_dir(tmp_path):
 
 @pytest.fixture
 def wt_connection(tmp_wt_dir):
+    """Raw SWIG WiredTiger connection (lazy import to avoid dlopen conflict)."""
+    import wiredtiger as wt
+
     os.makedirs(tmp_wt_dir, exist_ok=True)
     conn = wt.wiredtiger_open(tmp_wt_dir, "create")
     yield conn
@@ -31,13 +33,17 @@ def wt_session(wt_connection):
 
 @pytest.fixture
 def local_client(tmp_wt_dir):
-    return LocalClient(tmp_wt_dir, durable=False)
+    client = RustLocalClient(tmp_wt_dir, durable=False)
+    yield client
+    client.close()
 
 
 @pytest.fixture
 def durable_client(tmp_wt_dir):
-    """LocalClient with WAL enabled for crash-recovery tests."""
-    return LocalClient(tmp_wt_dir, durable=True)
+    """RustLocalClient with WAL enabled for crash-recovery tests."""
+    client = RustLocalClient(tmp_wt_dir, durable=True)
+    yield client
+    client.close()
 
 
 @pytest.fixture

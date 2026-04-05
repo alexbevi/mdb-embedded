@@ -49,6 +49,7 @@ from .stages import (
     unset_stage,
     unwind_stage,
 )
+from .geo import geo_near_stage
 from .vector import vector_search_stage
 
 
@@ -248,6 +249,8 @@ class Cursor:
                 docs = sample_stage(docs, spec)
             elif op == "$vectorSearch":
                 docs = vector_search_stage(docs, spec)
+            elif op == "$geoNear":
+                docs = geo_near_stage(docs, spec)
             elif op == "$facet":
                 docs = facet_stage(
                     docs, spec, self._collection_getter, max_pipeline_docs=max_pipeline_docs

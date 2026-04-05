@@ -383,7 +383,7 @@ Two wire servers, diff db-path, different ports  ✅ Independent databases
 Wire server + embedded client, same db-path      ❌ WiredTiger lock
 Multiple Compass windows → one wire server       ✅ Each gets its own TCP connection
 Compass + PyMongo → one wire server              ✅ Both connect over TCP
-Web dashboard + wire server in same process      ✅ Shared LocalClient
+Web dashboard + wire server in same process      ✅ Shared RustLocalClient
 ```
 
 ### The Safe Pattern
@@ -425,7 +425,7 @@ client = MongoClient("local://my_data")  # ❌ if another process already has it
 
 ### Single-Process Sharing
 
-If your app and the wire server live in the **same Python process**, they share the same `LocalClient` — one `wiredtiger_open()`, no conflict. This is how `web_app.py` works: Flask and the wire server coexist by sharing the WiredTiger connection.
+If your app and the wire server live in the **same Python process**, they share the same `RustLocalClient` -- one `wiredtiger_open()`, no conflict. This is how `web_app.py` works: Flask and the wire server coexist by sharing the WiredTiger connection.
 
 ```python
 from smongo import MongoClient
@@ -666,7 +666,7 @@ wiredtiger_open: __posix_file_lock, /path/to/my_data/WiredTiger.lock:
     resource busy: Resource temporarily unavailable
 ```
 
-In smongo, this surfaces as a `WiredTigerError` during `LocalClient.__init__()`, before the TCP socket is even created.
+In smongo, this surfaces as a `WiredTigerError` during `RustLocalClient.__init__()`, before the TCP socket is even created.
 
 ### J. Compass mongosh Commands
 
