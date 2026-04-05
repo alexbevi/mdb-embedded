@@ -32,7 +32,7 @@ pre-commit install
 | `smongo/aggregation/` | Aggregation pipeline (25+ stages, Rust-accelerated), `Cursor` (Python lazy wrapper) |
 | `smongo/index.py` | Index key encoding, helpers, `DuplicateKeyError` (`IndexManager`/`QueryPlanner` classes removed; runtime: `RustIndexManager`, `RustQueryPlanner`) |
 | `smongo/wire/` | MongoDB wire protocol server (OP_MSG), 80+ commands (Rust-accelerated) |
-| `smongo/sync.py` | Bidirectional Atlas sync (Python orchestration, Rust utilities) |
+| `smongo/sync.py` | Bidirectional Atlas sync with MQL rules, variable substitution, vector clocks |
 | `smongo/oplog.py` | Oplog writer, reader, change streams |
 | `smongo/schema.py` | `$jsonSchema` document validation |
 

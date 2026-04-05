@@ -206,15 +206,103 @@ Every mutation (insert, update, delete, index create/drop) is append-logged to a
 - **Pull**: change streams (preferred) or timestamp-based polling, merge remote changes locally
 - **Index sync**: index definitions flow both directions
 - **Conflict resolution**: Last-Write-Wins, local-wins, remote-wins, field-level merge, or a custom callable
+- **Vector clocks**: per-document causal ordering across replicas -- concurrent conflicts invoke the resolver, causal updates apply automatically
 - **Checkpointing**: survives crashes and restarts via a WiredTiger checkpoint table
 - **Auto-sync**: background thread with configurable interval
 - **Hybrid mode**: `MongoClient("local://...", sync="mongodb+srv://...")` auto-registers and starts sync
 - **Exponential backoff**: on consecutive failures, backoff doubles up to 300s
 - **Sync metrics**: `status()` returns `pushed`, `pulled`, `conflicts`, `errors` counters and a `state` field
-- **Selective sync filters**: per-collection MQL filters control which documents are pushed/pulled
+- **MQL sync rules**: the same query language controls what syncs -- no separate DSL (see below)
+- **Node provenance**: oplog entries record the `node_id` of the originating device
+
+### MQL Sync Rules
+
+Sync rules use the same MQL you already know. No separate DSL, no translation layer -- one query language everywhere, including sync policy.
+
+**Variable substitution** makes rules dynamic. Built-in variables are resolved fresh each sync cycle:
+
+| Variable | Value | Example |
+|---|---|---|
+| `$$NOW` | `time.time()` (epoch float) | Time-windowed sync |
+| `$$NODE_ID` | Configured `node_id` | Device-scoped sync |
+| `$$<custom>` | Any key from `sync_config["variables"]` | Region, tenant, etc. |
+
+**Device-scoped sync** -- each edge node syncs only its own data:
+
+```python
+client = MongoClient("local://data", sync="mongodb+srv://...", sync_config={
+    "node_id": "sensor-east-001",
+    "sync_rules": {"device_id": "$$NODE_ID"},
+})
+```
+
+**Time-windowed sync** -- only sync the last 7 days:
+
+```python
+client = MongoClient("local://data", sync="mongodb+srv://...", sync_config={
+    "sync_rules": {"_lastModified": {"$gt": "$$WINDOW_START"}},
+    "variables": {"WINDOW_START": time.time() - 7 * 86400},
+})
+```
+
+**Combining rules** with `$and`:
+
+```python
+sync_config = {
+    "node_id": "sensor-east-001",
+    "sync_rules": {
+        "$and": [
+            {"device_id": "$$NODE_ID"},
+            {"_lastModified": {"$gt": "$$WINDOW_START"}},
+        ]
+    },
+    "variables": {"WINDOW_START": time.time() - 7 * 86400},
+}
+```
+
+Per-collection filters also support variable substitution via `collections`:
+
+```python
+sync_config = {
+    "collections": {
+        "iot.readings": {"device_id": "$$NODE_ID"},
+        "iot.config": {},  # sync all config docs
+    },
+    "node_id": "sensor-east-001",
+}
+```
 
 ### Local-First Architecture
 All reads and writes hit local WiredTiger -- zero network latency, works fully offline. The oplog accumulates mutations while disconnected; nothing is lost. When connectivity returns, the sync thread picks up from its last checkpoint and pushes/pulls everything that was missed. The wire protocol server means local clients (other apps, mongosh, Compass, LangChain) can connect over TCP without knowing it's not a "real" MongoDB.
+
+### Edge Computing
+smongo turns any device into a MongoDB-compatible edge node. Each device runs its own embedded engine, writes locally at full speed, and syncs to a central Atlas cluster with MQL-scoped filters. The central hub aggregates data from the entire fleet; each device sees only its own data.
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│ sensor-north │     │ sensor-south │     │ sensor-east  │
+│  smongo +    │     │  smongo +    │     │  smongo +    │
+│  WiredTiger  │     │  WiredTiger  │     │  WiredTiger  │
+└──────┬───────┘     └──────┬───────┘     └──────┬───────┘
+       │  push/pull          │  push/pull          │  push/pull
+       │  device_id=self     │  device_id=self     │  device_id=self
+       └─────────┬───────────┴───────────┬─────────┘
+                 ▼                       ▼
+         ┌───────────────────────────────────┐
+         │        MongoDB Atlas (central)     │
+         │   All devices' data aggregated     │
+         └───────────────────────────────────┘
+```
+
+```python
+for device in fleet:
+    client = MongoClient(f"local://{device.data_dir}", sync=ATLAS_URI, sync_config={
+        "node_id": device.id,
+        "sync_rules": {"device_id": "$$NODE_ID"},
+    })
+```
+
+See [`examples/patterns/edge_fleet_sync.py`](examples/patterns/edge_fleet_sync.py) for a complete working example.
 
 ### Wire Protocol Server
 smongo speaks the real MongoDB binary protocol (OP_MSG, OP_COMPRESSED, OP_QUERY). Point `mongosh`, PyMongo, Compass, or any MongoDB driver at `localhost:27017` and they'll talk to the embedded engine as if it were a real `mongod`. The Docker Compose setup exposes the wire server on port 27018 alongside the web dashboard -- `docker compose up` and connect Compass immediately. Small database, real protocol.
@@ -326,7 +414,7 @@ smongo/
     vector.py          $vectorSearch (NumPy / USearch)
   index.py           Index key encoding, helpers, DuplicateKeyError (runtime: RustIndexManager, RustQueryPlanner)
   oplog.py           Append-only operations log with compaction
-  sync.py            Bidirectional sync with metrics, backoff, selective filters
+  sync.py            Bidirectional sync with MQL rules, variable substitution, vector clocks
   objectid.py        MongoDB-style ObjectId implementation
   schema.py          $jsonSchema validation layer (delegates to Rust)
   wire/              MongoDB binary protocol server (OP_MSG, OP_COMPRESSED)
@@ -378,6 +466,7 @@ examples/
     ecommerce.py         Shopping cart, orders, revenue analytics, dashboards
     iot_timeseries.py    1000+ sensor readings, anomaly detection, facility stats
     content_cms.py       Blog CMS: tagging, search, author leaderboard, facets
+    edge_fleet_sync.py   Edge fleet: MQL sync rules, device scoping, time windows
 
 demo.py              Standalone CLI demo (no Docker needed)
 Dockerfile           Python 3.11 + WiredTiger build deps

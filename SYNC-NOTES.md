@@ -129,11 +129,15 @@ The `field_merge` conflict resolver uses `changed_fields` from the oplog to dete
 
 **Impact:** Field-merge may under-report locally changed fields, causing some local changes to be overwritten by remote values.
 
-### 11. Vector clocks are initialized but not fully wired
+### 11. Vector clocks are active in conflict resolution
 
-`VectorClock` is implemented and `self._vector_clocks` is initialized in `__init__`, but vector clocks are not actually stamped on documents during push/pull or consulted during conflict resolution. The infrastructure is there but the integration is incomplete.
+`VectorClock` is now wired into `_upsert_remote_doc`. On conflict:
+1. The local and remote document vector clocks (stored as `_vclock`) are compared
+2. If one dominates the other, the dominating version wins automatically (no resolver invoked)
+3. If the events are truly concurrent, the configured conflict resolver (LWW, local-wins, etc.) decides
+4. The merged clock is ticked for the local `node_id` and stamped back onto the resolved document
 
-**Impact:** None currently -- the feature is dormant. If you're counting on causal ordering beyond LWW timestamps, it's not active yet.
+**Impact:** Causal ordering is now enforced. Documents carry `_vclock` metadata (a dict of `{node_id: counter}`). This adds a small per-document overhead but enables correct conflict detection across multiple replicas.
 
 ### 12. CRDT merge is implemented but opt-in and untested in integration
 
@@ -201,12 +205,11 @@ The oplog stores the full document payload as a JSON string (not BSON). Document
 
 ## Selective Sync Filters
 
-### 18. Filters are evaluated against the payload, not the live document
+### 18. Push filters now resolve the full document for updates
 
-Push-side namespace filters (`ns_filter`) are evaluated against the oplog entry's `payload`, not the current state of the document. For updates, the payload is the update spec (e.g., `{"$set": {"status": "active"}}`), not the full document. A filter like `{"status": "active"}` won't match an update spec because the top-level key is `"$set"`, not `"status"`.
+Push-side filters for `update` operations now fetch the current document from the local collection by `doc_id` and evaluate the filter against the full document -- not the oplog payload (which is an update spec like `{"$set": {...}}`). For `insert` operations, the filter evaluates against the payload directly (which is the full document). For `delete` operations, the filter evaluates against the payload if available.
 
-**Impact:** Selective sync filters work reliably for insert payloads (full documents) but may not filter updates correctly because the payload shape differs.
-**Workaround:** Use broad filters or apply filtering at the collection level rather than per-document.
+**Impact:** Selective sync filters now work correctly for all operation types. There is one additional local read per filtered update operation, but this only applies when sync rules or per-collection filters are configured.
 
 ### 19. Filter changes don't retroactively sync
 
@@ -262,16 +265,130 @@ LWW conflict resolution depends on timestamps. Docker containers share the host 
 | Conflict: field_merge | Not integration tested | Unit only |
 | Conflict: custom callable | Not tested | Gap |
 | CRDT merge | Not tested | Gap |
-| Vector clocks | Not tested | Dormant feature |
+| Vector clocks | Unit + integration tested | Covered |
 | Change stream pull | Not tested (disabled in CI) | Major gap |
 | Timestamp polling pull | Integration tested | Covered |
 | Remote delete via polling | Known non-functional | Documented |
-| Selective sync filters | Not integration tested | Gap |
+| MQL sync rules (global) | Unit + integration tested | Covered |
+| Device-scoped sync | Integration tested | Covered |
+| Time-windowed sync | Integration tested | Covered |
+| Variable substitution | Unit tested | Covered |
+| Push filter for updates | Unit tested | Covered |
+| Node ID in oplog | Integration tested | Covered |
+| Per-collection sync_filter | Unit tested | Covered |
 | Oplog auto-compact | Not directly tested | Exercised implicitly |
 | Exponential backoff | Not tested | Gap |
 | Tombstone expiry | Not tested | Gap |
 | Large batch push (>batch_size) | Not tested | Gap |
 | Crash recovery / checkpoint | Not tested | Gap |
+
+---
+
+## MQL Sync Rules and Variable Substitution
+
+### How it works
+
+Sync rules are standard MQL query dicts passed via `sync_config["sync_rules"]`. They control which documents are pushed and pulled -- the same query language you use for `find()` and `aggregate()`.
+
+**Variable substitution** replaces `$$NAME` strings with values from a context dict. This happens at the start of each sync cycle, so time-based variables like `$$NOW` are always fresh. The substitution is a pure-Python deep walk -- the Rust query engine is unchanged.
+
+Built-in variables:
+
+| Variable | Value | Description |
+|---|---|---|
+| `$$NOW` | `time.time()` | Epoch seconds (float), matches `_lastModified` |
+| `$$NODE_ID` | `sync_config["node_id"]` | Device/replica identity |
+
+User-defined variables via `sync_config["variables"]`:
+
+```python
+sync_config = {
+    "sync_rules": {"region": "$$REGION", "active": True},
+    "variables": {"REGION": "us-east-1"},
+}
+```
+
+Variables that start with `$$` but have no matching context key are left as-is (so `$$ROOT` and `$$CURRENT` in `$expr` still work).
+
+### Where rules are applied
+
+- **Push (local → Atlas):** each oplog entry is checked against the global sync filter and per-collection filter. For `insert` ops, the payload (full document) is evaluated. For `update` ops, the **current full document** is fetched by `doc_id` and evaluated (not the update spec). For `delete` ops, the payload is evaluated if available.
+- **Pull (Atlas → local):** each remote document is checked against the global sync filter and per-collection filter before being upserted locally. This applies to both the timestamp-polling path and the change-stream path.
+
+### Per-collection filters
+
+Per-collection filters are specified via `collections` as a dict:
+
+```python
+sync_config = {
+    "collections": {
+        "iot.readings": {"device_id": "$$NODE_ID"},
+        "iot.config": {},
+    },
+    "node_id": "sensor-042",
+}
+```
+
+These also support `$$` variable substitution and are recompiled each sync cycle.
+
+The `register_collection` method also accepts an optional `sync_filter` kwarg for programmatic registration:
+
+```python
+mgr.register_collection("iot", "readings", local_coll, sync_filter={"device_id": "$$NODE_ID"})
+```
+
+---
+
+## Edge Fleet Sync Pattern
+
+### Architecture
+
+Multiple edge devices (IoT sensors, mobile apps, point-of-sale terminals) each run their own smongo engine. A central MongoDB Atlas cluster aggregates data from the entire fleet. Each device uses MQL sync rules scoped to its own `node_id`:
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│  device-001  │     │  device-002  │     │  device-003  │
+│ node_id=001  │     │ node_id=002  │     │ node_id=003  │
+│ sync_rules:  │     │ sync_rules:  │     │ sync_rules:  │
+│ device_id=   │     │ device_id=   │     │ device_id=   │
+│   $$NODE_ID  │     │   $$NODE_ID  │     │   $$NODE_ID  │
+└──────┬───────┘     └──────┬───────┘     └──────┬───────┘
+       │  push: own data     │                     │
+       │  pull: own data     │                     │
+       └─────────┬───────────┴─────────────┬───────┘
+                 ▼                         ▼
+         ┌───────────────────────────────────┐
+         │        MongoDB Atlas (central)     │
+         │  All devices' data aggregated      │
+         │  Fleet-wide analytics via MQL      │
+         └───────────────────────────────────┘
+```
+
+### Configuration
+
+```python
+client = MongoClient(f"local://{device_data_dir}", sync=ATLAS_URI, sync_config={
+    "node_id": device_serial_number,
+    "sync_rules": {"device_id": "$$NODE_ID"},
+})
+```
+
+### Node provenance in oplog
+
+When a `SyncManager` registers a collection, it stamps the configured `node_id` on the collection's `OplogWriter`. Subsequent oplog entries include a `"node_id"` field, enabling audit trails and debugging across the fleet.
+
+### Vector clocks for multi-device conflict resolution
+
+Documents carry a `_vclock` field (dict of `{node_id: counter}`). When two devices modify the same document:
+- If one version's clock **dominates** the other (every counter >=, at least one >), it wins automatically
+- If the clocks are **concurrent** (neither dominates), the configured conflict resolver decides
+- The merged clock is ticked for the resolving node and stamped on the winner
+
+This provides correct causal ordering without requiring synchronized wall clocks.
+
+### Example
+
+See [`examples/patterns/edge_fleet_sync.py`](examples/patterns/edge_fleet_sync.py) for a complete working example with three simulated edge devices, device-scoped sync, and time-windowed sync.
 
 ---
 
@@ -281,7 +398,6 @@ LWW conflict resolution depends on timestamps. Docker containers share the host 
 2. **Implement pull-side index drop reconciliation** to prevent local index bloat.
 3. **Forward all index options on pull**, not just `unique` and `sparse`.
 4. **Fix checkpoint advancement on partial failure** -- only advance to `safe_key`, not `last_key`.
-5. **Add integration tests for field_merge, selective filters, and change stream pull.**
+5. **Add integration tests for field_merge and change stream pull.**
 6. **Persist tombstones to WiredTiger** for crash-safe delete tracking.
-7. **Wire up vector clocks** or remove the dormant code to avoid confusion.
-8. **Document the `_lastModified` requirement** for remote documents participating in LWW.
+7. **Document the `_lastModified` requirement** for remote documents participating in LWW.

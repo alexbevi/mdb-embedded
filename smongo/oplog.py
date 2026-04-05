@@ -61,12 +61,18 @@ class OplogWriter:
     """Appends structured operations to a WiredTiger oplog table."""
 
     def __init__(
-        self, session: Any, oplog_uri: str, namespace: str, hub: OplogHub | None = None
+        self,
+        session: Any,
+        oplog_uri: str,
+        namespace: str,
+        hub: OplogHub | None = None,
+        node_id: str | None = None,
     ) -> None:
         self.session = session
         self.oplog_uri = oplog_uri
         self.namespace = namespace
         self._hub = hub
+        self.node_id = node_id
 
     def log(
         self,
@@ -100,6 +106,8 @@ class OplogWriter:
             "checksum": _doc_checksum(payload) if op != "delete" else None,
             "internal": internal,
         }
+        if self.node_id:
+            log_entry["node_id"] = self.node_id
         if changed_fields:
             log_entry["changed_fields"] = changed_fields
 

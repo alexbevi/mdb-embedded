@@ -7,8 +7,10 @@ Architecture:
     - Conflict resolution strategies: LWW, local-wins, remote-wins, or custom callable
     - Checkpoint stored in a dedicated WiredTiger table so sync survives restarts
     - Exponential backoff on consecutive errors, per-collection selective filters
+    - MQL-native sync rules with $$NOW, $$NODE_ID, and user-defined variable substitution
 """
 
+import copy
 import json
 import logging
 import threading
@@ -282,6 +284,37 @@ def _diff_fields(local_doc: Document, remote_doc: Document) -> set[str]:
 
 
 # ------------------------------------------------------------------
+# Variable substitution for sync rules
+# ------------------------------------------------------------------
+
+
+def _resolve_variables(query: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    """Deep-clone *query* and replace ``$$NAME`` string values with *context* entries.
+
+    Built-in variables (injected by the caller):
+        ``$$NOW``      -- ``time.time()`` (epoch float, matches ``_lastModified``)
+        ``$$NODE_ID``  -- the configured ``node_id``
+
+    User-defined variables are merged from ``sync_config["variables"]``.
+    Strings that start with ``$$`` but have no matching context key are left as-is
+    so that ``$$ROOT`` / ``$$CURRENT`` still work inside ``$expr``.
+    """
+
+    def _walk(obj: Any) -> Any:
+        if isinstance(obj, dict):
+            return {k: _walk(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_walk(v) for v in obj]
+        if isinstance(obj, str) and obj.startswith("$$"):
+            var_name = obj[2:]
+            if var_name in context:
+                return context[var_name]
+        return obj
+
+    return _walk(copy.deepcopy(query))
+
+
+# ------------------------------------------------------------------
 # SyncManager
 # ------------------------------------------------------------------
 
@@ -311,6 +344,7 @@ class SyncManager:
         "node_id": "local",
         "crdt_fields": {},  # {"field": "counter" | "set"}
         "sync_rules": None,  # Per-document sync rules: MQL filter dict
+        "variables": {},  # User-defined $$VAR substitutions for sync rules
     }
 
     def __init__(
@@ -363,11 +397,19 @@ class SyncManager:
             ttl_sec=int(cfg.get("tombstone_ttl_sec", DEFAULT_TOMBSTONE_TTL_SEC))
         )
         self._vector_clocks: dict[str, VectorClock] = {}
-        self._node_id = cfg.get("node_id", "local")
+        self._node_id: str = cfg.get("node_id", "local")
         self._crdt_fields: dict[str, str] = cfg.get("crdt_fields", {})
 
-        sync_rules = cfg.get("sync_rules")
-        self._sync_filter: Predicate | None = compile_query(sync_rules) if sync_rules else None
+        self._raw_sync_rules: dict[str, Any] | None = cfg.get("sync_rules")
+        self._user_variables: dict[str, Any] = cfg.get("variables", {})
+        self._active_sync_filter: Predicate | None = None
+        self._recompile_sync_filter()
+
+        self._raw_collection_filters: dict[str, dict[str, Any]] = {}
+        if isinstance(cfg.get("collections"), dict):
+            for ns_str, filt in cfg["collections"].items():
+                if filt:
+                    self._raw_collection_filters[ns_str] = filt
 
     # -- lifecycle -----------------------------------------------------
 
@@ -436,6 +478,46 @@ class SyncManager:
                 "errors": self._error_count,
             }
 
+    # -- sync rule variable resolution ---------------------------------
+
+    def _build_sync_context(self) -> dict[str, Any]:
+        """Build the variable context for ``$$NAME`` substitution in sync rules."""
+        ctx: dict[str, Any] = {
+            "NOW": time.time(),
+            "NODE_ID": self._node_id,
+        }
+        ctx.update(self._user_variables)
+        return ctx
+
+    def _recompile_sync_filter(self) -> None:
+        """Recompile the global sync-rules predicate with fresh variable values."""
+        if not self._raw_sync_rules:
+            self._active_sync_filter = None
+            return
+        ctx = self._build_sync_context()
+        resolved = _resolve_variables(self._raw_sync_rules, ctx)
+        self._active_sync_filter = compile_query(resolved)
+
+    def _recompile_collection_filters(self) -> None:
+        """Recompile per-collection filters with fresh variable values."""
+        if not self._raw_collection_filters:
+            return
+        ctx = self._build_sync_context()
+        for ns_str, raw_filt in self._raw_collection_filters.items():
+            if ns_str in self._tracked:
+                local_coll, remote_coll, _ = self._tracked[ns_str]
+                resolved = _resolve_variables(raw_filt, ctx)
+                self._tracked[ns_str] = (local_coll, remote_coll, compile_query(resolved))
+
+    def _doc_passes_sync_filter(self, doc: Document) -> bool:
+        """Check whether *doc* passes the global sync-rules filter."""
+        if not self._active_sync_filter:
+            return True
+        try:
+            return bool(self._active_sync_filter(doc))
+        except (KeyError, TypeError):
+            return True
+
     # -- background loop -----------------------------------------------
 
     def _run_loop(self) -> None:
@@ -474,6 +556,9 @@ class SyncManager:
             self._stop_event.wait(timeout=sleep_time)
 
     def _sync_cycle(self) -> None:
+        self._recompile_sync_filter()
+        self._recompile_collection_filters()
+
         mode: str = self._config["mode"]
 
         if mode in ("bidirectional", "push_only"):
@@ -509,15 +594,28 @@ class SyncManager:
                 payload = entry["payload"]
                 changed_fields = entry.get("changed_fields") or []
 
-                if ns_filter and payload:
-                    try:
-                        if not ns_filter(payload):
-                            last_key = key
-                            if not ops:
-                                safe_key = key
-                            continue
-                    except (KeyError, TypeError):
-                        pass
+                has_filter = ns_filter or self._active_sync_filter
+                if has_filter and payload and op in ("insert", "update", "delete"):
+                    filter_doc = payload
+                    if op == "update":
+                        try:
+                            filter_doc = local_coll.get_by_id(doc_id) or payload
+                        except (KeyError, TypeError, RuntimeError):
+                            filter_doc = payload
+                    if ns_filter:
+                        try:
+                            if not ns_filter(filter_doc):
+                                last_key = key
+                                if not ops:
+                                    safe_key = key
+                                continue
+                        except (KeyError, TypeError):
+                            pass
+                    if not self._doc_passes_sync_filter(filter_doc):
+                        last_key = key
+                        if not ops:
+                            safe_key = key
+                        continue
 
                 if op == "insert":
                     doc = _to_pymongo(dict(payload))
@@ -623,6 +721,8 @@ class SyncManager:
                             continue
                     except (KeyError, TypeError):
                         pass
+                if not self._doc_passes_sync_filter(rdoc):
+                    continue
                 remote_ts = rdoc.get("_lastModified", 0)
                 self._upsert_remote_doc(ns, local_coll, rdoc)
                 with self._lock:
@@ -636,6 +736,8 @@ class SyncManager:
 
     _SYNC_META_FIELDS = frozenset({"_lastModified"})
 
+    _VCLOCK_FIELD = "_vclock"
+
     def _upsert_remote_doc(
         self,
         ns: str,
@@ -647,7 +749,9 @@ class SyncManager:
         doc_id = rdoc["_id"]
         local_doc = local_coll.get_by_id(doc_id)
         if local_doc:
-            real_diff = _diff_fields(local_doc, rdoc) - self._SYNC_META_FIELDS
+            real_diff = (
+                _diff_fields(local_doc, rdoc) - self._SYNC_META_FIELDS - {self._VCLOCK_FIELD}
+            )
             if not real_diff:
                 if rdoc.get("_lastModified") != local_doc.get("_lastModified"):
                     local_coll.update(
@@ -660,7 +764,15 @@ class SyncManager:
 
             with self._lock:
                 self._conflict_count += 1
-            if self._resolver_name == "field_merge":
+
+            local_vc = VectorClock.from_dict(local_doc.get(self._VCLOCK_FIELD))
+            remote_vc = VectorClock.from_dict(rdoc.get(self._VCLOCK_FIELD))
+
+            if remote_vc.dominates(local_vc):
+                resolved = rdoc
+            elif local_vc.dominates(remote_vc):
+                resolved = local_doc
+            elif self._resolver_name == "field_merge":
                 local_changed = self._local_field_history.get((ns, str(doc_id)), set())
                 if remote_changed is None:
                     remote_changed = real_diff
@@ -672,14 +784,24 @@ class SyncManager:
                 )
             else:
                 resolved = self._resolve(local_doc, rdoc)
+
+            merged_vc = VectorClock.from_dict(local_vc.to_dict())
+            merged_vc.merge(remote_vc).tick(self._node_id)
             if resolved and resolved.get("_id") == doc_id:
+                update_fields = {k: v for k, v in resolved.items() if k != "_id"}
+                update_fields[self._VCLOCK_FIELD] = merged_vc.to_dict()
                 local_coll.update(
                     {"_id": doc_id},
-                    {"$set": {k: v for k, v in resolved.items() if k != "_id"}},
+                    {"$set": update_fields},
                     multi=False,
                     _internal=True,
                 )
+                self._vector_clocks[str(doc_id)] = merged_vc
         else:
+            vc = VectorClock.from_dict(rdoc.get(self._VCLOCK_FIELD))
+            vc.tick(self._node_id)
+            rdoc[self._VCLOCK_FIELD] = vc.to_dict()
+            self._vector_clocks[str(doc_id)] = vc
             local_coll.insert_one(rdoc, _internal=True)
 
     def _pull_via_change_stream(
@@ -699,6 +821,8 @@ class SyncManager:
                                 continue
                         except (KeyError, TypeError):
                             pass
+                    if not self._doc_passes_sync_filter(rdoc):
+                        continue
                     self._upsert_remote_doc(ns, local_coll, rdoc)
                 self._set_checkpoint(init_key, "1")
             except PyMongoError as exc:
@@ -735,6 +859,9 @@ class SyncManager:
                                         continue
                                 except (KeyError, TypeError):
                                     pass
+                            if not self._doc_passes_sync_filter(full_doc):
+                                processed += 1
+                                continue
                             rc: set[str] | None = None
                             if op == "update":
                                 ud = change.get("updateDescription") or {}
@@ -821,25 +948,49 @@ class SyncManager:
             db_name, coll_name = parts
             self._register(db_name, coll_name)
 
-    def register_collection(self, db_name: str, coll_name: str, local_collection: Any) -> None:
-        """
-        Explicitly register a collection for syncing.
-        Called by the user or automatically when collections="*".
+    def register_collection(
+        self,
+        db_name: str,
+        coll_name: str,
+        local_collection: Any,
+        *,
+        sync_filter: dict[str, Any] | None = None,
+    ) -> None:
+        """Register a collection for syncing with an optional MQL sync filter.
+
+        *sync_filter* is an MQL query dict (supports ``$$`` variable substitution).
+        When provided, only documents matching the filter are pushed/pulled.
         """
         ns = f"{db_name}.{coll_name}"
         if ns in self._tracked:
             return
+        self._stamp_node_id(local_collection)
         remote_coll = self._remote[db_name][coll_name]
-        self._tracked[ns] = (local_collection, remote_coll, None)
+        filter_fn: Predicate | None = None
+        if sync_filter:
+            ctx = self._build_sync_context()
+            resolved = _resolve_variables(sync_filter, ctx)
+            filter_fn = compile_query(resolved)
+            self._raw_collection_filters[ns] = sync_filter
+        self._tracked[ns] = (local_collection, remote_coll, filter_fn)
 
     def _register(
         self, db_name: str, coll_name: str, *, filter_fn: Predicate | None = None
     ) -> None:
         local_db = self._local.client.get_db(db_name)
         local_coll = local_db.get_collection(coll_name)
+        self._stamp_node_id(local_coll)
         remote_coll = self._remote[db_name][coll_name]
         ns = f"{db_name}.{coll_name}"
         self._tracked[ns] = (local_coll, remote_coll, filter_fn)
+
+    def _stamp_node_id(self, local_coll: Any) -> None:
+        """Set the node_id on a collection's oplog writer for provenance tracking."""
+        try:
+            if hasattr(local_coll, "_oplog_w"):
+                local_coll._oplog_w.node_id = self._node_id
+        except (AttributeError, TypeError):
+            pass
 
     # -- checkpoint persistence ----------------------------------------
 

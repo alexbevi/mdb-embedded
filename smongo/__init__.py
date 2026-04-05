@@ -39,7 +39,7 @@ from .storage import DeleteResult, InsertResult, StreamingCursor, UpdateResult
 from .sync import SyncManager
 from .wire import WireServer
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 
 def connect(
