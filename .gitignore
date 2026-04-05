@@ -209,6 +209,13 @@ __marimo__/
 # WiredTiger local data directories
 local_wt_data/
 demo_wt_data/
+test_conc*/
+
+# Rust / maturin build artifacts
+rust/target/
+rust/globtest*
+*.dylib
+*.dSYM/
 
 # Benchmark / local QA artifacts
 .benchmarks/
