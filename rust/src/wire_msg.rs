@@ -17,9 +17,8 @@ use pyo3::Py;
 
 use crate::raw_bson::{raw_decode_document, raw_encode_document};
 
-pub(crate) static COMPRESSOR_IDS: LazyLock<HashMap<&'static str, i32>> = LazyLock::new(|| {
-    HashMap::from([("noop", 0), ("snappy", 1), ("zlib", 2), ("zstd", 3)])
-});
+pub(crate) static COMPRESSOR_IDS: LazyLock<HashMap<&'static str, i32>> =
+    LazyLock::new(|| HashMap::from([("noop", 0), ("snappy", 1), ("zlib", 2), ("zstd", 3)]));
 
 pub const OP_REPLY: i32 = 1;
 const _OP_QUERY: i32 = 2004;
@@ -84,7 +83,9 @@ fn parse_header(data: &[u8]) -> PyResult<MsgHeader> {
 
 fn validate_checksum(data: &[u8], msg_length: usize) -> PyResult<()> {
     if msg_length < 4 || msg_length > data.len() {
-        return Err(ProtocolError::new_err("invalid message length for checksum"));
+        return Err(ProtocolError::new_err(
+            "invalid message length for checksum",
+        ));
     }
     let msg_body = &data[..msg_length - 4];
     let expected = read_u32(data, msg_length - 4);
@@ -252,12 +253,7 @@ pub fn decode_msg(py: Python<'_>, data: &[u8]) -> PyResult<(MsgHeader, u32, Py<P
         }
     }
 
-    Ok((
-        header,
-        flags,
-        body_doc,
-        doc_sequences.into_any().unbind(),
-    ))
+    Ok((header, flags, body_doc, doc_sequences.into_any().unbind()))
 }
 
 #[pyfunction]
@@ -357,9 +353,9 @@ pub fn encode_reply(
 ) -> PyResult<Py<PyBytes>> {
     let mut docs_bson = Vec::new();
     for item in docs.iter() {
-        let dict = item.cast::<PyDict>().map_err(|_| {
-            ProtocolError::new_err("encode_reply: each doc must be a dict")
-        })?;
+        let dict = item
+            .cast::<PyDict>()
+            .map_err(|_| ProtocolError::new_err("encode_reply: each doc must be a dict"))?;
         let raw = raw_encode_document(py, dict)
             .map_err(|e| ProtocolError::new_err(format!("BSON encode error: {e}")))?;
         docs_bson.extend_from_slice(&raw);
@@ -443,11 +439,7 @@ pub fn encode_compressed(py: Python<'_>, data: &[u8], compressor_id: i32) -> PyR
 
 #[pyfunction]
 pub fn available_compressors() -> Vec<String> {
-    vec![
-        "snappy".to_string(),
-        "zlib".to_string(),
-        "zstd".to_string(),
-    ]
+    vec!["snappy".to_string(), "zlib".to_string(), "zstd".to_string()]
 }
 
 // ---------------------------------------------------------------------------
@@ -500,12 +492,7 @@ mod tests {
             assert_eq!(flags, 0);
 
             let body = body.bind(py).cast::<PyDict>().unwrap().clone();
-            let val: i32 = body
-                .get_item("hello")
-                .unwrap()
-                .unwrap()
-                .extract()
-                .unwrap();
+            let val: i32 = body.get_item("hello").unwrap().unwrap().extract().unwrap();
             assert_eq!(val, 1);
 
             let seqs = seqs.bind(py).cast::<PyDict>().unwrap().clone();
@@ -530,12 +517,7 @@ mod tests {
             assert_eq!(flags & 0x01, 0x01);
 
             let body = body.bind(py).cast::<PyDict>().unwrap().clone();
-            let val: i32 = body
-                .get_item("ping")
-                .unwrap()
-                .unwrap()
-                .extract()
-                .unwrap();
+            let val: i32 = body.get_item("ping").unwrap().unwrap().extract().unwrap();
             assert_eq!(val, 1);
         });
     }
@@ -561,12 +543,7 @@ mod tests {
 
             let (_h, _f, body, _s) = decode_msg(py, decompressed_bytes).unwrap();
             let body = body.bind(py).cast::<PyDict>().unwrap().clone();
-            let val: i32 = body
-                .get_item("ping")
-                .unwrap()
-                .unwrap()
-                .extract()
-                .unwrap();
+            let val: i32 = body.get_item("ping").unwrap().unwrap().extract().unwrap();
             assert_eq!(val, 1);
         });
     }

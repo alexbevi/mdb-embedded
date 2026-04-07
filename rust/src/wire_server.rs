@@ -110,17 +110,40 @@ impl RustWireServer {
 
         // Cache dispatch infrastructure: handler registry, error helpers, exception types.
         let registry_mod = py.import("smongo.wire.commands._registry")?;
-        let handlers: Py<PyDict> = registry_mod.getattr("_HANDLERS")?.cast::<PyDict>()?.clone().unbind();
+        let handlers: Py<PyDict> = registry_mod
+            .getattr("_HANDLERS")?
+            .cast::<PyDict>()?
+            .clone()
+            .unbind();
 
-        let make_error_fn = wrap_pyfunction!(crate::wire_errors::make_error, py)?.into_any().unbind();
-        let error_response_fn = wrap_pyfunction!(crate::wire_errors::error_response, py)?.into_any().unbind();
+        let make_error_fn = wrap_pyfunction!(crate::wire_errors::make_error, py)?
+            .into_any()
+            .unbind();
+        let error_response_fn = wrap_pyfunction!(crate::wire_errors::error_response, py)?
+            .into_any()
+            .unbind();
 
         let exc_types = PyDict::new(py);
-        exc_types.set_item("NamespaceError", py.get_type::<crate::wire_context::NamespaceError>())?;
-        exc_types.set_item("TooManySessions", py.get_type::<crate::wire_sessions::TooManySessions>())?;
-        exc_types.set_item("TransactionError", py.get_type::<crate::wire_transactions::TransactionError>())?;
-        exc_types.set_item("DuplicateKeyError", py.get_type::<crate::index_manager::DuplicateKeyError>())?;
-        exc_types.set_item("ValidationError", py.get_type::<crate::schema::ValidationError>())?;
+        exc_types.set_item(
+            "NamespaceError",
+            py.get_type::<crate::wire_context::NamespaceError>(),
+        )?;
+        exc_types.set_item(
+            "TooManySessions",
+            py.get_type::<crate::wire_sessions::TooManySessions>(),
+        )?;
+        exc_types.set_item(
+            "TransactionError",
+            py.get_type::<crate::wire_transactions::TransactionError>(),
+        )?;
+        exc_types.set_item(
+            "DuplicateKeyError",
+            py.get_type::<crate::index_manager::DuplicateKeyError>(),
+        )?;
+        exc_types.set_item(
+            "ValidationError",
+            py.get_type::<crate::schema::ValidationError>(),
+        )?;
         if let Ok(compat_mod) = py.import("smongo._compat") {
             if let Ok(wte) = compat_mod.getattr("WTError") {
                 exc_types.set_item("WTError", wte)?;
@@ -167,7 +190,11 @@ impl RustWireServer {
             log_buffer: log_buffer.clone().unbind(),
             conn_counter: conn_counter.clone().unbind(),
             free_monitoring: free_monitoring.clone().unbind(),
-            sync_mgr: if sync_mgr.is_none() { py.None() } else { sync_mgr.clone().unbind() },
+            sync_mgr: if sync_mgr.is_none() {
+                py.None()
+            } else {
+                sync_mgr.clone().unbind()
+            },
             handlers,
             make_error_fn,
             error_response_fn,
@@ -215,7 +242,9 @@ impl RustWireServer {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("tokio runtime: {e}")))?;
+            .map_err(|e| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!("tokio runtime: {e}"))
+            })?;
 
         rt.spawn(async move {
             if let Err(e) = accept_loop(state, &host, port).await {
@@ -269,13 +298,23 @@ impl RustWireServer {
         Ok(slf)
     }
 
-    fn __exit__(&mut self, py: Python<'_>, _exc_type: &Bound<'_, PyAny>, _exc_val: &Bound<'_, PyAny>, _exc_tb: &Bound<'_, PyAny>) -> PyResult<bool> {
+    fn __exit__(
+        &mut self,
+        py: Python<'_>,
+        _exc_type: &Bound<'_, PyAny>,
+        _exc_val: &Bound<'_, PyAny>,
+        _exc_tb: &Bound<'_, PyAny>,
+    ) -> PyResult<bool> {
         self.stop(py)?;
         Ok(false)
     }
 }
 
-async fn accept_loop(state: Arc<ServerState>, host: &str, port: u16) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn accept_loop(
+    state: Arc<ServerState>,
+    host: &str,
+    port: u16,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(format!("{host}:{port}")).await?;
 
     loop {
@@ -283,10 +322,8 @@ async fn accept_loop(state: Arc<ServerState>, host: &str, port: u16) -> Result<(
             break;
         }
 
-        let accept_result = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            listener.accept(),
-        ).await;
+        let accept_result =
+            tokio::time::timeout(std::time::Duration::from_secs(1), listener.accept()).await;
 
         let (stream, addr) = match accept_result {
             Ok(Ok((s, a))) => (s, a),
@@ -386,11 +423,14 @@ async fn connection_loop<S: AsyncRead + AsyncWrite + Unpin + Send>(
             }
 
             let msg_data: Vec<u8> = buf.split_to(msg_len).to_vec();
-            let op_code = i32::from_le_bytes([msg_data[12], msg_data[13], msg_data[14], msg_data[15]]);
+            let op_code =
+                i32::from_le_bytes([msg_data[12], msg_data[13], msg_data[14], msg_data[15]]);
 
             let response_bytes: Option<Vec<u8>> = Python::attach(|py| -> Option<Vec<u8>> {
                 let ctx = ctx_handle.as_ref()?.bind(py);
-                handle_message(py, &state, &msg_data, op_code, ctx, &mut req_id_gen).ok().flatten()
+                handle_message(py, &state, &msg_data, op_code, ctx, &mut req_id_gen)
+                    .ok()
+                    .flatten()
             });
 
             if let Some(resp) = response_bytes {
@@ -429,7 +469,8 @@ fn handle_message(
                 Err(_) => {
                     let resp_id = *req_id_gen as i32;
                     *req_id_gen += 1;
-                    let error_doc = crate::wire_errors::make_error(py, "InternalError", "OP_MSG decode error")?;
+                    let error_doc =
+                        crate::wire_errors::make_error(py, "InternalError", "OP_MSG decode error")?;
                     let resp = crate::wire_msg::encode_msg(py, resp_id, 0, &error_doc, false)?;
                     return Ok(Some(resp.bind(py).as_bytes().to_vec()));
                 }
@@ -440,29 +481,44 @@ fn handle_message(
 
             // Auth gate: reject unauthenticated commands when auth is required
             if state.auth_required {
-                if let Some(reject) = check_auth_gate(py, ctx, body_doc, header.request_id, req_id_gen)? {
+                if let Some(reject) =
+                    check_auth_gate(py, ctx, body_doc, header.request_id, req_id_gen)?
+                {
                     return Ok(Some(reject));
                 }
             }
 
             let body_dict: &Bound<'_, PyDict> = body_doc.cast()?;
             let response_doc = crate::wire_dispatch::rs_dispatch(
-                py, ctx.as_any(), handlers, body_dict,
-                Some(doc_sequences), make_error_fn, error_response_fn, exception_types,
-                Some(&audit_mod),
+                py,
+                ctx.as_any(),
+                handlers,
+                body_dict,
+                Some(doc_sequences),
+                make_error_fn,
+                error_response_fn,
+                exception_types,
+                Some(audit_mod),
             )?;
 
             if !more_to_come {
                 let resp_id = *req_id_gen as i32;
                 *req_id_gen += 1;
                 let response_dict: &Bound<'_, PyDict> = response_doc.bind(py).cast()?;
-                let mut resp_bytes = crate::wire_msg::encode_msg(py, resp_id, header.request_id, response_dict, false)?;
+                let mut resp_bytes = crate::wire_msg::encode_msg(
+                    py,
+                    resp_id,
+                    header.request_id,
+                    response_dict,
+                    false,
+                )?;
 
                 let compressor_id = ctx.borrow().compressor_id.clone_ref(py);
                 if !compressor_id.bind(py).is_none() {
                     let cid: i32 = compressor_id.bind(py).extract()?;
                     let resp_bound = resp_bytes.bind(py);
-                    resp_bytes = crate::wire_msg::encode_compressed(py, resp_bound.as_bytes(), cid)?;
+                    resp_bytes =
+                        crate::wire_msg::encode_compressed(py, resp_bound.as_bytes(), cid)?;
                 }
                 return Ok(Some(resp_bytes.bind(py).as_bytes().to_vec()));
             }
@@ -475,13 +531,22 @@ fn handle_message(
                 Err(_) => {
                     let resp_id = *req_id_gen as i32;
                     *req_id_gen += 1;
-                    let error_doc = crate::wire_errors::make_error(py, "InternalError", "OP_COMPRESSED decode error")?;
+                    let error_doc = crate::wire_errors::make_error(
+                        py,
+                        "InternalError",
+                        "OP_COMPRESSED decode error",
+                    )?;
                     let resp = crate::wire_msg::encode_msg(py, resp_id, 0, &error_doc, false)?;
                     return Ok(Some(resp.bind(py).as_bytes().to_vec()));
                 }
             };
             let inner_bytes: &[u8] = inner_msg.bind(py).as_bytes();
-            let inner_op = i32::from_le_bytes([inner_bytes[12], inner_bytes[13], inner_bytes[14], inner_bytes[15]]);
+            let inner_op = i32::from_le_bytes([
+                inner_bytes[12],
+                inner_bytes[13],
+                inner_bytes[14],
+                inner_bytes[15],
+            ]);
             handle_message(py, state, inner_bytes, inner_op, ctx, req_id_gen)
         }
         OP_QUERY => {
@@ -491,12 +556,17 @@ fn handle_message(
 
             let hello_keys = ["isMaster", "ismaster", "hello"];
             let is_handshake = hello_keys.iter().any(|k| {
-                query_doc.get_item(*k).map(|v| !v.is_none()).unwrap_or(false)
+                query_doc
+                    .get_item(*k)
+                    .map(|v| !v.is_none())
+                    .unwrap_or(false)
             });
 
             // Auth gate for OP_QUERY: only allow handshake commands when auth is required
             if state.auth_required && !is_handshake {
-                if let Some(reject) = check_auth_gate(py, ctx, query_doc, header.request_id, req_id_gen)? {
+                if let Some(reject) =
+                    check_auth_gate(py, ctx, query_doc, header.request_id, req_id_gen)?
+                {
                     return Ok(Some(reject));
                 }
             }
@@ -507,16 +577,28 @@ fn handle_message(
                 hello_cmd.set_item("helloOk", true)?;
                 hello_cmd.set_item("$db", "admin")?;
                 crate::wire_dispatch::rs_dispatch(
-                    py, ctx.as_any(), handlers, &hello_cmd,
-                    None, make_error_fn, error_response_fn, exception_types,
-                    Some(&audit_mod),
+                    py,
+                    ctx.as_any(),
+                    handlers,
+                    &hello_cmd,
+                    None,
+                    make_error_fn,
+                    error_response_fn,
+                    exception_types,
+                    Some(audit_mod),
                 )?
             } else {
                 let query_dict: &Bound<'_, PyDict> = query_doc.cast()?;
                 crate::wire_dispatch::rs_dispatch(
-                    py, ctx.as_any(), handlers, query_dict,
-                    None, make_error_fn, error_response_fn, exception_types,
-                    Some(&audit_mod),
+                    py,
+                    ctx.as_any(),
+                    handlers,
+                    query_dict,
+                    None,
+                    make_error_fn,
+                    error_response_fn,
+                    exception_types,
+                    Some(audit_mod),
                 )?
             };
 
@@ -530,13 +612,25 @@ fn handle_message(
             let response_flags: i32 = if ok_zero { 0x02 } else { 0 };
             let response_dict: &Bound<'_, PyDict> = response_doc.bind(py).cast()?;
             let docs_list = PyList::new(py, [response_dict])?;
-            let resp_bytes = crate::wire_msg::encode_reply(py, resp_id, header.request_id, &docs_list, 0, 0, response_flags)?;
+            let resp_bytes = crate::wire_msg::encode_reply(
+                py,
+                resp_id,
+                header.request_id,
+                &docs_list,
+                0,
+                0,
+                response_flags,
+            )?;
             Ok(Some(resp_bytes.bind(py).as_bytes().to_vec()))
         }
         _ => {
             let resp_id = *req_id_gen as i32;
             *req_id_gen += 1;
-            let error_doc = crate::wire_errors::make_error(py, "CommandNotSupported", &format!("unsupported opcode: {op_code}"))?;
+            let error_doc = crate::wire_errors::make_error(
+                py,
+                "CommandNotSupported",
+                &format!("unsupported opcode: {op_code}"),
+            )?;
             let resp = crate::wire_msg::encode_msg(py, resp_id, 0, &error_doc, false)?;
             Ok(Some(resp.bind(py).as_bytes().to_vec()))
         }
@@ -602,8 +696,17 @@ fn build_tls_acceptor(cert_path: &str, key_path: &str) -> PyResult<tokio_rustls:
 // ---------------------------------------------------------------------------
 
 const AUTH_EXEMPT_COMMANDS: &[&str] = &[
-    "hello", "ismaster", "isMaster", "ping", "saslStart", "saslContinue",
-    "logout", "buildInfo", "buildinfo", "whatsmyuri", "getnonce",
+    "hello",
+    "ismaster",
+    "isMaster",
+    "ping",
+    "saslStart",
+    "saslContinue",
+    "logout",
+    "buildInfo",
+    "buildinfo",
+    "whatsmyuri",
+    "getnonce",
     "connectionStatus",
 ];
 
@@ -627,7 +730,11 @@ fn check_auth_gate<'py>(
             drop(cc_ref);
             let resp_id = *req_id_gen as i32;
             *req_id_gen += 1;
-            let error_doc = crate::wire_errors::make_error(py, "Unauthorized", "command requires authentication")?;
+            let error_doc = crate::wire_errors::make_error(
+                py,
+                "Unauthorized",
+                "command requires authentication",
+            )?;
             let resp = crate::wire_msg::encode_msg(py, resp_id, request_id_val, &error_doc, false)?;
             return Ok(Some(resp.bind(py).as_bytes().to_vec()));
         }

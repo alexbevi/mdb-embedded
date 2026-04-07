@@ -161,10 +161,7 @@ pub fn apply_update<'py>(
                     } else {
                         cur_bound
                     };
-                    let result = py
-                        .import("operator")?
-                        .getattr("mul")?
-                        .call1((&base, &v))?;
+                    let result = py.import("operator")?.getattr("mul")?.call1((&base, &v))?;
                     paths::set_value(doc.as_any(), &k, result.unbind())?;
                 }
             }
@@ -221,11 +218,7 @@ pub fn apply_update<'py>(
                             val ^= xor_v.extract::<i64>()?;
                         }
                     }
-                    paths::set_value(
-                        doc.as_any(),
-                        &k,
-                        val.into_pyobject(py)?.into_any().unbind(),
-                    )?;
+                    paths::set_value(doc.as_any(), &k, val.into_pyobject(py)?.into_any().unbind())?;
                 }
             }
             _ => {
@@ -276,8 +269,7 @@ fn apply_pipeline_update<'py>(
             "$replaceRoot" => {
                 let spec_dict = spec.cast::<PyDict>()?;
                 if let Some(nr) = spec_dict.get_item("newRoot")? {
-                    let new_root =
-                        query_expressions::resolve_expr(doc.as_any(), &nr)?;
+                    let new_root = query_expressions::resolve_expr(doc.as_any(), &nr)?;
                     if let Ok(new_dict) = new_root.cast::<PyDict>() {
                         doc.call_method0("clear")?;
                         doc.call_method1("update", (new_dict,))?;
@@ -285,8 +277,7 @@ fn apply_pipeline_update<'py>(
                 }
             }
             "$replaceWith" => {
-                let new_root =
-                    query_expressions::resolve_expr(doc.as_any(), &spec)?;
+                let new_root = query_expressions::resolve_expr(doc.as_any(), &spec)?;
                 if let Ok(new_dict) = new_root.cast::<PyDict>() {
                     doc.call_method0("clear")?;
                     doc.call_method1("update", (new_dict,))?;
@@ -523,7 +514,7 @@ fn set_with_positional<'py>(
     query: Option<&Bound<'py, PyDict>>,
     filter_map: &[(String, Bound<'py, PyDict>)],
 ) -> PyResult<()> {
-    if path.contains(".$.")  || path.ends_with(".$") {
+    if path.contains(".$.") || path.ends_with(".$") {
         let parts: Vec<&str> = path.splitn(2, ".$").collect();
         let array_path = parts[0];
         if let Some(idx) = find_positional_index(py, doc, array_path, query)? {
@@ -556,10 +547,7 @@ fn set_with_positional<'py>(
     }
 
     let re_mod = crate::cached_modules::re_mod(py)?;
-    let m = re_mod.call_method1(
-        "search",
-        (r"\.\$\[(\w+)\]", path),
-    )?;
+    let m = re_mod.call_method1("search", (r"\.\$\[(\w+)\]", path))?;
     if !m.is_none() {
         let ident: String = m.call_method1("group", (1,))?.extract()?;
         let start: usize = m.call_method0("start")?.extract()?;
@@ -597,11 +585,7 @@ fn set_with_positional<'py>(
                     } else {
                         format!("{array_path}.{i}.{remainder}")
                     };
-                    paths::set_value(
-                        doc.as_any(),
-                        &actual_path,
-                        value.clone_ref(py),
-                    )?;
+                    paths::set_value(doc.as_any(), &actual_path, value.clone_ref(py))?;
                 }
             }
         }
@@ -618,7 +602,7 @@ fn get_positional<'py>(
     query: Option<&Bound<'py, PyDict>>,
     _filter_map: &[(String, Bound<'py, PyDict>)],
 ) -> PyResult<Py<PyAny>> {
-    if path.contains(".$.")  || path.ends_with(".$") {
+    if path.contains(".$.") || path.ends_with(".$") {
         let parts: Vec<&str> = path.splitn(2, ".$").collect();
         let array_path = parts[0];
         if let Some(idx) = find_positional_index(py, doc, array_path, query)? {

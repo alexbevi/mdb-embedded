@@ -25,7 +25,7 @@ from smongo._smongo_core import (
     ConnectionCounter,
     FreeMonitoringState,
     LastWriteResult,
-    NamespaceError,  # noqa: F401 -- re-exported for _registry.py and tests
+    NamespaceError,
     ParameterStore,
     validate_namespace,
 )
@@ -45,6 +45,17 @@ from .transactions import (
     TransactionError,
     TransactionState,
 )
+
+__all__ = [
+    "ConnectionContext",
+    "ConnectionCounter",
+    "FreeMonitoringState",
+    "LastWriteResult",
+    "LogBuffer",
+    "NamespaceError",
+    "ParameterStore",
+    "validate_namespace",
+]
 
 if TYPE_CHECKING:
     from ..sync import SyncManager
@@ -250,4 +261,4 @@ class ConnectionContext:
         """
         key = self._session_key(lsid)
         txn = self._txn_sessions.get(key)
-        return _txn.abort_active_transaction(txn)
+        return int(_txn.abort_active_transaction(txn))

@@ -6,10 +6,7 @@ remain.  IndexManager / QueryPlanner behaviour is exercised through the
 RustLocalCollection integration tests in test_storage.py and test_streaming.py.
 """
 
-import pytest
-
 from smongo.index import (
-    DuplicateKeyError,
     IndexDef,
     _invert_encoded,
     _sortable_encode,

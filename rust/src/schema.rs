@@ -9,7 +9,11 @@ use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyNone, PyString};
 
 use crate::query_compiler::{has_nested_quantifiers, MAX_REGEX_PATTERN_LEN};
 
-pyo3::create_exception!(smongo._smongo_core, ValidationError, pyo3::exceptions::PyException);
+pyo3::create_exception!(
+    smongo._smongo_core,
+    ValidationError,
+    pyo3::exceptions::PyException
+);
 
 const MAX_NESTING_DEPTH: usize = 100;
 
@@ -28,9 +32,9 @@ pub(crate) fn validate_document(
     if schema.is_none() || !schema.is_truthy()? {
         return Ok(());
     }
-    let schema_dict = schema.cast::<PyDict>().map_err(|_| {
-        ValidationError::new_err("schema must be a dict")
-    })?;
+    let schema_dict = schema
+        .cast::<PyDict>()
+        .map_err(|_| ValidationError::new_err("schema must be a dict"))?;
     if schema_dict.is_empty() {
         return Ok(());
     }
@@ -52,9 +56,7 @@ pub fn py_validate_document(doc: &Bound<'_, PyDict>, schema: &Bound<'_, PyAny>) 
 fn check_bson_type(value: &Bound<'_, PyAny>, type_name: &str) -> PyResult<bool> {
     match type_name {
         "string" => Ok(value.is_instance_of::<PyString>()),
-        "int" | "long" => {
-            Ok(value.is_instance_of::<PyInt>() && !value.is_instance_of::<PyBool>())
-        }
+        "int" | "long" => Ok(value.is_instance_of::<PyInt>() && !value.is_instance_of::<PyBool>()),
         "double" => Ok(value.is_instance_of::<PyFloat>()),
         "number" => {
             if value.is_instance_of::<PyBool>() {
@@ -90,7 +92,10 @@ fn check_type_spec(value: &Bound<'_, PyAny>, type_spec: &Bound<'_, PyAny>) -> Py
 }
 
 fn type_spec_label(type_spec: &Bound<'_, PyAny>) -> String {
-    type_spec.str().map(|s| s.to_string()).unwrap_or_else(|_| "unknown".to_string())
+    type_spec
+        .str()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|_| "unknown".to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -161,9 +166,9 @@ fn validate_object(
             for (field_obj, field_schema) in props.iter() {
                 let field: String = field_obj.extract()?;
                 if let Some(val) = dict.get_item(&field)? {
-                    let sub = field_schema.cast::<PyDict>().map_err(|_| {
-                        ValidationError::new_err("property schema must be a dict")
-                    })?;
+                    let sub = field_schema
+                        .cast::<PyDict>()
+                        .map_err(|_| ValidationError::new_err("property schema must be a dict"))?;
                     validate_value(&val, sub, &join_path(path, &field), depth + 1)?;
                 }
             }
@@ -175,7 +180,11 @@ fn validate_object(
         if ap.is_instance_of::<PyBool>() && !ap.is_truthy()? {
             let allowed: Vec<String> = if let Some(props_obj) = schema.get_item("properties")? {
                 if let Ok(props) = props_obj.cast::<PyDict>() {
-                    props.keys().iter().map(|k| k.extract::<String>()).collect::<PyResult<Vec<_>>>()?
+                    props
+                        .keys()
+                        .iter()
+                        .map(|k| k.extract::<String>())
+                        .collect::<PyResult<Vec<_>>>()?
                 } else {
                     vec![]
                 }
@@ -261,10 +270,10 @@ fn validate_value(
     }
 
     if value.is_instance_of::<PyDict>() {
-        let d = value.cast::<PyDict>().unwrap();
+        let d = value.cast::<PyDict>()?;
         validate_object(d.as_any(), schema, path, depth)?;
     } else if value.is_instance_of::<PyList>() {
-        let l = value.cast::<PyList>().unwrap();
+        let l = value.cast::<PyList>()?;
         validate_array(l, schema, path, depth)?;
     } else {
         validate_scalar(value, schema, path)?;

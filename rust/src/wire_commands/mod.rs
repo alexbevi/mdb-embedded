@@ -139,10 +139,7 @@ pub(crate) fn get_db<'py>(
 ) -> PyResult<Bound<'py, PyAny>> {
     let py = ctx.py();
     let ctx_ref = ctx.borrow();
-    Ok(ctx_ref
-        .get_db_typed(py, db_name)?
-        .into_any()
-        .into_bound(py))
+    Ok(ctx_ref.get_db_typed(py, db_name)?.into_any().into_bound(py))
 }
 
 pub(crate) fn classify_write_error(
@@ -218,8 +215,12 @@ pub(crate) fn apply_sort_py<'py>(
     let mut indices: Vec<usize> = (0..docs_list.len()).collect();
     for (key_name, direction) in keys.iter().rev() {
         indices.sort_by(|&a, &b| {
-            let va = crate::paths::get_value(&docs_list[a], key_name).ok().map(|v| v.into_bound(py));
-            let vb = crate::paths::get_value(&docs_list[b], key_name).ok().map(|v| v.into_bound(py));
+            let va = crate::paths::get_value(&docs_list[a], key_name)
+                .ok()
+                .map(|v| v.into_bound(py));
+            let vb = crate::paths::get_value(&docs_list[b], key_name)
+                .ok()
+                .map(|v| v.into_bound(py));
             let a_none = va.as_ref().map(|v| v.is_none()).unwrap_or(true);
             let b_none = vb.as_ref().map(|v| v.is_none()).unwrap_or(true);
             let cmp = match (a_none, b_none) {

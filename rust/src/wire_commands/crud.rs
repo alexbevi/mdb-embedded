@@ -87,7 +87,7 @@ fn cmd_find(
     };
 
     let materialized_list;
-    let sorted_list: &Bound<'_, PyList> = match sorted.downcast::<PyList>() {
+    let sorted_list: &Bound<'_, PyList> = match sorted.cast::<PyList>() {
         Ok(lst) => lst,
         Err(_) => {
             let items: Vec<Bound<'_, PyAny>> = sorted.try_iter()?.collect::<PyResult<Vec<_>>>()?;
@@ -141,7 +141,8 @@ fn cmd_find(
     let cr = ctx.borrow().cursor_registry.clone_ref(py);
     let cr_reg = cr.bind(py).cast::<CursorRegistry>()?;
     let (cursor_id, first_batch) =
-        cr_reg.borrow()
+        cr_reg
+            .borrow()
             .create(py, &ns, result_bound, Some(batch_size as usize))?;
 
     let cursor_dict = PyDict::new(py);
@@ -379,11 +380,10 @@ fn cmd_update(
                     let oid = objectid_cls.call0()?;
                     new_doc.set_item("_id", &oid)?;
                 }
-                coll_py.bind(py).borrow().insert_one(
-                    py,
-                    new_doc.cast::<PyDict>()?,
-                    false,
-                )?;
+                coll_py
+                    .bind(py)
+                    .borrow()
+                    .insert_one(py, new_doc.cast::<PyDict>()?, false)?;
                 let entry = PyDict::new(py);
                 entry.set_item("index", i)?;
                 entry.set_item("_id", new_doc.get_item("_id")?)?;
@@ -554,10 +554,7 @@ fn cmd_count(
         .get_item("query")?
         .unwrap_or_else(|| PyDict::new(py).into_any());
     let query_dict = raw_query.cast::<PyDict>()?.clone();
-    let count = coll_py
-        .bind(py)
-        .borrow()
-        .count(py, Some(&query_dict))?;
+    let count = coll_py.bind(py).borrow().count(py, Some(&query_dict))?;
     let resp = PyDict::new(py);
     resp.set_item("n", count)?;
     resp.set_item("ok", 1.0)?;
@@ -631,11 +628,7 @@ fn cmd_get_more(
             .borrow()
             .get_more_change_stream(py, cid, bs_opt, max_await)?;
         let Some(batch_py) = batch_opt else {
-            let r = make_error(
-                py,
-                "CursorNotFound",
-                &format!("cursor id {cid} not found"),
-            )?;
+            let r = make_error(py, "CursorNotFound", &format!("cursor id {cid} not found"))?;
             return Ok(r.into_any().unbind());
         };
         let ns = format!("{db_name}.{coll_name}");
@@ -657,11 +650,7 @@ fn cmd_get_more(
 
     let (new_id_opt, batch_opt) = cr_reg.borrow().get_more(py, cid, bs_opt)?;
     let Some(batch_py) = batch_opt else {
-        let r = make_error(
-            py,
-            "CursorNotFound",
-            &format!("cursor id {cid} not found"),
-        )?;
+        let r = make_error(py, "CursorNotFound", &format!("cursor id {cid} not found"))?;
         return Ok(r.into_any().unbind());
     };
     let ns = format!("{db_name}.{coll_name}");
@@ -879,11 +868,10 @@ fn cmd_find_and_modify(
                     let oid = objectid_cls.call0()?;
                     new_doc.set_item("_id", oid)?;
                 }
-                coll_py.bind(py).borrow().insert_one(
-                    py,
-                    new_doc.cast::<PyDict>()?,
-                    false,
-                )?;
+                coll_py
+                    .bind(py)
+                    .borrow()
+                    .insert_one(py, new_doc.cast::<PyDict>()?, false)?;
                 doc = if new_flag {
                     new_doc
                 } else {
@@ -980,11 +968,7 @@ fn cmd_bulk_write(
                     .get_item("document")?
                     .unwrap_or_else(|| PyDict::new(py).into_any());
                 let doc = doc_raw.cast::<PyDict>()?;
-                coll_py.bind(py).borrow().insert_one(
-                    py,
-                    doc,
-                    false,
-                )?;
+                coll_py.bind(py).borrow().insert_one(py, doc, false)?;
                 n_inserted += 1;
             } else if let Some(update_idx) = op_dict.get_item("update")? {
                 let ns_idx: usize = update_idx.extract()?;
@@ -1005,15 +989,10 @@ fn cmd_bulk_write(
                     .get_item("upsert")?
                     .map(|v| v.is_truthy().unwrap_or(false))
                     .unwrap_or(false);
-                let upd_result = coll_py.bind(py).borrow().update(
-                    py,
-                    &q_dict,
-                    &u_raw,
-                    multi,
-                    upsert,
-                    None,
-                    false,
-                )?;
+                let upd_result = coll_py
+                    .bind(py)
+                    .borrow()
+                    .update(py, &q_dict, &u_raw, multi, upsert, None, false)?;
                 let upserted_id = upd_result.bind(py).getattr("upserted_id")?;
                 if !upserted_id.is_none() {
                     n_upserted += 1;
@@ -1039,11 +1018,10 @@ fn cmd_bulk_write(
                     .get_item("multi")?
                     .map(|v| v.is_truthy().unwrap_or(true))
                     .unwrap_or(true);
-                let del_result =
-                    coll_py
-                        .bind(py)
-                        .borrow()
-                        .delete(py, &q_dict, multi, false)?;
+                let del_result = coll_py
+                    .bind(py)
+                    .borrow()
+                    .delete(py, &q_dict, multi, false)?;
                 n_deleted += del_result
                     .bind(py)
                     .getattr("deleted_count")?

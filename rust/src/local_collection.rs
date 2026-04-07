@@ -22,7 +22,7 @@ use crate::objectid::ObjectId;
 use crate::query_compiler;
 use crate::results::{DeleteResult, InsertResult, UpdateResult};
 use crate::wt_bridge::RustWtSession;
-use crate::wt_safe::{WtSession, open_session_from_conn_ptr};
+use crate::wt_safe::{open_session_from_conn_ptr, WtSession};
 
 // ---------------------------------------------------------------------------
 // RustLocalCollection
@@ -94,7 +94,9 @@ impl RustLocalCollection {
 
         let rwlock = Arc::new(InlineRwLock::new());
         let mutex = Arc::new(Mutex::new(()));
-        let lock_py = crate::cached_modules::threading_mod(py)?.call_method0("Lock")?.unbind();
+        let lock_py = crate::cached_modules::threading_mod(py)?
+            .call_method0("Lock")?
+            .unbind();
 
         let index_mgr: Py<RustIndexManager> = Py::new(
             py,
@@ -124,10 +126,7 @@ impl RustLocalCollection {
         .into_any();
         let oplog_r = Py::new(
             py,
-            crate::oplog::OplogReader::new(
-                session_py.clone_ref(py).into_any(),
-                oplog_uri.clone(),
-            ),
+            crate::oplog::OplogReader::new(session_py.clone_ref(py).into_any(), oplog_uri.clone()),
         )?
         .into_any();
 
@@ -276,11 +275,7 @@ impl RustLocalCollection {
 
     // --- Unlocked read helpers (caller must hold both locks) ---
 
-    fn get_by_id_unlocked_str(
-        &self,
-        py: Python<'_>,
-        doc_id: &str,
-    ) -> PyResult<Option<Py<PyDict>>> {
+    fn get_by_id_unlocked_str(&self, py: Python<'_>, doc_id: &str) -> PyResult<Option<Py<PyDict>>> {
         let mut cursor = self.open_data_cursor(None)?;
         cursor.set_key_str(doc_id);
         let found = cursor.search().is_ok();
@@ -332,7 +327,9 @@ impl RustLocalCollection {
         let plan = self.planner.bind(py).borrow().plan(py, query)?;
         match plan.plan_type {
             crate::query_planner::PlanType::PkLookup => self.exec_pk_lookup(py, query),
-            crate::query_planner::PlanType::IndexScan => self.exec_index_scan_typed(py, query, &plan),
+            crate::query_planner::PlanType::IndexScan => {
+                self.exec_index_scan_typed(py, query, &plan)
+            }
             crate::query_planner::PlanType::OrUnion => self.exec_or_union_typed(py, query, &plan),
             _ => self.exec_full_scan(py, query),
         }
@@ -369,9 +366,7 @@ impl RustLocalCollection {
                 remaining.set_item(k, v)?;
             }
         }
-        if !remaining.is_empty()
-            && !query_compiler::eval_query(doc.bind(py), &remaining)?
-        {
+        if !remaining.is_empty() && !query_compiler::eval_query(doc.bind(py), &remaining)? {
             return Ok(vec![]);
         }
         Ok(vec![doc])
@@ -391,7 +386,10 @@ impl RustLocalCollection {
                         if let Ok(cond_dict) = cond.cast::<PyDict>() {
                             if let Some(in_vals) = cond_dict.get_item("$in")? {
                                 let ids = self.planner.bind(py).borrow().execute_in_scan(
-                                    py, idx_name, &in_vals, self.session_raw,
+                                    py,
+                                    idx_name,
+                                    &in_vals,
+                                    self.session_raw,
                                 )?;
                                 let docs = self.get_by_ids_unlocked_strs(py, &ids)?;
                                 return self.filter_docs(py, docs, query);
@@ -402,9 +400,11 @@ impl RustLocalCollection {
             }
         }
 
-        let ids = self.planner.bind(py).borrow().execute_index_scan(
-            py, plan, self.session_raw,
-        )?;
+        let ids = self
+            .planner
+            .bind(py)
+            .borrow()
+            .execute_index_scan(py, plan, self.session_raw)?;
         let docs = self.get_by_ids_unlocked_strs(py, &ids)?;
         self.filter_docs(py, docs, query)
     }
@@ -444,7 +444,9 @@ impl RustLocalCollection {
                 }
                 crate::query_planner::PlanType::IndexScan => {
                     let ids = self.planner.bind(py).borrow().execute_index_scan(
-                        py, sub, self.session_raw,
+                        py,
+                        sub,
+                        self.session_raw,
                     )?;
                     for sid in ids {
                         if seen.insert(sid.clone()) {
@@ -522,8 +524,18 @@ impl RustLocalCollection {
 
     fn changed_fields_from_update(update_spec: &Bound<'_, PyAny>) -> Vec<String> {
         let ops = [
-            "$set", "$unset", "$inc", "$mul", "$min", "$max", "$rename",
-            "$currentDate", "$addToSet", "$push", "$pull", "$pop",
+            "$set",
+            "$unset",
+            "$inc",
+            "$mul",
+            "$min",
+            "$max",
+            "$rename",
+            "$currentDate",
+            "$addToSet",
+            "$push",
+            "$pull",
+            "$pop",
         ];
         let mut changed = std::collections::HashSet::<String>::new();
         if let Ok(d) = update_spec.cast::<PyDict>() {
@@ -558,7 +570,9 @@ impl RustLocalCollection {
             doc.set_item("_id", &oid)?;
         }
         self.validate_doc(py, &doc)?;
-        let doc_id = doc.get_item("_id")?.ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?;
+        let doc_id = doc
+            .get_item("_id")?
+            .ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?;
         let doc_id_str = doc_id.str()?.to_string();
         let bson_bytes = bson_helpers::to_bson(&doc)?;
 
@@ -577,7 +591,8 @@ impl RustLocalCollection {
                     self.log_oplog(
                         py,
                         "insert",
-                        &doc.get_item("_id")?.ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?,
+                        &doc.get_item("_id")?
+                            .ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?,
                         doc.as_any(),
                         version,
                         Some(Self::sorted_keys(&doc)),
@@ -587,7 +602,11 @@ impl RustLocalCollection {
             });
             drop(guard);
             inner?;
-            let ids = PyList::new(py, [doc.get_item("_id")?.ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?])?;
+            let ids = PyList::new(
+                py,
+                [doc.get_item("_id")?
+                    .ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?],
+            )?;
             Ok(Py::new(py, InsertResult::new(ids.unbind().into_any()))?.into_any())
         })();
         self.rel_write(py);
@@ -614,7 +633,11 @@ impl RustLocalCollection {
         result
     }
 
-    pub(crate) fn find_one(&self, py: Python<'_>, query: &Bound<'_, PyDict>) -> PyResult<Py<PyAny>> {
+    pub(crate) fn find_one(
+        &self,
+        py: Python<'_>,
+        query: &Bound<'_, PyDict>,
+    ) -> PyResult<Py<PyAny>> {
         self.acq_read(py);
         let result = self.with_session_override(py, || {
             let _guard = self.acq_lock(py);
@@ -681,9 +704,13 @@ impl RustLocalCollection {
             let plan = self.planner.bind(py).borrow().plan(py, q)?;
             let rd = plan.to_py_dict(py)?.into_bound(py);
             if execute {
-                let t0: f64 = crate::cached_modules::time_mod(py)?.call_method0("monotonic")?.extract()?;
+                let t0: f64 = crate::cached_modules::time_mod(py)?
+                    .call_method0("monotonic")?
+                    .extract()?;
                 let docs = self.find_matching_locked(py, q)?;
-                let t1: f64 = crate::cached_modules::time_mod(py)?.call_method0("monotonic")?.extract()?;
+                let t1: f64 = crate::cached_modules::time_mod(py)?
+                    .call_method0("monotonic")?
+                    .extract()?;
                 let es = PyDict::new(py);
                 es.set_item("nReturned", docs.len())?;
                 es.set_item("executionTimeMillis", ((t1 - t0) * 1000.0) as i64)?;
@@ -728,7 +755,14 @@ impl RustLocalCollection {
         _internal: bool,
     ) -> PyResult<Py<PyAny>> {
         self.acq_write(py);
-        let opts = UpdateOpts { query, update_spec, multi, upsert, array_filters, internal: _internal };
+        let opts = UpdateOpts {
+            query,
+            update_spec,
+            multi,
+            upsert,
+            array_filters,
+            internal: _internal,
+        };
         let result = self.update_inner(py, &opts);
         self.rel_write(py);
         result
@@ -763,12 +797,20 @@ impl RustLocalCollection {
                 return Ok(py.None());
             }
             let doc = matching[0].bind(py);
-            let before: Py<PyDict> = bson_helpers::shallow_copy_dict(py, doc.cast::<PyDict>()?)?.unbind();
+            let before: Py<PyDict> =
+                bson_helpers::shallow_copy_dict(py, doc.cast::<PyDict>()?)?.unbind();
             let inner = self.with_txn(py, || {
                 crate::query_update::apply_update(doc.cast::<PyDict>()?, update_spec, None, None)?;
                 self.validate_doc(py, doc)?;
-                self.index_mgr.bind(py).borrow().update_doc(py, before.bind(py), doc)?;
-                let did_str = doc.get_item("_id")?.ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?.str()?.to_string();
+                self.index_mgr
+                    .bind(py)
+                    .borrow()
+                    .update_doc(py, before.bind(py), doc)?;
+                let did_str = doc
+                    .get_item("_id")?
+                    .ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?
+                    .str()?
+                    .to_string();
                 let bson = bson_helpers::to_bson(doc)?;
                 let mut cursor = self.open_data_cursor(Some("overwrite=true"))?;
                 cursor.set_key_str(&did_str);
@@ -780,7 +822,8 @@ impl RustLocalCollection {
                     self.log_oplog(
                         py,
                         "update",
-                        &doc.get_item("_id")?.ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?,
+                        &doc.get_item("_id")?
+                            .ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?,
                         update_spec,
                         version,
                         Some(Self::changed_fields_from_update(update_spec)),
@@ -791,7 +834,11 @@ impl RustLocalCollection {
             drop(guard);
             inner?;
             if return_document == "after" {
-                Ok(bson_helpers::shallow_copy_dict(py, matching[0].bind(py).cast::<PyDict>()?)?.unbind().into_any())
+                Ok(
+                    bson_helpers::shallow_copy_dict(py, matching[0].bind(py).cast::<PyDict>()?)?
+                        .unbind()
+                        .into_any(),
+                )
             } else {
                 Ok(before.into_any())
             }
@@ -821,7 +868,11 @@ impl RustLocalCollection {
                         rep.set_item("_id", &oid)?;
                     }
                     self.validate_doc(py, &rep)?;
-                    let did_str = rep.get_item("_id")?.ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?.str()?.to_string();
+                    let did_str = rep
+                        .get_item("_id")?
+                        .ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?
+                        .str()?
+                        .to_string();
                     let bson = bson_helpers::to_bson(&rep)?;
                     let inner = self.with_txn(py, || {
                         self.index_mgr.bind(py).borrow().add_doc(py, &rep)?;
@@ -835,7 +886,9 @@ impl RustLocalCollection {
                             self.log_oplog(
                                 py,
                                 "insert",
-                                &rep.get_item("_id")?.ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?,
+                                &rep.get_item("_id")?.ok_or_else(|| {
+                                    PyRuntimeError::new_err("document missing _id")
+                                })?,
                                 rep.as_any(),
                                 version,
                                 Some(Self::sorted_keys(&rep)),
@@ -854,13 +907,25 @@ impl RustLocalCollection {
                 return Ok(py.None());
             }
             let doc = matching[0].bind(py);
-            let before: Py<PyDict> = bson_helpers::shallow_copy_dict(py, doc.cast::<PyDict>()?)?.unbind();
+            let before: Py<PyDict> =
+                bson_helpers::shallow_copy_dict(py, doc.cast::<PyDict>()?)?.unbind();
             let rep = bson_helpers::shallow_copy_dict(py, replacement)?;
-            rep.set_item("_id", doc.get_item("_id")?.ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?)?;
-            let did_str = rep.get_item("_id")?.ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?.str()?.to_string();
+            rep.set_item(
+                "_id",
+                doc.get_item("_id")?
+                    .ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?,
+            )?;
+            let did_str = rep
+                .get_item("_id")?
+                .ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?
+                .str()?
+                .to_string();
             let inner = self.with_txn(py, || {
                 self.validate_doc(py, &rep)?;
-                self.index_mgr.bind(py).borrow().update_doc(py, before.bind(py), &rep)?;
+                self.index_mgr
+                    .bind(py)
+                    .borrow()
+                    .update_doc(py, before.bind(py), &rep)?;
                 let bson = bson_helpers::to_bson(&rep)?;
                 let mut cursor = self.open_data_cursor(Some("overwrite=true"))?;
                 cursor.set_key_str(&did_str);
@@ -872,7 +937,8 @@ impl RustLocalCollection {
                     self.log_oplog(
                         py,
                         "update",
-                        &rep.get_item("_id")?.ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?,
+                        &rep.get_item("_id")?
+                            .ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?,
                         rep.as_any(),
                         version,
                         None,
@@ -906,10 +972,15 @@ impl RustLocalCollection {
                 return Ok(py.None());
             }
             let doc = matching[0].bind(py);
-            let copy: Py<PyDict> = bson_helpers::shallow_copy_dict(py, doc.cast::<PyDict>()?)?.unbind();
+            let copy: Py<PyDict> =
+                bson_helpers::shallow_copy_dict(py, doc.cast::<PyDict>()?)?.unbind();
             let inner = self.with_txn(py, || {
                 self.index_mgr.bind(py).borrow().remove_doc(py, doc)?;
-                let did_str = doc.get_item("_id")?.ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?.str()?.to_string();
+                let did_str = doc
+                    .get_item("_id")?
+                    .ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?
+                    .str()?
+                    .to_string();
                 let mut cursor = self.open_data_cursor(Some("overwrite=true"))?;
                 cursor.set_key_str(&did_str);
                 cursor.remove()?;
@@ -919,7 +990,8 @@ impl RustLocalCollection {
                     self.log_oplog(
                         py,
                         "delete",
-                        &doc.get_item("_id")?.ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?,
+                        &doc.get_item("_id")?
+                            .ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?,
                         py.None().bind(py),
                         version,
                         None,
@@ -969,12 +1041,14 @@ impl RustLocalCollection {
         let inner = self.with_txn(py, || {
             let docs = self.get_all_unlocked_vec(py)?;
             let docs_list = PyList::new(py, docs.iter().map(|d| d.bind(py)))?;
-            self.index_mgr.bind(py).borrow_mut().rebuild_index(py, &name, &docs_list)?;
+            self.index_mgr
+                .bind(py)
+                .borrow_mut()
+                .rebuild_index(py, &name, &docs_list)?;
             if !_internal {
-                self.oplog_w.bind(py).call_method1(
-                    "log",
-                    ("index_create", &name, py.None()),
-                )?;
+                self.oplog_w
+                    .bind(py)
+                    .call_method1("log", ("index_create", &name, py.None()))?;
             }
             Ok(())
         });
@@ -999,7 +1073,13 @@ impl RustLocalCollection {
             }
             cursor.close()?;
         }
-        let n_indexes = self.index_mgr.bind(py).borrow().list_indexes(py)?.bind(py).len();
+        let n_indexes = self
+            .index_mgr
+            .bind(py)
+            .borrow()
+            .list_indexes(py)?
+            .bind(py)
+            .len();
         drop(guard);
 
         let storage_size = data_size + (doc_count * 64);
@@ -1026,7 +1106,10 @@ impl RustLocalCollection {
         for meta in idx_list.bind(py).try_iter()? {
             let meta = meta?;
             let name: String = meta.get_item("name")?.extract()?;
-            self.index_mgr.bind(py).borrow_mut().rebuild_index(py, &name, &docs_list)?;
+            self.index_mgr
+                .bind(py)
+                .borrow_mut()
+                .rebuild_index(py, &name, &docs_list)?;
             rebuilt += 1;
         }
         Ok(rebuilt)
@@ -1193,7 +1276,11 @@ impl RustLocalCollection {
         self.find(py, query)
     }
 
-    fn _find_matching_docs(&self, py: Python<'_>, query: &Bound<'_, PyDict>) -> PyResult<Py<PyList>> {
+    fn _find_matching_docs(
+        &self,
+        py: Python<'_>,
+        query: &Bound<'_, PyDict>,
+    ) -> PyResult<Py<PyList>> {
         self.find(py, query)
     }
 
@@ -1208,7 +1295,10 @@ impl RustLocalCollection {
     }
 
     #[pyo3(name = "find_streaming", signature = (query=None))]
-    fn py_find_streaming(slf: &Bound<'_, Self>, query: Option<&Bound<'_, PyAny>>) -> PyResult<Py<PyAny>> {
+    fn py_find_streaming(
+        slf: &Bound<'_, Self>,
+        query: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
         let py = slf.py();
         slf.borrow().find_streaming_typed(py, query)
     }
@@ -1223,11 +1313,7 @@ impl RustLocalCollection {
         self.explain(py, query, execute)
     }
 
-    fn scan_with_fields(
-        &self,
-        py: Python<'_>,
-        fields: &Bound<'_, PyList>,
-    ) -> PyResult<Py<PyList>> {
+    fn scan_with_fields(&self, py: Python<'_>, fields: &Bound<'_, PyList>) -> PyResult<Py<PyList>> {
         let field_strs: Vec<String> = fields.extract()?;
         let results = PyList::empty(py);
         self.acq_read(py);
@@ -1246,10 +1332,8 @@ impl RustLocalCollection {
                     let val = crate::paths::get_value(&doc, f)?;
                     vals.set_item(f.as_str(), val)?;
                 }
-                let tup = pyo3::types::PyTuple::new(
-                    py,
-                    [doc_id.bind(py).clone(), vals.into_any()],
-                )?;
+                let tup =
+                    pyo3::types::PyTuple::new(py, [doc_id.bind(py).clone(), vals.into_any()])?;
                 results.append(tup)?;
             }
             cursor.close()?;
@@ -1300,7 +1384,11 @@ impl RustLocalCollection {
                 let mut cursor = self.open_data_cursor(Some("overwrite=true"))?;
                 for (i, doc) in prepared.iter().enumerate() {
                     self.index_mgr.bind(py).borrow().add_doc(py, doc)?;
-                    let did_str = doc.get_item("_id")?.ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?.str()?.to_string();
+                    let did_str = doc
+                        .get_item("_id")?
+                        .ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?
+                        .str()?
+                        .to_string();
                     cursor.set_key_str(&did_str);
                     cursor.set_value_raw(bson_list[i].bind(py).as_bytes());
                     cursor.update()?;
@@ -1309,7 +1397,8 @@ impl RustLocalCollection {
                         self.log_oplog(
                             py,
                             "insert",
-                            &doc.get_item("_id")?.ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?,
+                            &doc.get_item("_id")?
+                                .ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?,
                             doc.as_any(),
                             version,
                             Some(Self::sorted_keys(doc)),
@@ -1347,7 +1436,15 @@ impl RustLocalCollection {
         array_filters: Option<&Bound<'_, PyList>>,
         _internal: bool,
     ) -> PyResult<Py<PyAny>> {
-        self.update(py, query, update_spec, multi, upsert, array_filters, _internal)
+        self.update(
+            py,
+            query,
+            update_spec,
+            multi,
+            upsert,
+            array_filters,
+            _internal,
+        )
     }
 
     #[pyo3(name = "delete", signature = (query, multi=true, _internal=false))]
@@ -1455,7 +1552,9 @@ impl RustLocalCollection {
     #[pyo3(signature = (keep=1000))]
     fn compact_oplog(&self, py: Python<'_>, keep: i64) -> PyResult<()> {
         let _guard = self.acq_lock(py);
-        self.oplog_w.bind(py).call_method1("truncate_count", (keep,))?;
+        self.oplog_w
+            .bind(py)
+            .call_method1("truncate_count", (keep,))?;
         Ok(())
     }
 
@@ -1515,7 +1614,13 @@ impl RustLocalCollection {
                 n += 1;
             }
             cursor.close()?;
-            let ni = self.index_mgr.bind(py).borrow().list_indexes(py)?.bind(py).len();
+            let ni = self
+                .index_mgr
+                .bind(py)
+                .borrow()
+                .list_indexes(py)?
+                .bind(py)
+                .len();
             (n, ni)
         };
 
@@ -1553,16 +1658,18 @@ struct UpdateOpts<'a, 'py> {
 }
 
 impl RustLocalCollection {
-    fn update_inner(
-        &self,
-        py: Python<'_>,
-        opts: &UpdateOpts<'_, '_>,
-    ) -> PyResult<Py<PyAny>> {
+    fn update_inner(&self, py: Python<'_>, opts: &UpdateOpts<'_, '_>) -> PyResult<Py<PyAny>> {
         let _guard = self.acq_lock(py);
         let mut matching = self.find_matching_locked(py, opts.query)?;
         if matching.is_empty() {
             if opts.upsert {
-                return self.do_upsert(py, opts.query, opts.update_spec, opts.array_filters, opts.internal);
+                return self.do_upsert(
+                    py,
+                    opts.query,
+                    opts.update_spec,
+                    opts.array_filters,
+                    opts.internal,
+                );
             }
             return Ok(Py::new(py, UpdateResult::new(py, 0, 0, None))?.into_any());
         }
@@ -1576,12 +1683,25 @@ impl RustLocalCollection {
             let mut cursor = self.open_data_cursor(Some("overwrite=true"))?;
             for doc_py in &matching {
                 let doc = doc_py.bind(py);
-                let old_doc = bson_helpers::shallow_copy_dict(py, doc.cast::<PyDict>()?)?.into_any();
+                let old_doc =
+                    bson_helpers::shallow_copy_dict(py, doc.cast::<PyDict>()?)?.into_any();
                 let doc_dict = doc.cast::<PyDict>()?;
-                crate::query_update::apply_update(doc_dict, opts.update_spec, opts.array_filters, Some(opts.query))?;
+                crate::query_update::apply_update(
+                    doc_dict,
+                    opts.update_spec,
+                    opts.array_filters,
+                    Some(opts.query),
+                )?;
                 self.validate_doc(py, doc)?;
-                self.index_mgr.bind(py).borrow().update_doc(py, &old_doc, doc)?;
-                let did_str = doc.get_item("_id")?.ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?.str()?.to_string();
+                self.index_mgr
+                    .bind(py)
+                    .borrow()
+                    .update_doc(py, &old_doc, doc)?;
+                let did_str = doc
+                    .get_item("_id")?
+                    .ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?
+                    .str()?
+                    .to_string();
                 let bson = bson_helpers::to_bson(doc)?;
                 cursor.set_key_str(&did_str);
                 cursor.set_value_raw(bson.bind(py).as_bytes());
@@ -1603,7 +1723,8 @@ impl RustLocalCollection {
                     self.log_oplog(
                         py,
                         "update",
-                        &doc.get_item("_id")?.ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?,
+                        &doc.get_item("_id")?
+                            .ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?,
                         &spec_log,
                         version,
                         Some(changed),
@@ -1634,7 +1755,11 @@ impl RustLocalCollection {
         }
         crate::query_update::apply_update(&doc, update_spec, array_filters, Some(query))?;
         self.validate_doc(py, &doc)?;
-        let did_str = doc.get_item("_id")?.ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?.str()?.to_string();
+        let did_str = doc
+            .get_item("_id")?
+            .ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?
+            .str()?
+            .to_string();
         let bson = bson_helpers::to_bson(&doc)?;
 
         self.with_txn(py, || {
@@ -1649,7 +1774,8 @@ impl RustLocalCollection {
                 self.log_oplog(
                     py,
                     "insert",
-                    &doc.get_item("_id")?.ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?,
+                    &doc.get_item("_id")?
+                        .ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?,
                     doc.as_any(),
                     version,
                     Some(Self::sorted_keys(&doc)),
@@ -1658,7 +1784,10 @@ impl RustLocalCollection {
             Ok(())
         })?;
 
-        let upserted_id = doc.get_item("_id")?.ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?.unbind();
+        let upserted_id = doc
+            .get_item("_id")?
+            .ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?
+            .unbind();
         Ok(Py::new(py, UpdateResult::new(py, 0, 0, Some(upserted_id)))?.into_any())
     }
 
@@ -1707,7 +1836,11 @@ impl RustLocalCollection {
             for doc_py in &matching {
                 let doc = doc_py.bind(py);
                 self.index_mgr.bind(py).borrow().remove_doc(py, doc)?;
-                let did_str = doc.get_item("_id")?.ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?.str()?.to_string();
+                let did_str = doc
+                    .get_item("_id")?
+                    .ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?
+                    .str()?
+                    .to_string();
                 cursor.set_key_str(&did_str);
                 cursor.remove()?;
                 let version = self.bump_version(&did_str);
@@ -1715,7 +1848,8 @@ impl RustLocalCollection {
                     self.log_oplog(
                         py,
                         "delete",
-                        &doc.get_item("_id")?.ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?,
+                        &doc.get_item("_id")?
+                            .ok_or_else(|| PyRuntimeError::new_err("document missing _id"))?,
                         py.None().bind(py),
                         version,
                         None,

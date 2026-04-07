@@ -1,5 +1,6 @@
 """Unit tests for sync internals and helper strategies."""
 
+import json
 import threading
 import time
 import types
@@ -7,6 +8,7 @@ import types
 from smongo.sync import (
     PyMongoError,
     SyncManager,
+    TombstoneRegistry,
     _diff_fields,
     _field_merge,
     _local_wins,
@@ -69,6 +71,58 @@ def test_field_merge_with_diff_fallback():
     assert merged["c"] == "new"
 
 
+def _make_wt_store():
+    """Create a fake WiredTiger session backed by a dict for testing."""
+    store: dict[str, str] = {}
+
+    class Cursor:
+        def __init__(self) -> None:
+            self.key: str | None = None
+            self._iter_keys: list[str] | None = None
+            self._pos = -1
+
+        def set_key(self, k: str) -> None:
+            self.key = k
+
+        def search(self) -> int:
+            return 0 if self.key in store else 1
+
+        def get_key(self) -> str:
+            assert self.key is not None
+            return self.key
+
+        def get_value(self) -> str:
+            assert self.key is not None
+            return store[self.key]
+
+        def next(self) -> int:
+            if self._iter_keys is None:
+                self._iter_keys = sorted(store.keys())
+                self._pos = -1
+            self._pos += 1
+            if self._pos < len(self._iter_keys):
+                self.key = self._iter_keys[self._pos]
+                return 0
+            return 1
+
+        def remove(self) -> None:
+            assert self.key is not None
+            if self.key in store:
+                del store[self.key]
+
+        def __setitem__(self, k: str, v: str) -> None:
+            store[k] = v
+
+        def close(self) -> None:
+            pass
+
+    class Session:
+        def open_cursor(self, uri: str, x: object, y: object) -> Cursor:
+            return Cursor()
+
+    return store, Session()
+
+
 def _make_manager(**overrides):
     mgr = SyncManager.__new__(SyncManager)
     mgr._config = {
@@ -77,6 +131,7 @@ def _make_manager(**overrides):
         "use_change_stream_pull": True,
         "mode": "bidirectional",
         "max_backoff_sec": 300,
+        "push_concurrency": 4,
     }
     mgr._tracked = {}
     mgr._local = types.SimpleNamespace(
@@ -87,6 +142,7 @@ def _make_manager(**overrides):
     mgr._remote = {"db": {"users": "REMOTE"}}
     mgr._local_field_history = {}
     mgr._lock = threading.Lock()
+    mgr._ck_lock = threading.Lock()
     mgr._pushed_count = 0
     mgr._pulled_count = 0
     mgr._conflict_count = 0
@@ -97,6 +153,11 @@ def _make_manager(**overrides):
     mgr._last_sync_ts = None
     mgr._last_error = None
     mgr._thread = None
+    mgr._last_cycle_pushed = 0
+    mgr._last_cycle_pulled = 0
+    mgr._last_cycle_start = 0.0
+    mgr._last_cycle_duration = 0.0
+    mgr._ns_stats = {}
     mgr._node_id = overrides.get("node_id", "local")
     mgr._user_variables = overrides.get("variables", {})
     mgr._raw_sync_rules = overrides.get("sync_rules")
@@ -231,7 +292,7 @@ def test_pull_via_change_stream_success_path():
 
     class Remote:
         def find(self, q):
-            return []
+            return _FakeRemoteCursor([])
 
         def watch(self, pipeline, **kwargs):
             return Stream()
@@ -285,33 +346,10 @@ def test_selective_sync_filter_dict():
 
 def test_checkpoint_get_set():
     mgr = SyncManager.__new__(SyncManager)
-    store = {}
-
-    class Cursor:
-        def __init__(self):
-            self.key = None
-
-        def set_key(self, k):
-            self.key = k
-
-        def search(self):
-            return 0 if self.key in store else 1
-
-        def get_value(self):
-            return store[self.key]
-
-        def __setitem__(self, k, v):
-            store[k] = v
-
-        def close(self):
-            return None
-
-    class Session:
-        def open_cursor(self, uri, x, y):
-            return Cursor()
-
-    mgr._ck_session = Session()
+    store, session = _make_wt_store()
+    mgr._ck_session = session
     mgr._ck_uri = "table:ck"
+    mgr._ck_lock = threading.Lock()
     mgr._set_checkpoint("k1", "v1")
     assert mgr._get_checkpoint("k1") == "v1"
 
@@ -331,9 +369,7 @@ def test_resolve_variables_now():
 
 def test_resolve_variables_node_id():
     """$$NODE_ID is substituted with the configured value."""
-    result = _resolve_variables(
-        {"device_id": "$$NODE_ID"}, {"NODE_ID": "sensor-042"}
-    )
+    result = _resolve_variables({"device_id": "$$NODE_ID"}, {"NODE_ID": "sensor-042"})
     assert result["device_id"] == "sensor-042"
 
 
@@ -381,12 +417,26 @@ def test_sync_rules_applied_push():
     class FakeOplogReader:
         def read_from(self, checkpoint, skip_internal=True):
             return [
-                ("k1", {"op": "insert", "doc_id": "d1", "ts": 1.0,
-                         "payload": {"_id": "d1", "device_id": "sensor-1", "val": 10},
-                         "changed_fields": []}),
-                ("k2", {"op": "insert", "doc_id": "d2", "ts": 2.0,
-                         "payload": {"_id": "d2", "device_id": "sensor-2", "val": 20},
-                         "changed_fields": []}),
+                (
+                    "k1",
+                    {
+                        "op": "insert",
+                        "doc_id": "d1",
+                        "ts": 1.0,
+                        "payload": {"_id": "d1", "device_id": "sensor-1", "val": 10},
+                        "changed_fields": [],
+                    },
+                ),
+                (
+                    "k2",
+                    {
+                        "op": "insert",
+                        "doc_id": "d2",
+                        "ts": 2.0,
+                        "payload": {"_id": "d2", "device_id": "sensor-2", "val": 20},
+                        "changed_fields": [],
+                    },
+                ),
             ]
 
     class FakeLocal:
@@ -435,10 +485,12 @@ def test_sync_rules_applied_pull():
                     return self
 
                 def __iter__(self):
-                    return iter([
-                        {"_id": "d1", "device_id": "sensor-1", "_lastModified": 1.0},
-                        {"_id": "d2", "device_id": "sensor-2", "_lastModified": 2.0},
-                    ])
+                    return iter(
+                        [
+                            {"_id": "d1", "device_id": "sensor-1", "_lastModified": 1.0},
+                            {"_id": "d2", "device_id": "sensor-2", "_lastModified": 2.0},
+                        ]
+                    )
 
             return FakeCursor()
 
@@ -470,9 +522,16 @@ def test_push_filter_update_resolves_full_doc():
     class FakeOplogReader:
         def read_from(self, checkpoint, skip_internal=True):
             return [
-                ("k1", {"op": "update", "doc_id": "d1", "ts": 1.0,
-                         "payload": {"$set": {"val": 99}},
-                         "changed_fields": ["val"]}),
+                (
+                    "k1",
+                    {
+                        "op": "update",
+                        "doc_id": "d1",
+                        "ts": 1.0,
+                        "payload": {"$set": {"val": 99}},
+                        "changed_fields": ["val"],
+                    },
+                ),
             ]
 
     class FakeLocal:
@@ -506,9 +565,16 @@ def test_push_filter_update_blocks_non_matching_doc():
     class FakeOplogReader:
         def read_from(self, checkpoint, skip_internal=True):
             return [
-                ("k1", {"op": "update", "doc_id": "d1", "ts": 1.0,
-                         "payload": {"$set": {"val": 99}},
-                         "changed_fields": ["val"]}),
+                (
+                    "k1",
+                    {
+                        "op": "update",
+                        "doc_id": "d1",
+                        "ts": 1.0,
+                        "payload": {"$set": {"val": 99}},
+                        "changed_fields": ["val"],
+                    },
+                ),
             ]
 
     class FakeLocal:
@@ -547,8 +613,7 @@ def test_vector_clock_tick_on_conflict():
             self.updated = None
 
         def get_by_id(self, doc_id):
-            return {"_id": "c1", "x": "old", "_lastModified": 1,
-                    "_vclock": {"edge-1": 1}}
+            return {"_id": "c1", "x": "old", "_lastModified": 1, "_vclock": {"edge-1": 1}}
 
         def update(self, query, update_spec, multi=False, _internal=False):
             self.updated = update_spec
@@ -557,7 +622,8 @@ def test_vector_clock_tick_on_conflict():
     mgr._resolver_name = "lww"
     mgr._resolve = _lww
     mgr._upsert_remote_doc(
-        "db.users", local,
+        "db.users",
+        local,
         {"_id": "c1", "x": "new", "_lastModified": 2, "_vclock": {"edge-2": 1}},
     )
     assert local.updated is not None
@@ -575,8 +641,7 @@ def test_vector_clock_causal_dominance():
             self.updated = None
 
         def get_by_id(self, doc_id):
-            return {"_id": "c2", "x": "local", "_lastModified": 5,
-                    "_vclock": {"edge-1": 1}}
+            return {"_id": "c2", "x": "local", "_lastModified": 5, "_vclock": {"edge-1": 1}}
 
         def update(self, query, update_spec, multi=False, _internal=False):
             self.updated = update_spec
@@ -585,9 +650,9 @@ def test_vector_clock_causal_dominance():
     mgr._resolver_name = "local_wins"
     mgr._resolve = _local_wins
     mgr._upsert_remote_doc(
-        "db.users", local,
-        {"_id": "c2", "x": "remote", "_lastModified": 3,
-         "_vclock": {"edge-1": 2, "edge-2": 1}},
+        "db.users",
+        local,
+        {"_id": "c2", "x": "remote", "_lastModified": 3, "_vclock": {"edge-1": 2, "edge-2": 1}},
     )
     assert local.updated["$set"]["x"] == "remote"
 
@@ -607,3 +672,455 @@ def test_register_collection_with_sync_filter():
     assert filter_fn({"region": "local"}) is True
     assert filter_fn({"region": "other"}) is False
     assert "db.users" in mgr._raw_collection_filters
+
+
+# ------------------------------------------------------------------
+# Persistent tombstones (Tier 1.2)
+# ------------------------------------------------------------------
+
+
+def test_tombstone_persistent_write_read():
+    """Persistent TombstoneRegistry reads back tombstones from WT-backed storage."""
+    _, session = _make_wt_store()
+    reg = TombstoneRegistry(ttl_sec=3600, session=session, uri="table:__tombstones")
+
+    reg.mark_deleted("doc1")
+    reg.mark_deleted("doc2")
+
+    assert reg.is_tombstoned("doc1")
+    assert reg.is_tombstoned("doc2")
+    assert not reg.is_tombstoned("doc3")
+
+    d = reg.to_dict()
+    assert "doc1" in d
+    assert "doc2" in d
+
+
+def test_tombstone_persistent_survives_restart():
+    """A new TombstoneRegistry over the same store sees previously written tombstones."""
+    _, session = _make_wt_store()
+    reg = TombstoneRegistry(ttl_sec=3600, session=session, uri="table:__tombstones")
+    reg.mark_deleted("doc1")
+
+    reg2 = TombstoneRegistry(ttl_sec=3600, session=session, uri="table:__tombstones")
+    assert reg2.is_tombstoned("doc1")
+
+
+def test_tombstone_persistent_expire():
+    """Persistent tombstones expire when TTL is exceeded."""
+    _, session = _make_wt_store()
+    reg = TombstoneRegistry(ttl_sec=0, session=session, uri="table:__tombstones")
+    reg.mark_deleted("old_doc")
+    time.sleep(0.01)
+    expired = reg.expire()
+    assert expired == 1
+    assert not reg.is_tombstoned("old_doc")
+
+
+def test_tombstone_inmemory_fallback():
+    """Without session/uri, TombstoneRegistry falls back to in-memory dict."""
+    reg = TombstoneRegistry(ttl_sec=3600)
+    reg.mark_deleted("x")
+    assert reg.is_tombstoned("x")
+    assert not reg.is_tombstoned("y")
+
+
+# ------------------------------------------------------------------
+# Resumable initial snapshot (Tier 1.3)
+# ------------------------------------------------------------------
+
+
+class _EmptyStream:
+    """Mock change stream that yields no events."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        pass
+
+    def try_next(self):
+        return None
+
+
+class _FakeRemoteCursor:
+    """Mock cursor supporting sort/limit chaining."""
+
+    def __init__(self, docs):
+        self._docs = list(docs)
+
+    def sort(self, *a, **kw):
+        return self
+
+    def limit(self, n):
+        self._docs = self._docs[:n]
+        return self
+
+    def __iter__(self):
+        return iter(self._docs)
+
+    def __len__(self):
+        return len(self._docs)
+
+
+def test_initial_snapshot_paginates():
+    """Initial snapshot uses _id-based pagination with batch_size pages."""
+    mgr = _make_manager()
+    mgr._active_sync_filter = None
+    mgr._config["batch_size"] = 5
+
+    ck: dict[str, str] = {}
+    mgr._get_checkpoint = lambda k: ck.get(k)
+    mgr._set_checkpoint = lambda k, v: ck.__setitem__(k, v)
+
+    all_docs = [{"_id": i, "val": i} for i in range(12)]
+    find_calls: list[dict] = []
+
+    class Remote:
+        def find(self, q):
+            find_calls.append(dict(q))
+            gt = None
+            if isinstance(q.get("_id"), dict):
+                gt = q["_id"].get("$gt")
+            if gt is not None:
+                docs = [d for d in all_docs if d["_id"] > gt]
+            else:
+                docs = list(all_docs)
+            return _FakeRemoteCursor(docs)
+
+        def watch(self, pipeline, **kwargs):
+            return _EmptyStream()
+
+    upserted: list[dict] = []
+
+    class Local:
+        def get_by_id(self, doc_id):
+            return None
+
+        def insert_one(self, doc, _internal=False):
+            upserted.append(doc)
+
+        def delete(self, q, multi=False, _internal=False):
+            pass
+
+    ok = mgr._pull_via_change_stream("db.users", Local(), Remote())
+    assert ok is True
+    assert len(upserted) == 12
+    assert len(find_calls) >= 3  # pages: 0-4, 5-9, 10-11, empty
+    assert ck.get("pull_cs_init:db.users") == "1"
+
+
+def test_resumable_initial_snapshot_resumes():
+    """Initial snapshot resumes from page checkpoint after simulated crash."""
+    mgr = _make_manager()
+    mgr._active_sync_filter = None
+    mgr._config["batch_size"] = 10
+
+    ck: dict[str, str] = {"pull_cs_page:db.users": json.dumps(9)}
+    mgr._get_checkpoint = lambda k: ck.get(k)
+    mgr._set_checkpoint = lambda k, v: ck.__setitem__(k, v)
+
+    all_docs = [{"_id": i, "val": i} for i in range(25)]
+    find_queries: list[dict] = []
+
+    class Remote:
+        def find(self, q):
+            find_queries.append(dict(q))
+            gt = None
+            if isinstance(q.get("_id"), dict):
+                gt = q["_id"].get("$gt")
+            if gt is not None:
+                docs = [d for d in all_docs if d["_id"] > gt]
+            else:
+                docs = list(all_docs)
+            return _FakeRemoteCursor(docs)
+
+        def watch(self, pipeline, **kwargs):
+            return _EmptyStream()
+
+    upserted: list[dict] = []
+
+    class Local:
+        def get_by_id(self, doc_id):
+            return None
+
+        def insert_one(self, doc, _internal=False):
+            upserted.append(doc)
+
+        def delete(self, q, multi=False, _internal=False):
+            pass
+
+    ok = mgr._pull_via_change_stream("db.users", Local(), Remote())
+    assert ok is True
+
+    # First find should use _id > 9 (resuming from page checkpoint)
+    assert any(isinstance(q.get("_id"), dict) and q["_id"].get("$gt") == 9 for q in find_queries)
+
+    upserted_ids = {d["_id"] for d in upserted}
+    for i in range(10, 25):
+        assert i in upserted_ids, f"doc {i} should have been upserted"
+    for i in range(10):
+        assert i not in upserted_ids, f"doc {i} should NOT have been upserted"
+
+    assert ck.get("pull_cs_init:db.users") == "1"
+
+
+# ------------------------------------------------------------------
+# Concurrent namespace push (Tier 2.2)
+# ------------------------------------------------------------------
+
+
+def test_concurrent_namespace_push():
+    """Multiple namespaces push concurrently via ThreadPoolExecutor."""
+    mgr = _make_manager()
+    mgr._config["push_concurrency"] = 3
+    mgr._config["oplog_auto_compact"] = False
+    mgr._active_sync_filter = None
+
+    barrier = threading.Barrier(3, timeout=5)
+    pushed_ns: list[str] = []
+
+    class FakeOplogReader:
+        def read_from(self, checkpoint, skip_internal=True):
+            return [
+                (
+                    "k1",
+                    {
+                        "op": "insert",
+                        "doc_id": "d1",
+                        "ts": 1.0,
+                        "payload": {"_id": "d1", "val": 1},
+                        "changed_fields": [],
+                    },
+                )
+            ]
+
+    class FakeLocal:
+        def get_oplog_reader(self):
+            return FakeOplogReader()
+
+        _oplog_w = types.SimpleNamespace(
+            truncate_before=lambda k: 0, oplog_uri="table:oplog", node_id=None
+        )
+
+        def get_by_id(self, doc_id):
+            return None
+
+    class FakeRemote:
+        def __init__(self, ns):
+            self._ns = ns
+
+        def bulk_write(self, ops, ordered=False):
+            barrier.wait()
+            pushed_ns.append(self._ns)
+
+    mgr._tracked = {
+        "db.a": (FakeLocal(), FakeRemote("db.a"), None),
+        "db.b": (FakeLocal(), FakeRemote("db.b"), None),
+        "db.c": (FakeLocal(), FakeRemote("db.c"), None),
+    }
+    ck: dict[str, str] = {}
+    mgr._get_checkpoint = lambda k: ck.get(k)
+    mgr._set_checkpoint = lambda k, v: ck.__setitem__(k, v)
+
+    mgr._push()
+    assert set(pushed_ns) == {"db.a", "db.b", "db.c"}
+
+
+# ------------------------------------------------------------------
+# Transactional checkpoint + oplog compaction (Tier 1.1)
+# ------------------------------------------------------------------
+
+
+def test_atomic_checkpoint_rollback_on_failure():
+    """If oplog truncation fails mid-transaction, checkpoint is not committed."""
+    mgr = SyncManager.__new__(SyncManager)
+    mgr._ck_lock = threading.Lock()
+
+    tx_log: list[str] = []
+
+    class Cursor:
+        def __init__(self):
+            self.key = None
+            self._items = [("k1", "v1")]
+            self._pos = -1
+
+        def set_key(self, k):
+            self.key = k
+
+        def get_key(self):
+            return self._items[self._pos][0]
+
+        def next(self):
+            self._pos += 1
+            return 0 if self._pos < len(self._items) else 1
+
+        def remove(self):
+            raise RuntimeError("simulated truncation failure")
+
+        def __setitem__(self, k, v):
+            pass
+
+        def close(self):
+            pass
+
+    class Session:
+        def open_cursor(self, uri, x, y):
+            return Cursor()
+
+        def begin_transaction(self):
+            tx_log.append("begin")
+
+        def commit_transaction(self):
+            tx_log.append("commit")
+
+        def rollback_transaction(self):
+            tx_log.append("rollback")
+
+    mgr._ck_session = Session()
+    mgr._ck_uri = "table:__sync_checkpoint"
+    mgr._config = {"oplog_auto_compact": True}
+
+    raised = False
+    try:
+        mgr._atomic_checkpoint_and_compact("db.users", "k2", "table:oplog")
+    except RuntimeError:
+        raised = True
+
+    assert raised
+    assert "begin" in tx_log
+    assert "rollback" in tx_log
+    assert "commit" not in tx_log
+
+
+def test_atomic_checkpoint_commits_on_success():
+    """Successful checkpoint + compact commits the transaction."""
+    mgr = SyncManager.__new__(SyncManager)
+    mgr._ck_lock = threading.Lock()
+
+    tx_log: list[str] = []
+    store: dict[str, str] = {}
+
+    class Cursor:
+        def __init__(self):
+            self.key = None
+
+        def set_key(self, k):
+            self.key = k
+
+        def get_key(self):
+            return self.key
+
+        def next(self):
+            return 1  # empty oplog -- nothing to truncate
+
+        def remove(self):
+            pass
+
+        def __setitem__(self, k, v):
+            store[k] = v
+
+        def close(self):
+            pass
+
+    class Session:
+        def open_cursor(self, uri, x, y):
+            return Cursor()
+
+        def begin_transaction(self):
+            tx_log.append("begin")
+
+        def commit_transaction(self):
+            tx_log.append("commit")
+
+        def rollback_transaction(self):
+            tx_log.append("rollback")
+
+    mgr._ck_session = Session()
+    mgr._ck_uri = "table:__sync_checkpoint"
+    mgr._config = {"oplog_auto_compact": True}
+
+    mgr._atomic_checkpoint_and_compact("db.users", "k5", "table:oplog")
+
+    assert tx_log == ["begin", "commit"]
+    assert store.get("push:db.users") == "k5"
+
+
+# ------------------------------------------------------------------
+# Extended sync status API (Tier 3.4)
+# ------------------------------------------------------------------
+
+
+def test_status_includes_extended_fields():
+    """status() includes per-collection stats, throughput, and cycle duration."""
+    mgr = _make_manager()
+    mgr._thread = None
+    mgr._ns_stats = {
+        "db.users": {
+            "last_push_ts": 1000.0,
+            "last_pull_ts": 1001.0,
+            "last_push_count": 5,
+            "last_pull_count": 3,
+        }
+    }
+    mgr._last_cycle_duration = 2.5
+    mgr._last_cycle_pushed = 5
+    mgr._last_cycle_pulled = 3
+
+    s = mgr.status()
+    assert "collections" in s
+    assert "db.users" in s["collections"]
+    assert s["collections"]["db.users"]["last_push_count"] == 5
+    assert s["collections"]["db.users"]["last_pull_count"] == 3
+    assert "throughput_ops_sec" in s
+    assert s["throughput_ops_sec"] == 3.2  # (5+3) / 2.5
+    assert "last_cycle_duration_sec" in s
+    assert s["last_cycle_duration_sec"] == 2.5
+
+
+def test_push_populates_ns_stats():
+    """_push() populates per-namespace stats after pushing ops."""
+    mgr = _make_manager()
+    mgr._config["oplog_auto_compact"] = False
+    mgr._active_sync_filter = None
+
+    class FakeOplogReader:
+        def read_from(self, checkpoint, skip_internal=True):
+            return [
+                (
+                    "k1",
+                    {
+                        "op": "insert",
+                        "doc_id": "d1",
+                        "ts": 1.0,
+                        "payload": {"_id": "d1", "val": 1},
+                        "changed_fields": [],
+                    },
+                )
+            ]
+
+    class FakeLocal:
+        def get_oplog_reader(self):
+            return FakeOplogReader()
+
+        _oplog_w = types.SimpleNamespace(
+            truncate_before=lambda k: 0, oplog_uri="table:oplog", node_id=None
+        )
+
+        def get_by_id(self, doc_id):
+            return None
+
+    class FakeRemote:
+        def bulk_write(self, ops, ordered=False):
+            pass
+
+    mgr._tracked = {"db.users": (FakeLocal(), FakeRemote(), None)}
+    ck: dict[str, str] = {}
+    mgr._get_checkpoint = lambda k: ck.get(k)
+    mgr._set_checkpoint = lambda k, v: ck.__setitem__(k, v)
+
+    mgr._push()
+
+    assert "db.users" in mgr._ns_stats
+    assert mgr._ns_stats["db.users"]["last_push_count"] == 1
+    assert mgr._ns_stats["db.users"]["last_push_ts"] is not None

@@ -91,9 +91,10 @@ impl OplogHub {
 // ── Helpers ──────────────────────────────────────────────────────────
 
 fn get_wt<'py>(session: &'py Bound<'py, PyAny>) -> PyResult<pyo3::PyRef<'py, RustWtSession>> {
-    session.cast::<RustWtSession>().map(|s| s.borrow()).map_err(|_| {
-        PyRuntimeError::new_err("expected RustWtSession")
-    })
+    session
+        .cast::<RustWtSession>()
+        .map(|s| s.borrow())
+        .map_err(|_| PyRuntimeError::new_err("expected RustWtSession"))
 }
 
 // ── OplogWriter ──────────────────────────────────────────────────────
@@ -207,9 +208,13 @@ impl OplogWriter {
         let mut cursor = rs.open_cursor_typed(&self.oplog_uri, Some("overwrite=true"))?;
         let mut to_remove = Vec::new();
         loop {
-            if cursor.next_rc()? != 0 { break; }
+            if cursor.next_rc()? != 0 {
+                break;
+            }
             let k = cursor.get_key_str()?;
-            if k.as_str() >= key { break; }
+            if k.as_str() >= key {
+                break;
+            }
             to_remove.push(k);
         }
         cursor.close_typed()?;
@@ -231,7 +236,9 @@ impl OplogWriter {
         let mut cursor = rs.open_cursor_typed(&self.oplog_uri, None)?;
         let mut keys = Vec::new();
         loop {
-            if cursor.next_rc()? != 0 { break; }
+            if cursor.next_rc()? != 0 {
+                break;
+            }
             keys.push(cursor.get_key_str()?);
         }
         cursor.close_typed()?;
@@ -291,7 +298,9 @@ impl OplogReader {
         let mut cursor = rs.open_cursor_typed(&self.oplog_uri, None)?;
         let results = PyList::empty(py);
         loop {
-            if cursor.next_rc()? != 0 { break; }
+            if cursor.next_rc()? != 0 {
+                break;
+            }
             let value = cursor.get_value_string()?;
             let entry = json_mod.call_method("loads", (&value,), Some(&kwargs))?;
             results.append(entry)?;
@@ -319,7 +328,9 @@ impl OplogReader {
         let mut past_checkpoint = checkpoint_key.is_none();
 
         loop {
-            if cursor.next_rc()? != 0 { break; }
+            if cursor.next_rc()? != 0 {
+                break;
+            }
             let key = cursor.get_key_str()?;
             if !past_checkpoint {
                 if checkpoint_key == Some(key.as_str()) {
@@ -336,10 +347,7 @@ impl OplogReader {
                     }
                 }
             }
-            let tuple = PyTuple::new(py, &[
-                PyString::new(py, &key).into_any(),
-                entry.clone(),
-            ])?;
+            let tuple = PyTuple::new(py, &[PyString::new(py, &key).into_any(), entry.clone()])?;
             results.append(tuple)?;
         }
         cursor.close_typed()?;
@@ -352,7 +360,9 @@ impl OplogReader {
         let mut cursor = rs.open_cursor_typed(&self.oplog_uri, None)?;
         let mut last_key: Option<String> = None;
         loop {
-            if cursor.next_rc()? != 0 { break; }
+            if cursor.next_rc()? != 0 {
+                break;
+            }
             last_key = Some(cursor.get_key_str()?);
         }
         cursor.close_typed()?;
@@ -365,7 +375,9 @@ impl OplogReader {
         let mut cursor = rs.open_cursor_typed(&self.oplog_uri, None)?;
         let mut n: i64 = 0;
         loop {
-            if cursor.next_rc()? != 0 { break; }
+            if cursor.next_rc()? != 0 {
+                break;
+            }
             n += 1;
         }
         cursor.close_typed()?;

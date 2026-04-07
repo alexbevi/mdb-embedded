@@ -101,9 +101,13 @@ impl ScramConversation {
         let client_first_bare = if let Some(rest) = msg.strip_prefix("n,,") {
             rest
         } else if let Some(rest) = msg.strip_prefix("p=") {
-            return Err(ScramError(format!("channel binding not supported: p={rest}")));
+            return Err(ScramError(format!(
+                "channel binding not supported: p={rest}"
+            )));
         } else {
-            return Err(ScramError("invalid gs2-header in client-first-message".into()));
+            return Err(ScramError(
+                "invalid gs2-header in client-first-message".into(),
+            ));
         };
 
         let mut username = None;
@@ -176,8 +180,8 @@ impl ScramConversation {
             .ok_or_else(|| ScramError("missing c= in client-final-message".into()))?;
         let received_nonce = received_nonce
             .ok_or_else(|| ScramError("missing r= in client-final-message".into()))?;
-        let proof_b64 = proof_b64
-            .ok_or_else(|| ScramError("missing p= in client-final-message".into()))?;
+        let proof_b64 =
+            proof_b64.ok_or_else(|| ScramError("missing p= in client-final-message".into()))?;
 
         if received_nonce != self.server_nonce {
             return Err(ScramError("nonce mismatch".into()));
@@ -242,7 +246,9 @@ pub fn parse_username(payload: &[u8]) -> Result<String, ScramError> {
             return Ok(val.to_string());
         }
     }
-    Err(ScramError("missing n= (username) in client-first-message".into()))
+    Err(ScramError(
+        "missing n= (username) in client-first-message".into(),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -250,8 +256,8 @@ pub fn parse_username(payload: &[u8]) -> Result<String, ScramError> {
 // ---------------------------------------------------------------------------
 
 fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
-    let mut mac =
-        HmacSha256::new_from_slice(key).unwrap_or_else(|_| HmacSha256::new_from_slice(&[0]).unwrap_or_else(|_| unreachable!()));
+    let mut mac = HmacSha256::new_from_slice(key)
+        .unwrap_or_else(|_| HmacSha256::new_from_slice(&[0]).unwrap_or_else(|_| unreachable!()));
     mac.update(data);
     mac.finalize().into_bytes().into()
 }
@@ -290,8 +296,7 @@ mod tests {
         let client_nonce = "rOprNGfwEbeRWgbNEkqO";
         let client_first = format!("n,,n=user,r={client_nonce}");
 
-        let conv =
-            ScramConversation::from_client_first(client_first.as_bytes(), &cred).unwrap();
+        let conv = ScramConversation::from_client_first(client_first.as_bytes(), &cred).unwrap();
         assert_eq!(conv.username, "user");
 
         let server_first = conv.server_first_message();
@@ -305,9 +310,15 @@ mod tests {
         let mut salt_b64 = String::new();
         let mut iterations = 0u32;
         for attr in server_first_str.split(',') {
-            if let Some(v) = attr.strip_prefix("r=") { combined_nonce = v.to_string(); }
-            if let Some(v) = attr.strip_prefix("s=") { salt_b64 = v.to_string(); }
-            if let Some(v) = attr.strip_prefix("i=") { iterations = v.parse().unwrap(); }
+            if let Some(v) = attr.strip_prefix("r=") {
+                combined_nonce = v.to_string();
+            }
+            if let Some(v) = attr.strip_prefix("s=") {
+                salt_b64 = v.to_string();
+            }
+            if let Some(v) = attr.strip_prefix("i=") {
+                iterations = v.parse().unwrap();
+            }
         }
 
         let salt_decoded = B64.decode(&salt_b64).unwrap();
@@ -320,7 +331,8 @@ mod tests {
 
         let client_final_without_proof = format!("c=biws,r={combined_nonce}");
         let client_first_bare = format!("n=user,r={client_nonce}");
-        let auth_message = format!("{client_first_bare},{server_first_str},{client_final_without_proof}");
+        let auth_message =
+            format!("{client_first_bare},{server_first_str},{client_final_without_proof}");
 
         let client_signature = hmac_sha256(&stored_key_check, auth_message.as_bytes());
         let mut client_proof = [0u8; 32];
@@ -328,7 +340,11 @@ mod tests {
             client_proof[i] = client_key[i] ^ client_signature[i];
         }
 
-        let client_final = format!("{},p={}", client_final_without_proof, B64.encode(client_proof));
+        let client_final = format!(
+            "{},p={}",
+            client_final_without_proof,
+            B64.encode(client_proof)
+        );
 
         let result = conv.verify_client_final(client_final.as_bytes());
         assert!(result.is_ok(), "verify failed: {:?}", result.err());

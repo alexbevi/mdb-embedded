@@ -18,7 +18,6 @@ import pytest
 
 from smongo.aggregation import Cursor
 from smongo.client import Collection, MongoClient
-from smongo.storage import StreamingCursor
 
 # ── Fixtures ─────────────────────────────────────────────────────────
 

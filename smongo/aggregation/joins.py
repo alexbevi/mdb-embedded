@@ -10,12 +10,19 @@ from __future__ import annotations
 from typing import Any
 
 from smongo._smongo_core import (
-    graph_lookup_stage,  # noqa: F401
-    lookup_stage,  # noqa: F401
-    pipeline_lookup_stage,  # noqa: F401
+    graph_lookup_stage,
+    lookup_stage,
+    pipeline_lookup_stage,
 )
 
 from .._types import CollectionGetter, Document, Pipeline
+
+__all__ = [
+    "graph_lookup_stage",
+    "lookup_stage",
+    "pipeline_lookup_stage",
+    "union_with_stage",
+]
 
 
 def union_with_stage(

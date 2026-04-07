@@ -324,7 +324,7 @@ class LocalCollection:
                 cursor = self._active_session.open_cursor(self.table_uri, None, None)
                 cursor.set_key(str(doc_id))
                 if cursor.search() == 0:
-                    doc = _from_bson(cursor.get_value())
+                    doc = cast(Document, _from_bson(cursor.get_value()))
                     cursor.close()
                     return doc
                 cursor.close()
@@ -353,7 +353,7 @@ class LocalCollection:
         cursor = self._active_session.open_cursor(self.table_uri, None, None)
         cursor.set_key(str(doc_id))
         if cursor.search() == 0:
-            doc = _from_bson(cursor.get_value())
+            doc = cast(Document, _from_bson(cursor.get_value()))
             cursor.close()
             return doc
         cursor.close()

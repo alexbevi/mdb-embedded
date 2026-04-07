@@ -27,9 +27,7 @@ def _haversine(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
     dlon = math.radians(lon2 - lon1)
     a = (
         math.sin(dlat / 2) ** 2
-        + math.cos(math.radians(lat1))
-        * math.cos(math.radians(lat2))
-        * math.sin(dlon / 2) ** 2
+        + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
     )
     return EARTH_RADIUS_METERS * 2 * math.asin(math.sqrt(a))
 
@@ -39,10 +37,10 @@ def _extract_coords(value: Any) -> tuple[float, float] | None:
     if isinstance(value, dict):
         if value.get("type") == "Point":
             coords = value.get("coordinates")
-            if isinstance(coords, (list, tuple)) and len(coords) >= 2:
+            if isinstance(coords, list | tuple) and len(coords) >= 2:
                 return (float(coords[0]), float(coords[1]))
         return None
-    if isinstance(value, (list, tuple)) and len(value) >= 2:
+    if isinstance(value, list | tuple) and len(value) >= 2:
         try:
             return (float(value[0]), float(value[1]))
         except (TypeError, ValueError):
@@ -57,9 +55,7 @@ def _extract_query_point(spec: dict[str, Any]) -> tuple[float, float]:
         raise ValueError("$geoNear requires 'near'")
     coords = _extract_coords(near)
     if coords is None:
-        raise ValueError(
-            "$geoNear 'near' must be a GeoJSON Point or [longitude, latitude] array"
-        )
+        raise ValueError("$geoNear 'near' must be a GeoJSON Point or [longitude, latitude] array")
     return coords
 
 

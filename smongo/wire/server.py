@@ -82,6 +82,7 @@ class WireServer:
 
         if audit_log is not None:
             from ..audit import configure_audit
+
             configure_audit(audit_log)
 
         auth_was_set = auth_required is not WireServer._UNSET
@@ -92,6 +93,7 @@ class WireServer:
             self._local_client = local_client
         elif self._use_rust_server:
             from smongo._smongo_core import RustLocalClient
+
             self._local_client = RustLocalClient(db_path)
         else:
             self._local_client = LocalClient(db_path)

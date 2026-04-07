@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > **Note**: Entries below describe the state of the codebase at the time of each release. References to Python classes like `LocalCollection`, `StreamingCursor`, etc. in older entries reflect APIs that have since been replaced by their Rust equivalents (`RustLocalCollection`, `RustStreamingCursor`, etc.).
 
+## [0.9.2] - 2026-04-07
+
+### Added
+
+- **Persistent tombstones (Tier 1.2)**: `TombstoneRegistry` is now backed by a WiredTiger table (`table:__tombstones`). Deleted-document tracking survives process restarts, closing the window where deleted docs could reappear via pull after a crash. Falls back to in-memory dict when no WT session is provided (unit tests).
+- **Resumable initial snapshot (Tier 1.3)**: `_pull_via_change_stream()` now paginates the initial `find({})` using `_id`-based cursor pagination. After each page, the last `_id` is checkpointed. On restart, the snapshot resumes from the checkpoint instead of starting from scratch.
+- **Concurrent namespace push (Tier 2.2)**: `_push()` now dispatches per-namespace push work to a `ThreadPoolExecutor`. New `push_concurrency` config option (default: 4) controls the thread pool size. Single-namespace syncs remain sequential.
+- **Transactional checkpoint + oplog compaction (Tier 1.1)**: `_atomic_checkpoint_and_compact()` wraps the checkpoint write and oplog truncation in a single WiredTiger transaction. A crash between the two can no longer cause duplicate ops on restart.
+- **Sync progress API (Tier 3.4)**: `status()` now returns per-collection stats (`collections`), throughput (`throughput_ops_sec`), and cycle timing (`last_cycle_duration_sec`). Per-namespace stats track `last_push_ts`, `last_pull_ts`, `last_push_count`, and `last_pull_count`.
+
+### Changed
+
+- Checkpoint reads/writes (`_get_checkpoint`, `_set_checkpoint`) are now protected by `_ck_lock` for thread safety under concurrent push.
+- `_push()` body extracted into `_push_namespace()` for per-namespace dispatch.
+- `_pull()` now tracks per-namespace pull counts via `_record_ns_pull()`.
+- 1040 tests (up from 1017), including 14 new sync unit tests covering all five features.
+
+## [0.9.1] - 2026-04-06
+
+### Fixed
+
+- **Checkpoint no longer advances past failed ops**: `_push()` previously advanced the sync checkpoint to `last_key` regardless of batch success, causing silently skipped ops on restart after partial `bulk_write` failures. Checkpoint now advances only to `safe_key` -- the last key from a fully successful batch.
+- **Per-op failure logging in `_flush_bulk()`**: Partial `bulk_write` failures now extract each `writeError` and log it individually (op index, error code, message) instead of dumping the raw `details` blob. Callers credit partial successes to `_pushed_count`.
+
+### Changed
+
+- **Oplog `read_from()` uses `search_near()` seek**: Replaced the O(n) full-scan loop with WiredTiger `search_near()` to jump directly to the checkpoint position, reducing per-sync-cycle oplog reads to O(log n + k) where k is the number of new entries since checkpoint.
+- `_flush_bulk()` return type changed from `bool` to `int` (count of successfully written ops).
+
+### Added
+
+- **`UPNEXT4SYNC.md`**: Tiered roadmap for the sync layer -- from data integrity fixes (Tier 0, done) through crash safety, scale, Device Sync parity, and beyond.
+
 ## [0.4.0] - 2026-04-05
 
 ### Added — Security & Enterprise Features

@@ -41,7 +41,6 @@ fn has_float(vals: &[Bound<'_, PyAny>]) -> bool {
     vals.iter().any(|v| v.is_instance_of::<PyFloat>())
 }
 
-
 fn copy_dict<'py>(d: &Bound<'py, PyDict>) -> PyResult<Bound<'py, PyDict>> {
     let copy = d.call_method0("copy")?;
     Ok(copy.cast_into::<PyDict>()?)
@@ -77,10 +76,18 @@ enum ExprArg<'py> {
 
 impl<'py> ExprArg<'py> {
     fn as_list(&self) -> Option<&Bound<'py, PyList>> {
-        if let ExprArg::List(l) = self { Some(l) } else { None }
+        if let ExprArg::List(l) = self {
+            Some(l)
+        } else {
+            None
+        }
     }
     fn as_dict(&self) -> Option<&Bound<'py, PyDict>> {
-        if let ExprArg::Dict(d) = self { Some(d) } else { None }
+        if let ExprArg::Dict(d) = self {
+            Some(d)
+        } else {
+            None
+        }
     }
 }
 
@@ -178,27 +185,25 @@ fn eval_expr_op<'py>(
 
     match op {
         // ── Conditional ─────────────────────────────────────────────
-        "$cond" => {
-            match &ea {
-                ExprArg::Dict(d) => {
-                    let cond = resolve_inner(doc, &dict_get(d, "if", py)?)?;
-                    if cond.is_truthy()? {
-                        resolve_inner(doc, &dict_get(d, "then", py)?)
-                    } else {
-                        resolve_inner(doc, &dict_get(d, "else", py)?)
-                    }
+        "$cond" => match &ea {
+            ExprArg::Dict(d) => {
+                let cond = resolve_inner(doc, &dict_get(d, "if", py)?)?;
+                if cond.is_truthy()? {
+                    resolve_inner(doc, &dict_get(d, "then", py)?)
+                } else {
+                    resolve_inner(doc, &dict_get(d, "else", py)?)
                 }
-                ExprArg::List(l) if l.len() == 3 => {
-                    let cond = resolve_inner(doc, &l.get_item(0)?)?;
-                    if cond.is_truthy()? {
-                        resolve_inner(doc, &l.get_item(1)?)
-                    } else {
-                        resolve_inner(doc, &l.get_item(2)?)
-                    }
-                }
-                _ => Ok(py_none(py)),
             }
-        }
+            ExprArg::List(l) if l.len() == 3 => {
+                let cond = resolve_inner(doc, &l.get_item(0)?)?;
+                if cond.is_truthy()? {
+                    resolve_inner(doc, &l.get_item(1)?)
+                } else {
+                    resolve_inner(doc, &l.get_item(2)?)
+                }
+            }
+            _ => Ok(py_none(py)),
+        },
 
         "$ifNull" => {
             if let Some(l) = ea.as_list() {
@@ -215,7 +220,9 @@ fn eval_expr_op<'py>(
         }
 
         "$switch" => {
-            let d = ea.as_dict().ok_or_else(|| PyValueError::new_err("$switch requires a document"))?;
+            let d = ea
+                .as_dict()
+                .ok_or_else(|| PyValueError::new_err("$switch requires a document"))?;
             let branches = dict_get(d, "branches", py)?;
             if let Ok(br_list) = branches.cast::<PyList>() {
                 for branch in br_list.iter() {
@@ -231,7 +238,9 @@ fn eval_expr_op<'py>(
 
         // ── String ──────────────────────────────────────────────────
         "$concat" => {
-            let l = ea.as_list().ok_or_else(|| PyValueError::new_err("$concat requires an array"))?;
+            let l = ea
+                .as_list()
+                .ok_or_else(|| PyValueError::new_err("$concat requires an array"))?;
             let vals = resolve_pylist(doc, l)?;
             if any_none(&vals) {
                 return Ok(py_none(py));
@@ -326,7 +335,9 @@ fn eval_expr_op<'py>(
         }
 
         "$filter" => {
-            let d = ea.as_dict().ok_or_else(|| PyValueError::new_err("$filter requires a document"))?;
+            let d = ea
+                .as_dict()
+                .ok_or_else(|| PyValueError::new_err("$filter requires a document"))?;
             let input_arr = resolve_inner(doc, &dict_get(d, "input", py)?)?;
             let as_name: String = d
                 .get_item("as")?
@@ -353,7 +364,9 @@ fn eval_expr_op<'py>(
         }
 
         "$concatArrays" => {
-            let list = ea.as_list().ok_or_else(|| PyValueError::new_err("$concatArrays requires an array"))?;
+            let list = ea
+                .as_list()
+                .ok_or_else(|| PyValueError::new_err("$concatArrays requires an array"))?;
             let result = PyList::empty(py);
             for a in list.iter() {
                 let val = resolve_inner(doc, &a)?;
@@ -385,7 +398,9 @@ fn eval_expr_op<'py>(
 
         // ── Arithmetic ──────────────────────────────────────────────
         "$add" => {
-            let l = ea.as_list().ok_or_else(|| PyValueError::new_err("$add requires an array"))?;
+            let l = ea
+                .as_list()
+                .ok_or_else(|| PyValueError::new_err("$add requires an array"))?;
             let vals = resolve_pylist(doc, l)?;
             if any_none(&vals) {
                 return Ok(py_none(py));
@@ -426,7 +441,9 @@ fn eval_expr_op<'py>(
         }
 
         "$multiply" => {
-            let l = ea.as_list().ok_or_else(|| PyValueError::new_err("$multiply requires an array"))?;
+            let l = ea
+                .as_list()
+                .ok_or_else(|| PyValueError::new_err("$multiply requires an array"))?;
             let vals = resolve_pylist(doc, l)?;
             if any_none(&vals) {
                 return Ok(py_none(py));
@@ -473,17 +490,13 @@ fn eval_expr_op<'py>(
                             let af: f64 = a.extract()?;
                             let bf: f64 = b.extract()?;
                             if bf != 0.0 {
-                                return Ok(py_mod_f64(af, bf)
-                                    .into_pyobject(py)?
-                                    .into_any());
+                                return Ok(py_mod_f64(af, bf).into_pyobject(py)?.into_any());
                             }
                         } else {
                             let ai: i64 = a.extract()?;
                             let bi: i64 = b.extract()?;
                             if bi != 0 {
-                                return Ok(py_mod_i64(ai, bi)
-                                    .into_pyobject(py)?
-                                    .into_any());
+                                return Ok(py_mod_i64(ai, bi).into_pyobject(py)?.into_any());
                             }
                         }
                     }
@@ -571,7 +584,9 @@ fn eval_expr_op<'py>(
 
         // ── Boolean ─────────────────────────────────────────────────
         "$and" => {
-            let list = ea.as_list().ok_or_else(|| PyValueError::new_err("$and requires an array"))?;
+            let list = ea
+                .as_list()
+                .ok_or_else(|| PyValueError::new_err("$and requires an array"))?;
             for item in list.iter() {
                 if !resolve_inner(doc, &item)?.is_truthy()? {
                     return Ok(py_bool(py, false));
@@ -581,7 +596,9 @@ fn eval_expr_op<'py>(
         }
 
         "$or" => {
-            let list = ea.as_list().ok_or_else(|| PyValueError::new_err("$or requires an array"))?;
+            let list = ea
+                .as_list()
+                .ok_or_else(|| PyValueError::new_err("$or requires an array"))?;
             for item in list.iter() {
                 if resolve_inner(doc, &item)?.is_truthy()? {
                     return Ok(py_bool(py, true));
@@ -1193,9 +1210,7 @@ fn eval_expr_op<'py>(
                     let v: f64 = val.extract()?;
                     let factor = 10f64.powi(places);
                     let truncated = (v * factor) as i64;
-                    return Ok((truncated as f64 / factor)
-                        .into_pyobject(py)?
-                        .into_any());
+                    return Ok((truncated as f64 / factor).into_pyobject(py)?.into_any());
                 }
             } else {
                 let val = resolve_inner(doc, arg)?;
@@ -1272,9 +1287,7 @@ fn eval_convert<'py>(
                     Ok(input_val.str()?.into_any())
                 }
             }
-            Some("int") => {
-                crate::cached_modules::builtins_int(py)?.call1((&input_val,))
-            }
+            Some("int") => crate::cached_modules::builtins_int(py)?.call1((&input_val,)),
             Some("double" | "decimal") => {
                 crate::cached_modules::builtins_float(py)?.call1((&input_val,))
             }
@@ -1431,10 +1444,18 @@ fn eval_regex_find<'py>(
 
     let compiled = {
         let mut rust_pattern = String::new();
-        if flags & 2 != 0 { rust_pattern.push_str("(?i)"); }
-        if flags & 8 != 0 { rust_pattern.push_str("(?m)"); }
-        if flags & 16 != 0 { rust_pattern.push_str("(?s)"); }
-        if flags & 64 != 0 { rust_pattern.push_str("(?x)"); }
+        if flags & 2 != 0 {
+            rust_pattern.push_str("(?i)");
+        }
+        if flags & 8 != 0 {
+            rust_pattern.push_str("(?m)");
+        }
+        if flags & 16 != 0 {
+            rust_pattern.push_str("(?s)");
+        }
+        if flags & 64 != 0 {
+            rust_pattern.push_str("(?x)");
+        }
         rust_pattern.push_str(&regex_str);
 
         match regex::Regex::new(&rust_pattern) {
@@ -1476,7 +1497,10 @@ fn eval_regex_find<'py>(
     }
 }
 
-fn rust_match_to_dict<'py>(py: Python<'py>, m: &regex::Captures<'_>) -> PyResult<Bound<'py, PyDict>> {
+fn rust_match_to_dict<'py>(
+    py: Python<'py>,
+    m: &regex::Captures<'_>,
+) -> PyResult<Bound<'py, PyDict>> {
     let entry = PyDict::new(py);
     let full = m.get(0).map(|m| m.as_str()).unwrap_or("");
     let start = m.get(0).map(|m| m.start()).unwrap_or(0);

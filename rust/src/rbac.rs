@@ -7,23 +7,54 @@ use std::collections::HashSet;
 
 fn read_commands() -> HashSet<&'static str> {
     HashSet::from([
-        "find", "count", "distinct", "aggregate", "getMore", "killCursors",
-        "listCollections", "listIndexes", "collStats", "dbStats",
-        "serverStatus", "ping", "hello", "ismaster", "isMaster",
-        "connectionStatus", "buildInfo", "buildinfo", "hostInfo",
-        "whatsmyuri", "explain", "getLog", "getCmdLineOpts",
-        "getFreeMonitoringStatus", "connPoolStats", "features",
-        "listCommands", "listDatabases", "replSetGetStatus",
-        "replSetGetConfig", "shardingState", "lockInfo",
+        "find",
+        "count",
+        "distinct",
+        "aggregate",
+        "getMore",
+        "killCursors",
+        "listCollections",
+        "listIndexes",
+        "collStats",
+        "dbStats",
+        "serverStatus",
+        "ping",
+        "hello",
+        "ismaster",
+        "isMaster",
+        "connectionStatus",
+        "buildInfo",
+        "buildinfo",
+        "hostInfo",
+        "whatsmyuri",
+        "explain",
+        "getLog",
+        "getCmdLineOpts",
+        "getFreeMonitoringStatus",
+        "connPoolStats",
+        "features",
+        "listCommands",
+        "listDatabases",
+        "replSetGetStatus",
+        "replSetGetConfig",
+        "shardingState",
+        "lockInfo",
     ])
 }
 
 fn read_write_commands() -> HashSet<&'static str> {
     let mut s = read_commands();
     s.extend([
-        "insert", "update", "delete", "findAndModify",
-        "createIndexes", "dropIndexes", "deleteIndexes",
-        "create", "drop", "bulkWrite",
+        "insert",
+        "update",
+        "delete",
+        "findAndModify",
+        "createIndexes",
+        "dropIndexes",
+        "deleteIndexes",
+        "create",
+        "drop",
+        "bulkWrite",
     ]);
     s
 }
@@ -31,19 +62,35 @@ fn read_write_commands() -> HashSet<&'static str> {
 fn db_admin_commands() -> HashSet<&'static str> {
     let mut s = read_commands();
     s.extend([
-        "createIndexes", "dropIndexes", "deleteIndexes",
-        "create", "drop", "collMod", "compact", "validate",
-        "reIndex", "renameCollection", "dropDatabase",
-        "fsync", "getParameter", "setParameter",
-        "logRotate", "setFreeMonitoring",
+        "createIndexes",
+        "dropIndexes",
+        "deleteIndexes",
+        "create",
+        "drop",
+        "collMod",
+        "compact",
+        "validate",
+        "reIndex",
+        "renameCollection",
+        "dropDatabase",
+        "fsync",
+        "getParameter",
+        "setParameter",
+        "logRotate",
+        "setFreeMonitoring",
     ]);
     s
 }
 
 fn user_admin_commands() -> HashSet<&'static str> {
     HashSet::from([
-        "createUser", "dropUser", "updateUser", "usersInfo",
-        "grantRolesToUser", "revokeRolesFromUser", "rolesInfo",
+        "createUser",
+        "dropUser",
+        "updateUser",
+        "usersInfo",
+        "grantRolesToUser",
+        "revokeRolesFromUser",
+        "rolesInfo",
     ])
 }
 

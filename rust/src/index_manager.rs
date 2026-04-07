@@ -20,7 +20,11 @@ use crate::query_compiler;
 use crate::wt_bridge::RustWtSession;
 use crate::wt_safe::WtSession;
 
-pyo3::create_exception!(smongo._smongo_core, DuplicateKeyError, pyo3::exceptions::PyException);
+pyo3::create_exception!(
+    smongo._smongo_core,
+    DuplicateKeyError,
+    pyo3::exceptions::PyException
+);
 
 fn word_regex() -> Regex {
     Regex::new(r"\w+").unwrap_or_else(|e| {
@@ -100,10 +104,13 @@ impl IndexDef {
             .keys
             .iter()
             .map(|(f, dir)| {
-                pyo3::types::PyTuple::new(py, [
-                    f.into_pyobject(py)?.into_any(),
-                    dir.as_i32().into_pyobject(py)?.into_any(),
-                ])
+                pyo3::types::PyTuple::new(
+                    py,
+                    [
+                        f.into_pyobject(py)?.into_any(),
+                        dir.as_i32().into_pyobject(py)?.into_any(),
+                    ],
+                )
             })
             .collect::<PyResult<_>>()?;
         let keys_list = PyList::new(py, key_tuples)?;
@@ -198,7 +205,7 @@ pub(crate) fn rs_flatten_doc<'py>(
 }
 
 fn flatten_inner(
-    py: Python<'_>,
+    _py: Python<'_>,
     doc: &Bound<'_, PyDict>,
     prefix: &str,
     out: &mut Vec<(String, Py<PyAny>)>,
@@ -211,11 +218,11 @@ fn flatten_inner(
             format!("{prefix}.{key}")
         };
         if let Ok(d) = v.cast::<PyDict>() {
-            flatten_inner(py, d, &path, out)?;
+            flatten_inner(_py, d, &path, out)?;
         } else if let Ok(list) = v.cast::<PyList>() {
             for (i, item) in list.iter().enumerate() {
                 if let Ok(d) = item.cast::<PyDict>() {
-                    flatten_inner(py, d, &format!("{path}.{i}"), out)?;
+                    flatten_inner(_py, d, &format!("{path}.{i}"), out)?;
                 } else {
                     out.push((path.clone(), item.unbind()));
                 }
@@ -282,8 +289,7 @@ impl RustIndexManager {
         let key = index_encoding::encode_index_key(&field_values, &doc_id, &directions)?;
 
         if idx.unique {
-            let prefix =
-                index_encoding::encode_index_key_prefix(&field_values, &directions)?;
+            let prefix = index_encoding::encode_index_key_prefix(&field_values, &directions)?;
             if self.has_duplicate(idx, &prefix, &doc_id)? {
                 let msg = format!("E11000 duplicate key error index: {}", idx.name);
                 return Err(DuplicateKeyError::new_err(msg));
@@ -291,8 +297,7 @@ impl RustIndexManager {
         }
 
         let session = self.borrow_session()?;
-        let mut cursor = session
-            .open_cursor(table_uri, Some("overwrite=true"))?;
+        let mut cursor = session.open_cursor(table_uri, Some("overwrite=true"))?;
         cursor.set_key_str(&key);
         cursor.set_value_str(&doc_id);
         cursor.update()?;
@@ -331,8 +336,7 @@ impl RustIndexManager {
         let key = index_encoding::encode_index_key(&field_values, &doc_id, &directions)?;
 
         let session = self.borrow_session()?;
-        let mut cursor = session
-            .open_cursor(table_uri, Some("overwrite=true"))?;
+        let mut cursor = session.open_cursor(table_uri, Some("overwrite=true"))?;
         cursor.set_key_str(&key);
         let _ = cursor.remove(); // ignore if not found
         cursor.close()?;
@@ -401,8 +405,7 @@ impl RustIndexManager {
         };
         let doc_id = doc.get_item("_id")?.str()?.to_string();
         let session = self.borrow_session()?;
-        let mut cursor = session
-            .open_cursor(table_uri, Some("overwrite=true"))?;
+        let mut cursor = session.open_cursor(table_uri, Some("overwrite=true"))?;
         for (field, _) in &idx.keys {
             let val = paths::get_value(doc, field)?;
             if let Ok(s) = val.bind(py).extract::<String>() {
@@ -431,8 +434,7 @@ impl RustIndexManager {
         };
         let doc_id = doc.get_item("_id")?.str()?.to_string();
         let session = self.borrow_session()?;
-        let mut cursor = session
-            .open_cursor(table_uri, Some("overwrite=true"))?;
+        let mut cursor = session.open_cursor(table_uri, Some("overwrite=true"))?;
         for (field, _) in &idx.keys {
             let val = paths::get_value(doc, field)?;
             if let Ok(s) = val.bind(py).extract::<String>() {
@@ -460,8 +462,7 @@ impl RustIndexManager {
         };
         let doc_id = doc.get_item("_id")?.str()?.to_string();
         let session = self.borrow_session()?;
-        let mut cursor = session
-            .open_cursor(table_uri, Some("overwrite=true"))?;
+        let mut cursor = session.open_cursor(table_uri, Some("overwrite=true"))?;
         for (field, _) in &idx.keys {
             let val = paths::get_value(doc, field)?;
             let h = rs_hash_value(py, val.bind(py))?;
@@ -486,8 +487,7 @@ impl RustIndexManager {
         };
         let doc_id = doc.get_item("_id")?.str()?.to_string();
         let session = self.borrow_session()?;
-        let mut cursor = session
-            .open_cursor(table_uri, Some("overwrite=true"))?;
+        let mut cursor = session.open_cursor(table_uri, Some("overwrite=true"))?;
         for (field, _) in &idx.keys {
             let val = paths::get_value(doc, field)?;
             let h = rs_hash_value(py, val.bind(py))?;
@@ -512,8 +512,7 @@ impl RustIndexManager {
         let doc_id = doc.get_item("_id")?.str()?.to_string();
         let pairs = rs_flatten_doc(py, doc)?;
         let session = self.borrow_session()?;
-        let mut cursor = session
-            .open_cursor(table_uri, Some("overwrite=true"))?;
+        let mut cursor = session.open_cursor(table_uri, Some("overwrite=true"))?;
         for (path, val) in &pairs {
             if path == "_id" {
                 continue;
@@ -541,8 +540,7 @@ impl RustIndexManager {
         let doc_id = doc.get_item("_id")?.str()?.to_string();
         let pairs = rs_flatten_doc(py, doc)?;
         let session = self.borrow_session()?;
-        let mut cursor = session
-            .open_cursor(table_uri, Some("overwrite=true"))?;
+        let mut cursor = session.open_cursor(table_uri, Some("overwrite=true"))?;
         for (path, val) in &pairs {
             if path == "_id" {
                 continue;
@@ -556,12 +554,7 @@ impl RustIndexManager {
         Ok(())
     }
 
-    fn insert_entry(
-        &self,
-        py: Python<'_>,
-        idx: &IndexDef,
-        doc: &Bound<'_, PyAny>,
-    ) -> PyResult<()> {
+    fn insert_entry(&self, py: Python<'_>, idx: &IndexDef, doc: &Bound<'_, PyAny>) -> PyResult<()> {
         if !self.passes_partial_filter(py, idx, doc)? {
             return Ok(());
         }
@@ -573,12 +566,7 @@ impl RustIndexManager {
         }
     }
 
-    fn delete_entry(
-        &self,
-        py: Python<'_>,
-        idx: &IndexDef,
-        doc: &Bound<'_, PyAny>,
-    ) -> PyResult<()> {
+    fn delete_entry(&self, py: Python<'_>, idx: &IndexDef, doc: &Bound<'_, PyAny>) -> PyResult<()> {
         if !self.passes_partial_filter(py, idx, doc)? {
             return Ok(());
         }
@@ -620,9 +608,7 @@ impl RustIndexManager {
                 let old_val = paths::get_value(old_doc, field).ok();
                 let new_val = paths::get_value(new_doc, field).ok();
                 match (old_val, new_val) {
-                    (Some(a), Some(b)) => {
-                        a.bind(py).ne(b.bind(py)).unwrap_or(true)
-                    }
+                    (Some(a), Some(b)) => a.bind(py).ne(b.bind(py)).unwrap_or(true),
                     (None, None) => false,
                     _ => true,
                 }
@@ -655,11 +641,11 @@ impl RustIndexManager {
                     "text" => idx_type = IndexType::Text,
                     "hashed" => idx_type = IndexType::Hashed,
                     "2dsphere" | "2d" => {
-                        return Err(pyo3::exceptions::PyNotImplementedError::new_err(
-                            format!("{s} indexes are planned but not yet implemented; \
+                        return Err(pyo3::exceptions::PyNotImplementedError::new_err(format!(
+                            "{s} indexes are planned but not yet implemented; \
                                     $geoNear aggregation works without an index. \
-                                    See WHATSNEXT.md for the geospatial roadmap.")
-                        ));
+                                    See WHATSNEXT.md for the geospatial roadmap."
+                        )));
                     }
                     _ => {}
                 }
@@ -688,7 +674,11 @@ impl RustIndexManager {
                 keys_list
                     .iter()
                     .map(|(f, d)| {
-                        let ds = d.bind(py).str().map(|s| s.to_string()).unwrap_or_else(|_| "1".into());
+                        let ds = d
+                            .bind(py)
+                            .str()
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|_| "1".into());
                         format!("{f}_{ds}")
                     })
                     .collect::<Vec<_>>()
@@ -710,14 +700,10 @@ impl RustIndexManager {
         let expire: Option<i64> = kw
             .get_item("expireAfterSeconds")?
             .and_then(|v| v.extract().ok());
-        let partial_filter: Option<Py<PyAny>> = kw
-            .get_item("partialFilterExpression")?
-            .map(|v| v.unbind());
+        let partial_filter: Option<Py<PyAny>> =
+            kw.get_item("partialFilterExpression")?.map(|v| v.unbind());
 
-        let table_uri = format!(
-            "table:__idx_{}_{}_{name}",
-            self.db_name, self.coll_name
-        );
+        let table_uri = format!("table:__idx_{}_{}_{name}", self.db_name, self.coll_name);
 
         let session = self.borrow_session()?;
         session.create(&table_uri, "key_format=S,value_format=S")?;
@@ -727,10 +713,7 @@ impl RustIndexManager {
         let key_tuples: Vec<Bound<'_, pyo3::types::PyTuple>> = keys_list
             .iter()
             .map(|(f, d)| {
-                pyo3::types::PyTuple::new(py, [
-                    PyString::new(py, f).into_any(),
-                    d.bind(py).clone(),
-                ])
+                pyo3::types::PyTuple::new(py, [PyString::new(py, f).into_any(), d.bind(py).clone()])
             })
             .collect::<PyResult<_>>()?;
         let keys_py = PyList::new(py, key_tuples)?;
@@ -753,8 +736,7 @@ impl RustIndexManager {
             .call_method1("dumps", (defn,))?
             .extract()?;
 
-        let mut meta_cursor = session
-            .open_cursor(&self.meta_uri, Some("overwrite=true"))?;
+        let mut meta_cursor = session.open_cursor(&self.meta_uri, Some("overwrite=true"))?;
         meta_cursor.set_key_str(&name);
         meta_cursor.set_value_str(&json_str);
         meta_cursor.update()?;
@@ -783,8 +765,7 @@ impl RustIndexManager {
             let session = self.borrow_session()?;
             let _ = session.drop_table(uri, Some("force"));
 
-            let mut cursor = session
-                .open_cursor(&self.meta_uri, Some("overwrite=true"))?;
+            let mut cursor = session.open_cursor(&self.meta_uri, Some("overwrite=true"))?;
             cursor.set_key_str(name);
             let _ = cursor.remove();
             cursor.close()?;
@@ -827,8 +808,7 @@ impl RustIndexManager {
         cursor.close()?;
 
         if !keys_to_remove.is_empty() {
-            let mut cursor = session
-                .open_cursor(&table_uri, Some("overwrite=true"))?;
+            let mut cursor = session.open_cursor(&table_uri, Some("overwrite=true"))?;
             for key in &keys_to_remove {
                 cursor.set_key_str(key);
                 let _ = cursor.remove();
@@ -856,15 +836,13 @@ impl RustIndexManager {
 
     fn load_metadata(&mut self, py: Python<'_>) -> PyResult<()> {
         let session = self.borrow_session()?;
-        let mut cursor = session
-            .open_cursor(&self.meta_uri, None)?;
+        let mut cursor = session.open_cursor(&self.meta_uri, None)?;
         while cursor.next().is_ok() {
             let name = cursor.get_key_str()?;
             let defn_json = cursor.get_value_str()?;
             let json_mod = crate::cached_modules::json_mod(py)?;
-            let defn: Bound<'_, PyDict> = json_mod
-                .call_method1("loads", (&defn_json,))?
-                .extract()?;
+            let defn: Bound<'_, PyDict> =
+                json_mod.call_method1("loads", (&defn_json,))?.extract()?;
 
             let keys_obj = defn
                 .get_item("keys")?
@@ -885,7 +863,11 @@ impl RustIndexManager {
                 let field: String = pair.get_item(0)?.extract()?;
                 let d = pair.get_item(1)?;
                 let dir = if let Ok(i) = d.extract::<i32>() {
-                    if i == -1 { IndexDir::Desc } else { IndexDir::Asc }
+                    if i == -1 {
+                        IndexDir::Desc
+                    } else {
+                        IndexDir::Asc
+                    }
                 } else {
                     IndexDir::Asc
                 };
@@ -907,10 +889,7 @@ impl RustIndexManager {
                 .get_item("partialFilterExpression")?
                 .map(|v| v.unbind());
 
-            let table_uri = format!(
-                "table:__idx_{}_{}_{name}",
-                self.db_name, self.coll_name
-            );
+            let table_uri = format!("table:__idx_{}_{}_{name}", self.db_name, self.coll_name);
             self._indexes.insert(
                 name.clone(),
                 IndexDef {
@@ -933,7 +912,12 @@ impl RustIndexManager {
 #[pymethods]
 impl RustIndexManager {
     #[new]
-    pub fn new(py: Python<'_>, session: Py<RustWtSession>, db_name: &str, coll_name: &str) -> PyResult<Self> {
+    pub fn new(
+        py: Python<'_>,
+        session: Py<RustWtSession>,
+        db_name: &str,
+        coll_name: &str,
+    ) -> PyResult<Self> {
         let session_raw = {
             let borrow = session.bind(py).borrow();
             let s = borrow.get()?;
@@ -1049,10 +1033,13 @@ impl RustIndexManager {
                 .keys
                 .iter()
                 .map(|(f, d)| {
-                    pyo3::types::PyTuple::new(py, [
-                        f.into_pyobject(py)?.into_any(),
-                        d.as_i32().into_pyobject(py)?.into_any(),
-                    ])
+                    pyo3::types::PyTuple::new(
+                        py,
+                        [
+                            f.into_pyobject(py)?.into_any(),
+                            d.as_i32().into_pyobject(py)?.into_any(),
+                        ],
+                    )
                 })
                 .collect::<PyResult<_>>()?;
             let keys_py = PyList::new(py, key_tuples)?;

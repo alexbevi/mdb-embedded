@@ -13,19 +13,14 @@ Covers:
 from __future__ import annotations
 
 import os
-import shutil
-import ssl
 import subprocess
-import tempfile
 import time
-from pathlib import Path
 
 import pymongo
 import pytest
 
 from smongo._smongo_core import RustLocalClient
 from smongo.wire.server import WireServer
-
 
 # ---------------------------------------------------------------------------
 # Helpers

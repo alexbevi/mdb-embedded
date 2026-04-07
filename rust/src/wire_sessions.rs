@@ -14,7 +14,11 @@ use pyo3::types::PyDict;
 
 pub const MAX_SESSIONS: usize = 10_000;
 
-pyo3::create_exception!(smongo._smongo_core, TooManySessions, pyo3::exceptions::PyRuntimeError);
+pyo3::create_exception!(
+    smongo._smongo_core,
+    TooManySessions,
+    pyo3::exceptions::PyRuntimeError
+);
 
 struct SessionEntry {
     _session_id: Py<PyAny>,

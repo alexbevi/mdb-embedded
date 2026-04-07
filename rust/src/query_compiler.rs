@@ -412,7 +412,12 @@ pub(crate) fn build_regex_flags(opts: &str) -> u32 {
     flags
 }
 
-pub(crate) fn safe_regex_search_pub(py: Python, pattern: &str, flags: u32, text: &str) -> PyResult<bool> {
+pub(crate) fn safe_regex_search_pub(
+    py: Python,
+    pattern: &str,
+    flags: u32,
+    text: &str,
+) -> PyResult<bool> {
     if pattern.len() > MAX_REGEX_PATTERN_LEN {
         return Err(PyValueError::new_err(format!(
             "regex pattern length {} exceeds limit {}",

@@ -355,8 +355,10 @@ def _cmd_server_status(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequenc
 
     wt_stats: dict[str, Any] = {}
     try:
-        wt_stats = dict(ctx.local_client.connection_stats())
-    except (AttributeError, _WTError, RuntimeError, OSError, KeyError):
+        stats_fn = getattr(ctx.local_client, "connection_stats", None)
+        if callable(stats_fn):
+            wt_stats = dict(stats_fn())
+    except (_WTError, RuntimeError, OSError, KeyError):
         pass
 
     resp: ResponseDoc = {

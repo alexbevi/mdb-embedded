@@ -234,6 +234,7 @@ class TestFsync:
 class TestUsersInfo:
     def test_returns_users_list(self, ctx):
         from smongo.wire.commands.users import _USER_STORE, _USER_STORE_LOCK
+
         with _USER_STORE_LOCK:
             _USER_STORE.clear()
         resp = dispatch(ctx, {"usersInfo": 1, "$db": "admin"})

@@ -12,11 +12,11 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use wiredtiger_sys::{WT_NOTFOUND, WtLibrary};
+use wiredtiger_sys::{WtLibrary, WT_NOTFOUND};
 
 use crate::local_collection::RustLocalCollection;
 use crate::wt_bridge::RustWtSession;
-use crate::wt_safe::{WtConnection, WtResult, open_session_from_conn_ptr};
+use crate::wt_safe::{open_session_from_conn_ptr, WtConnection, WtResult};
 
 // ---------------------------------------------------------------------------
 // RustLocalClient
@@ -44,12 +44,10 @@ unsafe impl Sync for RustLocalClient {}
 
 impl RustLocalClient {
     /// Direct Rust accessor for getting a DB handle, bypassing Python dispatch.
-    pub(crate) fn get_db_inner(
-        &self,
-        py: Python<'_>,
-        name: &str,
-    ) -> PyResult<Py<RustLocalDB>> {
-        let inner_mtx = self.inner.as_ref()
+    pub(crate) fn get_db_inner(&self, py: Python<'_>, name: &str) -> PyResult<Py<RustLocalDB>> {
+        let inner_mtx = self
+            .inner
+            .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("client is closed"))?;
         let mut inner = inner_mtx.lock();
 
@@ -60,20 +58,25 @@ impl RustLocalClient {
         let conn_ptr = inner.conn.raw_ptr();
         let oplog_hub = inner.oplog_hub.clone_ref(py);
 
-        let db = Py::new(py, RustLocalDB {
-            conn_ptr,
-            db_name: name.to_string(),
-            collections: Mutex::new(HashMap::new()),
-            validators: Mutex::new(HashMap::new()),
-            oplog_hub,
-        })?;
+        let db = Py::new(
+            py,
+            RustLocalDB {
+                conn_ptr,
+                db_name: name.to_string(),
+                collections: Mutex::new(HashMap::new()),
+                validators: Mutex::new(HashMap::new()),
+                oplog_hub,
+            },
+        )?;
         inner.dbs.insert(name.to_string(), db.clone_ref(py));
         Ok(db)
     }
 
     /// Open a WT session without Python dispatch, for use by Rust admin commands.
     pub(crate) fn open_session_typed(&self) -> PyResult<crate::wt_bridge::RustWtSession> {
-        let inner_mtx = self.inner.as_ref()
+        let inner_mtx = self
+            .inner
+            .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("client is closed"))?;
         let inner = inner_mtx.lock();
         let session = inner.conn.open_session(None)?;
@@ -102,10 +105,7 @@ impl RustLocalClient {
             }
         }
 
-        let lib = Arc::new(
-            WtLibrary::load_from_pip()
-                .map_err(PyRuntimeError::new_err)?,
-        );
+        let lib = Arc::new(WtLibrary::load_from_pip().map_err(PyRuntimeError::new_err)?);
         let conn = WtConnection::open(lib, db_path, Some(&config))?;
 
         let oplog_hub_cls = py
@@ -134,7 +134,9 @@ impl RustLocalClient {
     }
 
     fn checkpoint(&self) -> PyResult<()> {
-        let inner_mtx = self.inner.as_ref()
+        let inner_mtx = self
+            .inner
+            .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("client is closed"))?;
         let inner = inner_mtx.lock();
         let session = inner.conn.open_session(None)?;
@@ -159,7 +161,13 @@ impl RustLocalClient {
         slf
     }
 
-    fn __exit__(&mut self, py: Python<'_>, _exc_type: &Bound<'_, PyAny>, _exc_val: &Bound<'_, PyAny>, _exc_tb: &Bound<'_, PyAny>) -> PyResult<bool> {
+    fn __exit__(
+        &mut self,
+        py: Python<'_>,
+        _exc_type: &Bound<'_, PyAny>,
+        _exc_val: &Bound<'_, PyAny>,
+        _exc_tb: &Bound<'_, PyAny>,
+    ) -> PyResult<bool> {
         self.close(py)?;
         Ok(false)
     }
@@ -176,7 +184,9 @@ impl RustLocalClient {
 
     #[getter]
     fn oplog_hub(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let inner_mtx = self.inner.as_ref()
+        let inner_mtx = self
+            .inner
+            .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("client is closed"))?;
         let inner = inner_mtx.lock();
         Ok(inner.oplog_hub.clone_ref(py))
@@ -185,7 +195,9 @@ impl RustLocalClient {
     /// Expose the raw connection as a RustWtSession factory for Python code
     /// that still needs direct session access.
     fn open_session(&self) -> PyResult<RustWtSession> {
-        let inner_mtx = self.inner.as_ref()
+        let inner_mtx = self
+            .inner
+            .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("client is closed"))?;
         let inner = inner_mtx.lock();
         let session = inner.conn.open_session(None)?;
@@ -195,7 +207,9 @@ impl RustLocalClient {
     /// Return the loaded WiredTiger library version as a string (e.g. "11.3.1").
     #[getter]
     fn wiredtiger_version(&self) -> PyResult<String> {
-        let inner_mtx = self.inner.as_ref()
+        let inner_mtx = self
+            .inner
+            .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("client is closed"))?;
         let inner = inner_mtx.lock();
         Ok(inner.conn.wt_version().to_string())
@@ -216,16 +230,17 @@ impl RustLocalClient {
         };
         let cursor = match session.open_cursor("statistics:", Some("statistics=(fast)")) {
             Ok(c) => c,
-            Err(_) => { let _ = session.close(); return Ok(result); }
+            Err(_) => {
+                let _ = session.close();
+                return Ok(result);
+            }
         };
         let raw = cursor.raw_ptr();
-        loop {
-            let next_fn = match unsafe { (*raw).next } {
-                Some(f) => f,
-                None => break,
-            };
+        while let Some(next_fn) = unsafe { (*raw).next } {
             let rc = unsafe { next_fn(raw) };
-            if rc != 0 { break; }
+            if rc != 0 {
+                break;
+            }
 
             let mut desc_ptr: *const std::os::raw::c_char = std::ptr::null();
             let mut _name_ptr: *const std::os::raw::c_char = std::ptr::null();
@@ -233,12 +248,17 @@ impl RustLocalClient {
             let get_value_fn = unsafe { (*raw).get_value };
             let rc = unsafe {
                 wiredtiger_sys::wt_shim_get_value_ssq(
-                    get_value_fn, raw, &mut desc_ptr, &mut _name_ptr, &mut val,
+                    get_value_fn,
+                    raw,
+                    &mut desc_ptr,
+                    &mut _name_ptr,
+                    &mut val,
                 )
             };
-            if rc != 0 { break; }
-            let desc = unsafe { std::ffi::CStr::from_ptr(desc_ptr) }
-                .to_string_lossy();
+            if rc != 0 {
+                break;
+            }
+            let desc = unsafe { std::ffi::CStr::from_ptr(desc_ptr) }.to_string_lossy();
             let key = desc.to_lowercase().replace([' ', '-'], "_");
             let _ = result.set_item(key.as_str(), val);
         }
@@ -365,7 +385,9 @@ impl RustLocalDB {
 
         {
             let borrow = coll_py.bind(py).borrow();
-            borrow._ttl_reaper.bind(py)
+            borrow
+                ._ttl_reaper
+                .bind(py)
                 .setattr("_collection", coll_py.bind(py))?;
         }
 
@@ -470,9 +492,9 @@ impl RustLocalDB {
                         if !uri.starts_with(&prefix) {
                             continue;
                         }
-                        let is_internal = INTERNAL_TABLE_PREFIXES.iter().any(|tag| {
-                            uri.starts_with(&format!("table:{}{}_", tag, self.db_name))
-                        });
+                        let is_internal = INTERNAL_TABLE_PREFIXES
+                            .iter()
+                            .any(|tag| uri.starts_with(&format!("table:{}{}_", tag, self.db_name)));
                         if is_internal {
                             continue;
                         }

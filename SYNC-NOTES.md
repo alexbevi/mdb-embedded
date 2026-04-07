@@ -77,19 +77,9 @@ smongo has a `geo.py` module, but geospatial index types behave differently from
 
 ## Sync Checkpoint and Oplog Behavior
 
-### 6. Checkpoint advances even on partial batch failure
+### 6. ~~Checkpoint advances even on partial batch failure~~ (FIXED in 0.9.1)
 
-When a bulk_write partially fails (some ops succeed, some don't), `_flush_bulk` returns `False` and `safe_key` is not updated -- but `last_key` still advances. The checkpoint (`push:{ns}`) is set to `last_key` at the end of the loop regardless:
-
-```python
-if last_key:
-    self._set_checkpoint(f"push:{ns}", last_key)
-```
-
-This means: if a batch partially fails and the process restarts, the failed ops within that batch will **not** be retried because the checkpoint has moved past them. The warning is logged but the entries are effectively skipped.
-
-**Impact:** Silent data loss on partial bulk_write failures during push.
-**Mitigation:** Set `oplog_auto_compact: False` during development so you can inspect the oplog. Monitor the `errors` counter in `status()`.
+**Fixed.** The checkpoint now advances only to `safe_key` (the last key from a fully successful batch). Partially failed batches leave the checkpoint unchanged, so failed ops are retried on the next sync cycle. `_flush_bulk()` also returns per-op success counts and logs individual `writeErrors`.
 
 ### 7. Oplog auto-compact truncates up to `safe_key`
 
@@ -98,11 +88,9 @@ After a successful push, if `oplog_auto_compact` is enabled (default), the sync 
 **Impact:** Change stream listeners that fell behind may miss events if oplog compaction runs.
 **Workaround:** Disable `oplog_auto_compact` if you have other oplog consumers, or use `compact_oplog(keep=N)` manually.
 
-### 8. Checkpoint table is not transactional with the oplog
+### 8. ~~Checkpoint table is not transactional with the oplog~~ (FIXED in 0.9.2)
 
-The sync checkpoint (`table:__sync_checkpoint`) is written via a separate WiredTiger session from the oplog. If the process crashes between pushing ops and updating the checkpoint, some ops may be re-pushed on restart (duplicates). The push uses `upsert=True` for updates and `ordered=False` for bulk writes, so duplicates are tolerable for updates/deletes but will fail for inserts (duplicate key on remote).
-
-**Impact:** Rare insert duplication errors on crash recovery. The `BulkWriteError` is caught and logged but the entries are considered pushed.
+**Fixed.** `_atomic_checkpoint_and_compact()` now wraps both the checkpoint write and oplog truncation in a single WiredTiger transaction. A crash between the two triggers a rollback, preventing duplicate ops on restart. The new `_ck_lock` serializes all checkpoint-session access for thread safety under concurrent push.
 
 ---
 
@@ -221,12 +209,9 @@ If you change a selective sync filter (e.g., widen it to include documents that 
 
 ## Tombstones
 
-### 20. Tombstone registry is in-memory only
+### 20. ~~Tombstone registry is in-memory only~~ (FIXED in 0.9.2)
 
-`TombstoneRegistry` tracks deleted document IDs with timestamps for expiry, but the registry lives in memory and is not persisted to WiredTiger. If the process restarts, all tombstone state is lost. This means a document deleted locally, pushed to remote, and then pulled back before the push checkpoint was written could be re-inserted locally.
-
-**Impact:** Edge case on crash recovery -- deleted documents could reappear.
-**Mitigation:** The `_internal=True` flag on pulled writes prevents oplog echo, but the tombstone gap exists for the narrow window between delete-push and checkpoint-write.
+**Fixed.** `TombstoneRegistry` is now backed by a WiredTiger table (`table:__tombstones`, key=doc_id, value=deletion_timestamp). Tombstones survive process restarts. The `mark_deleted()` / `is_tombstoned()` / `expire()` API is unchanged. A threading lock protects cursor operations.
 
 ---
 
@@ -278,9 +263,12 @@ LWW conflict resolution depends on timestamps. Docker containers share the host 
 | Per-collection sync_filter | Unit tested | Covered |
 | Oplog auto-compact | Not directly tested | Exercised implicitly |
 | Exponential backoff | Not tested | Gap |
-| Tombstone expiry | Not tested | Gap |
+| Tombstone expiry | Unit tested (0.9.2) | Covered |
+| Tombstone persistence | Unit tested (0.9.2) | Covered |
 | Large batch push (>batch_size) | Not tested | Gap |
-| Crash recovery / checkpoint | Not tested | Gap |
+| Crash recovery / checkpoint | Unit tested (0.9.2, rollback path) | Partial |
+| Concurrent namespace push | Unit tested (0.9.2, barrier) | Covered |
+| Resumable initial snapshot | Unit tested (0.9.2) | Covered |
 
 ---
 
@@ -397,7 +385,7 @@ See [`examples/patterns/edge_fleet_sync.py`](examples/patterns/edge_fleet_sync.p
 1. **Enable replica set in docker-compose** to test the change stream pull path in CI.
 2. **Implement pull-side index drop reconciliation** to prevent local index bloat.
 3. **Forward all index options on pull**, not just `unique` and `sparse`.
-4. **Fix checkpoint advancement on partial failure** -- only advance to `safe_key`, not `last_key`.
+4. ~~**Fix checkpoint advancement on partial failure**~~ -- done in 0.9.1.
 5. **Add integration tests for field_merge and change stream pull.**
-6. **Persist tombstones to WiredTiger** for crash-safe delete tracking.
+6. ~~**Persist tombstones to WiredTiger**~~ -- done in 0.9.2.
 7. **Document the `_lastModified` requirement** for remote documents participating in LWW.

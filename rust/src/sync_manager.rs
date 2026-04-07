@@ -18,10 +18,7 @@ use crate::objectid::ObjectId as RustObjectId;
 /// Called on every document and sub-document during push. The recursive
 /// tree-walk in Rust avoids Python per-element overhead.
 #[pyfunction]
-pub fn to_pymongo<'py>(
-    py: Python<'py>,
-    value: &Bound<'py, PyAny>,
-) -> PyResult<Bound<'py, PyAny>> {
+pub fn to_pymongo<'py>(py: Python<'py>, value: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
     if value.is_instance_of::<RustObjectId>() {
         let oid_str = value.str()?;
         let bson_mod = crate::cached_modules::bson_mod(py);
@@ -34,7 +31,9 @@ pub fn to_pymongo<'py>(
         };
     }
 
-    if let Ok(py_oid_cls) = crate::cached_modules::smongo_objectid(py).and_then(|m| m.getattr("_PyObjectId")) {
+    if let Ok(py_oid_cls) =
+        crate::cached_modules::smongo_objectid(py).and_then(|m| m.getattr("_PyObjectId"))
+    {
         if value.is_instance(&py_oid_cls)? {
             let oid_str = value.str()?;
             let bson_mod = crate::cached_modules::bson_mod(py);

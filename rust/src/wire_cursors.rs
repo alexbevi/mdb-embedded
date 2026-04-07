@@ -172,10 +172,7 @@ impl CursorRegistry {
 
     pub(crate) fn is_tailable(&self, cursor_id: i64) -> bool {
         let inner = self.inner.lock();
-        inner
-            .cursors
-            .get(&cursor_id)
-            .is_some_and(|s| s._tailable)
+        inner.cursors.get(&cursor_id).is_some_and(|s| s._tailable)
     }
 
     pub(crate) fn kill(&self, cursor_ids: Vec<i64>) -> Vec<i64> {

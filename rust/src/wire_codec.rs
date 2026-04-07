@@ -59,8 +59,15 @@ fn convert_inbound<'py>(
     if let Ok(d) = value.cast::<PyDict>() {
         let result = PyDict::new(py);
         for (k, v) in d.iter() {
-            let converted =
-                convert_inbound(py, &v, depth + 1, bson_oid_cls, decimal128_cls, regex_cls, engine_oid_cls)?;
+            let converted = convert_inbound(
+                py,
+                &v,
+                depth + 1,
+                bson_oid_cls,
+                decimal128_cls,
+                regex_cls,
+                engine_oid_cls,
+            )?;
             result.set_item(k, converted)?;
         }
         return Ok(result.into_any());
@@ -69,8 +76,15 @@ fn convert_inbound<'py>(
     if let Ok(l) = value.cast::<PyList>() {
         let result = PyList::empty(py);
         for item in l.iter() {
-            let converted =
-                convert_inbound(py, &item, depth + 1, bson_oid_cls, decimal128_cls, regex_cls, engine_oid_cls)?;
+            let converted = convert_inbound(
+                py,
+                &item,
+                depth + 1,
+                bson_oid_cls,
+                decimal128_cls,
+                regex_cls,
+                engine_oid_cls,
+            )?;
             result.append(converted)?;
         }
         return Ok(result.into_any());
@@ -85,7 +99,10 @@ fn convert_inbound<'py>(
 /// Wire CRUD handlers no longer call this (raw decoder produces engine
 /// types directly), but it remains available for the LocalClient path.
 #[allow(dead_code)]
-pub fn normalize_inbound_dict<'py>(py: Python<'py>, doc: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> {
+pub fn normalize_inbound_dict<'py>(
+    py: Python<'py>,
+    doc: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyDict>> {
     let raw = normalize_inbound(py, doc)?;
     Ok(raw.into_bound(py).cast_into::<PyDict>()?)
 }
@@ -107,8 +124,15 @@ pub fn normalize_inbound<'py>(py: Python<'py>, doc: &Bound<'py, PyAny>) -> PyRes
 
     let result = PyDict::new(py);
     for (k, v) in d.iter() {
-        let converted =
-            convert_inbound(py, &v, 1, &bson_oid_cls, &decimal128_cls, &regex_cls, &engine_oid_cls)?;
+        let converted = convert_inbound(
+            py,
+            &v,
+            1,
+            &bson_oid_cls,
+            &decimal128_cls,
+            &regex_cls,
+            &engine_oid_cls,
+        )?;
         result.set_item(k, converted)?;
     }
     Ok(result.into_any().unbind())
@@ -153,8 +177,14 @@ fn convert_outbound<'py>(
         let result = PyDict::new(py);
         for (k, v) in d.iter() {
             let key_str: String = k.extract()?;
-            let converted =
-                convert_outbound(py, Some(&key_str), &v, depth + 1, engine_oid_cls, bson_oid_cls)?;
+            let converted = convert_outbound(
+                py,
+                Some(&key_str),
+                &v,
+                depth + 1,
+                engine_oid_cls,
+                bson_oid_cls,
+            )?;
             result.set_item(k, converted)?;
         }
         return Ok(result.into_any());

@@ -193,22 +193,46 @@ class OplogReader:
         """
         Read oplog entries after the given checkpoint key.
         Returns list of (key, entry) tuples.
+
+        Uses ``search_near()`` to seek directly to the checkpoint position
+        instead of scanning from the beginning -- O(log n + k) where *k* is
+        the number of new entries since the checkpoint.
         """
         cursor = self.session.open_cursor(self.oplog_uri, None, None)
         entries: list[tuple[str, Document]] = []
-        past_checkpoint = checkpoint_key is None
 
-        while cursor.next() == 0:
+        if checkpoint_key is not None:
+            cursor.set_key(checkpoint_key)
+            try:
+                exact = cursor.search_near()
+            except _WTError:
+                cursor.close()
+                return entries
+            if exact == 0:
+                # Landed exactly on the checkpoint; skip past it.
+                if cursor.next() != 0:
+                    cursor.close()
+                    return entries
+            elif exact < 0:
+                # Checkpoint was compacted; positioned on the largest smaller key.
+                # Advance to the first entry after where the checkpoint was.
+                if cursor.next() != 0:
+                    cursor.close()
+                    return entries
+            # exact > 0: cursor is already past the checkpoint, start collecting.
+        else:
+            # No checkpoint -- read everything from the beginning.
+            if cursor.next() != 0:
+                cursor.close()
+                return entries
+
+        while True:
             key: str = cursor.get_key()
-            if not past_checkpoint:
-                if key == checkpoint_key:
-                    past_checkpoint = True
-                continue
-
             entry: Document = json.loads(cursor.get_value(), object_hook=_ejson_object_hook)
-            if skip_internal and entry.get("internal"):
-                continue
-            entries.append((key, entry))
+            if not (skip_internal and entry.get("internal")):
+                entries.append((key, entry))
+            if cursor.next() != 0:
+                break
 
         cursor.close()
         return entries

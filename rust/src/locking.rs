@@ -37,7 +37,6 @@ impl MutexForceGuard {
         });
         Self(Arc::clone(mutex))
     }
-
 }
 
 impl Drop for MutexForceGuard {

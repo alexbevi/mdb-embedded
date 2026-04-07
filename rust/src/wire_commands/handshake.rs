@@ -252,7 +252,11 @@ fn cmd_sasl_start(
     }
     let scram_cred_py = creds.call_method1("get", ("SCRAM-SHA-256",))?;
     if scram_cred_py.is_none() {
-        let r = make_error(py, "AuthenticationFailed", "user has no SCRAM-SHA-256 credentials")?;
+        let r = make_error(
+            py,
+            "AuthenticationFailed",
+            "user has no SCRAM-SHA-256 credentials",
+        )?;
         return Ok(r.into_any().unbind());
     }
 
@@ -300,7 +304,9 @@ fn extract_scram_credential(
         .map_err(|e| PyRuntimeError::new_err(format!("invalid serverKey base64: {e}")))?;
 
     if stored_key_vec.len() != 32 || server_key_vec.len() != 32 {
-        return Err(PyRuntimeError::new_err("stored/server key must be 32 bytes"));
+        return Err(PyRuntimeError::new_err(
+            "stored/server key must be 32 bytes",
+        ));
     }
 
     let mut stored_key = [0u8; 32];
@@ -366,10 +372,16 @@ fn cmd_sasl_continue(
                 if let Ok(roles_list) = roles_val.cast::<PyList>() {
                     for item in roles_list.iter() {
                         if let Ok(d) = item.cast::<PyDict>() {
-                            let role: String = d.get_item("role")?
-                                .map(|v| v.extract()).transpose()?.unwrap_or_default();
-                            let rdb: String = d.get_item("db")?
-                                .map(|v| v.extract()).transpose()?.unwrap_or_default();
+                            let role: String = d
+                                .get_item("role")?
+                                .map(|v| v.extract())
+                                .transpose()?
+                                .unwrap_or_default();
+                            let rdb: String = d
+                                .get_item("db")?
+                                .map(|v| v.extract())
+                                .transpose()?
+                                .unwrap_or_default();
                             if !role.is_empty() {
                                 role_pairs.push((role, rdb));
                             }
@@ -391,7 +403,11 @@ fn cmd_sasl_continue(
             let audit_on: bool = audit_mod.call_method0(py, "is_enabled")?.extract(py)?;
             if audit_on {
                 let addr = ctx.borrow().address.clone_ref(py);
-                let remote: String = addr.bind(py).str().map(|s| s.to_string()).unwrap_or_default();
+                let remote: String = addr
+                    .bind(py)
+                    .str()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
                 audit_mod.call_method1(
                     py,
                     "log_auth_event",
@@ -411,12 +427,23 @@ fn cmd_sasl_continue(
             let audit_on: bool = audit_mod.call_method0(py, "is_enabled")?.extract(py)?;
             if audit_on {
                 let addr = ctx.borrow().address.clone_ref(py);
-                let remote: String = addr.bind(py).str().map(|s| s.to_string()).unwrap_or_default();
+                let remote: String = addr
+                    .bind(py)
+                    .str()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
                 let reason = format!("SCRAM verification failed: {e}");
                 audit_mod.call_method1(
                     py,
                     "log_auth_event",
-                    ("authFailure", &conversation.username, &db_name, &remote, false, &reason),
+                    (
+                        "authFailure",
+                        &conversation.username,
+                        &db_name,
+                        &remote,
+                        false,
+                        &reason,
+                    ),
                 )?;
             }
 
@@ -455,7 +482,11 @@ fn cmd_logout(
     let audit_on: bool = audit_mod.call_method0(py, "is_enabled")?.extract(py)?;
     if audit_on {
         let addr = ctx.borrow().address.clone_ref(py);
-        let remote: String = addr.bind(py).str().map(|s| s.to_string()).unwrap_or_default();
+        let remote: String = addr
+            .bind(py)
+            .str()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
         let u = user.unwrap_or_default();
         let d = db.unwrap_or_default();
         audit_mod.call_method1(py, "log_auth_event", ("logout", &u, &d, &remote, true, ""))?;

@@ -98,7 +98,10 @@ def _cmd_set_profiling(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequenc
 def _cmd_read_profile(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -> ResponseDoc:
     limit = cmd.get("limit", 100)
     entries = ctx.profiler.get_entries(limit)
-    return {"cursor": {"id": Int64(0), "ns": "admin.system.profile", "firstBatch": entries}, "ok": 1.0}
+    return {
+        "cursor": {"id": Int64(0), "ns": "admin.system.profile", "firstBatch": entries},
+        "ok": 1.0,
+    }
 
 
 @_register("shardingState")

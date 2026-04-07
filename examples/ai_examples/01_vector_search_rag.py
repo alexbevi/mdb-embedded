@@ -21,7 +21,9 @@ import time
 from collections import Counter
 
 import numpy as np
-from smongo import MongoClient as SmongoClient, WireServer
+
+from smongo import MongoClient as SmongoClient
+from smongo import WireServer
 
 PORT = 27019
 
@@ -83,10 +85,12 @@ def main() -> None:
 
     native = SmongoClient(f"local://{db_path}")
     coll = native["rag_demo"]["knowledge_base"]
-    coll.insert_many([
-        {"text": text, "embedding": vectorizer.embed(text), "source": f"chunk_{i}"}
-        for i, text in enumerate(KNOWLEDGE)
-    ])
+    coll.insert_many(
+        [
+            {"text": text, "embedding": vectorizer.embed(text), "source": f"chunk_{i}"}
+            for i, text in enumerate(KNOWLEDGE)
+        ]
+    )
     print(f"   Inserted {coll.count_documents({})} documents with embeddings")
     native.close()
 
@@ -111,17 +115,21 @@ def main() -> None:
         print("3. Semantic search: 'How does smongo handle queries?'\n")
 
         query_vec = vectorizer.embed("How does smongo handle queries?")
-        results = list(kb.aggregate([
-            {
-                "$vectorSearch": {
-                    "path": "embedding",
-                    "queryVector": query_vec,
-                    "limit": 3,
-                    "metric": "cosine",
-                }
-            },
-            {"$project": {"text": 1, "_vectorScore": 1, "source": 1, "_id": 0}},
-        ]))
+        results = list(
+            kb.aggregate(
+                [
+                    {
+                        "$vectorSearch": {
+                            "path": "embedding",
+                            "queryVector": query_vec,
+                            "limit": 3,
+                            "metric": "cosine",
+                        }
+                    },
+                    {"$project": {"text": 1, "_vectorScore": 1, "source": 1, "_id": 0}},
+                ]
+            )
+        )
 
         for r in results:
             print(f"   [{r['_vectorScore']:.4f}] {r['text'][:80]}...")
@@ -129,18 +137,22 @@ def main() -> None:
         # ── 5. Filtered vector search ──────────────────────────
         print("\n4. Filtered search (only chunks 0-4): 'transactions and isolation'\n")
 
-        results = list(kb.aggregate([
-            {
-                "$vectorSearch": {
-                    "path": "embedding",
-                    "queryVector": vectorizer.embed("transactions and isolation"),
-                    "limit": 2,
-                    "metric": "cosine",
-                    "filter": {"source": {"$in": [f"chunk_{i}" for i in range(5)]}},
-                }
-            },
-            {"$project": {"text": 1, "_vectorScore": 1, "source": 1, "_id": 0}},
-        ]))
+        results = list(
+            kb.aggregate(
+                [
+                    {
+                        "$vectorSearch": {
+                            "path": "embedding",
+                            "queryVector": vectorizer.embed("transactions and isolation"),
+                            "limit": 2,
+                            "metric": "cosine",
+                            "filter": {"source": {"$in": [f"chunk_{i}" for i in range(5)]}},
+                        }
+                    },
+                    {"$project": {"text": 1, "_vectorScore": 1, "source": 1, "_id": 0}},
+                ]
+            )
+        )
 
         for r in results:
             print(f"   [{r['_vectorScore']:.4f}] ({r['source']}) {r['text'][:70]}...")
@@ -151,17 +163,21 @@ def main() -> None:
         user_question = "What makes smongo different from a regular MongoDB?"
         q_vec = vectorizer.embed(user_question)
 
-        context_docs = list(kb.aggregate([
-            {
-                "$vectorSearch": {
-                    "path": "embedding",
-                    "queryVector": q_vec,
-                    "limit": 3,
-                    "metric": "cosine",
-                }
-            },
-            {"$project": {"text": 1, "_id": 0}},
-        ]))
+        context_docs = list(
+            kb.aggregate(
+                [
+                    {
+                        "$vectorSearch": {
+                            "path": "embedding",
+                            "queryVector": q_vec,
+                            "limit": 3,
+                            "metric": "cosine",
+                        }
+                    },
+                    {"$project": {"text": 1, "_id": 0}},
+                ]
+            )
+        )
 
         context_block = "\n".join(f"  - {d['text']}" for d in context_docs)
         prompt = (

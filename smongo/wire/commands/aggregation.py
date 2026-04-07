@@ -63,7 +63,7 @@ def _cmd_aggregate(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) 
             doc["count"] = stats["count"]
         remaining = pipeline[1:]
         if remaining:
-            coll_getter = lambda name: ctx.get_db(db_name).get_collection(name)  # noqa: E731
+            coll_getter = lambda name: ctx.get_db(db_name).get_collection(name)
             result_docs = normalize_outbound_docs(
                 Cursor([doc], collection_getter=coll_getter).aggregate(remaining)
             )

@@ -92,20 +92,47 @@ fn cmd_aggregate(
             if let Some(coll_stats_spec) = d.get_item("$collStats")? {
                 let stats = coll.call_method0("storage_stats")?;
                 let stats_dict = stats.cast::<PyDict>()?;
-                let count: i64 = stats_dict.get_item("count")?.map(|v| v.extract()).transpose()?.unwrap_or(0);
-                let data_size: i64 = stats_dict.get_item("dataSize")?.map(|v| v.extract()).transpose()?.unwrap_or(0);
-                let storage_size: i64 = stats_dict.get_item("storageSize")?.map(|v| v.extract()).transpose()?.unwrap_or(0);
-                let nindexes: i64 = stats_dict.get_item("nindexes")?.map(|v| v.extract()).transpose()?.unwrap_or(0);
-                let total_idx_size: i64 = stats_dict.get_item("totalIndexSize")?.map(|v| v.extract()).transpose()?.unwrap_or(0);
-                let idx_sizes = stats_dict.get_item("indexSizes")?.unwrap_or_else(|| PyDict::new(py).into_any());
-                let wt = stats_dict.get_item("wiredTiger")?.unwrap_or_else(|| PyDict::new(py).into_any());
+                let count: i64 = stats_dict
+                    .get_item("count")?
+                    .map(|v| v.extract())
+                    .transpose()?
+                    .unwrap_or(0);
+                let data_size: i64 = stats_dict
+                    .get_item("dataSize")?
+                    .map(|v| v.extract())
+                    .transpose()?
+                    .unwrap_or(0);
+                let storage_size: i64 = stats_dict
+                    .get_item("storageSize")?
+                    .map(|v| v.extract())
+                    .transpose()?
+                    .unwrap_or(0);
+                let nindexes: i64 = stats_dict
+                    .get_item("nindexes")?
+                    .map(|v| v.extract())
+                    .transpose()?
+                    .unwrap_or(0);
+                let total_idx_size: i64 = stats_dict
+                    .get_item("totalIndexSize")?
+                    .map(|v| v.extract())
+                    .transpose()?
+                    .unwrap_or(0);
+                let idx_sizes = stats_dict
+                    .get_item("indexSizes")?
+                    .unwrap_or_else(|| PyDict::new(py).into_any());
+                let wt = stats_dict
+                    .get_item("wiredTiger")?
+                    .unwrap_or_else(|| PyDict::new(py).into_any());
 
                 let doc = PyDict::new(py);
                 doc.set_item("ns", &ns)?;
 
                 let spec_dict = coll_stats_spec.cast::<PyDict>().ok();
 
-                if spec_dict.as_ref().map_or(false, |s| s.get_item("storageStats").ok().flatten().is_some()) {
+                if spec_dict
+                    .as_ref()
+                    .is_some_and(|s| s.get_item("storageStats").ok().flatten().is_some())
+                {
                     let ss = PyDict::new(py);
                     ss.set_item("count", count)?;
                     ss.set_item("size", data_size)?;
@@ -120,11 +147,14 @@ fn cmd_aggregate(
                     ss.set_item("wiredTiger", wt)?;
                     doc.set_item("storageStats", ss)?;
                 }
-                if spec_dict.as_ref().map_or(false, |s| s.get_item("count").ok().flatten().is_some()) {
+                if spec_dict
+                    .as_ref()
+                    .is_some_and(|s| s.get_item("count").ok().flatten().is_some())
+                {
                     doc.set_item("count", count)?;
                 }
 
-                let first_batch = PyList::new(py, &[doc.as_any()])?;
+                let first_batch = PyList::new(py, [doc.as_any()])?;
                 let cursor_dict = PyDict::new(py);
                 cursor_dict.set_item("id", bson_int64(py, 0)?)?;
                 cursor_dict.set_item("ns", &ns)?;
@@ -151,8 +181,12 @@ fn cmd_aggregate(
                 };
                 let cr = ctx.borrow().cursor_registry.clone_ref(py);
                 let cr_reg = cr.bind(py).cast::<crate::wire_cursors::CursorRegistry>()?;
-                let cursor_id =
-                    cr_reg.borrow().create_change_stream(py, &ns, stream.unbind(), Some(batch_size as usize))?;
+                let cursor_id = cr_reg.borrow().create_change_stream(
+                    py,
+                    &ns,
+                    stream.unbind(),
+                    Some(batch_size as usize),
+                )?;
                 let cursor_dict = PyDict::new(py);
                 cursor_dict.set_item("id", bson_int64(py, cursor_id)?)?;
                 cursor_dict.set_item("ns", &ns)?;
@@ -184,7 +218,7 @@ fn cmd_aggregate(
     let result = crate::aggregation::aggregate_pipeline(
         py,
         docs.bind(py),
-        &pipeline,
+        pipeline,
         Some(&coll_getter_fn),
         max_docs,
         false,
@@ -195,7 +229,8 @@ fn cmd_aggregate(
     let cr = ctx.borrow().cursor_registry.clone_ref(py);
     let cr_reg = cr.bind(py).cast::<crate::wire_cursors::CursorRegistry>()?;
     let (cursor_id, first_batch) =
-        cr_reg.borrow()
+        cr_reg
+            .borrow()
             .create(py, &ns, result_bound, Some(batch_size as usize))?;
 
     let cursor_dict = PyDict::new(py);

@@ -17,7 +17,7 @@ Guardrails:
 import itertools
 from collections.abc import Iterable, Iterator
 from copy import deepcopy
-from typing import Any
+from typing import Any, cast
 
 from .._types import CollectionGetter, Document, Filter, Pipeline, Projection
 from ..query import compile_query, field_exists, get_value, set_value
@@ -29,6 +29,7 @@ from .constants import (
     MemoryLimitExceeded,
     _estimate_docs_bytes,
 )
+from .geo import geo_near_stage
 from .joins import graph_lookup_stage, lookup_stage, pipeline_lookup_stage, union_with_stage
 from .output import facet_stage, merge_stage, out_stage
 from .stages import (
@@ -49,7 +50,6 @@ from .stages import (
     unset_stage,
     unwind_stage,
 )
-from .geo import geo_near_stage
 from .vector import vector_search_stage
 
 
@@ -147,8 +147,9 @@ class Cursor:
         if self._projection_spec:
             docs = _apply_projection(docs, self._projection_spec)
 
-        self._resolved = docs
-        return docs
+        resolved: list[Document] = cast(list[Document], docs)
+        self._resolved = resolved
+        return resolved
 
     # ── Iteration / materialization ──────────────────────────────────
 
@@ -343,7 +344,7 @@ def _apply_projection(docs: list[Document], spec: Projection) -> list[Document]:
             out.append(new_doc)
         return out
 
-    out = []
+    projected: list[Document] = []
     has_inclusion = any(v == 1 or v is True for v in spec.values() if not isinstance(v, dict))
     has_exclusion = any(v == 0 or v is False for v in spec.values())
 
@@ -368,5 +369,5 @@ def _apply_projection(docs: list[Document], spec: Projection) -> list[Document]:
                         del d[parts[-1]]
         else:
             new_doc = deepcopy(doc)
-        out.append(new_doc)
-    return out
+        projected.append(new_doc)
+    return projected

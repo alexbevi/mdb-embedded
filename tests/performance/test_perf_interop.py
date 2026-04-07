@@ -25,8 +25,10 @@ def wire_coll(wire_client):
 @pytest.mark.performance
 def test_dispatch_find_simple(benchmark, wire_coll):
     """Measure full dispatch round-trip for a simple find (filter + limit)."""
+
     def go():
         return list(wire_coll.find({"x": {"$gt": 100}}).limit(10))
+
     benchmark(go)
 
 
@@ -34,51 +36,66 @@ def test_dispatch_find_simple(benchmark, wire_coll):
 def test_dispatch_insert_delete_cycle(benchmark, wire_coll):
     """Measure insert + delete dispatch overhead (one doc each)."""
     _counter = [0]
+
     def go():
         _counter[0] += 1
         key = f"_bench_{_counter[0]}"
         wire_coll.insert_one({"_id": key, "val": 1})
         wire_coll.delete_one({"_id": key})
+
     benchmark(go)
 
 
 @pytest.mark.performance
 def test_dispatch_aggregate_small(benchmark, wire_coll):
     """Measure aggregate pipeline dispatch on a small collection."""
+
     def go():
-        return list(wire_coll.aggregate([
-            {"$match": {"x": {"$gte": 50}}},
-            {"$group": {"_id": "$tag", "total": {"$sum": "$x"}}},
-            {"$sort": {"total": -1}},
-        ]))
+        return list(
+            wire_coll.aggregate(
+                [
+                    {"$match": {"x": {"$gte": 50}}},
+                    {"$group": {"_id": "$tag", "total": {"$sum": "$x"}}},
+                    {"$sort": {"total": -1}},
+                ]
+            )
+        )
+
     benchmark(go)
 
 
 @pytest.mark.performance
 def test_dispatch_find_all(benchmark, wire_coll):
     """Measure full find materializing all 200 docs through the dispatch path."""
+
     def go():
         return list(wire_coll.find({}))
+
     benchmark(go)
 
 
 @pytest.mark.performance
 def test_dispatch_count(benchmark, wire_coll):
     """Measure count command dispatch."""
+
     def go():
         return wire_coll.count_documents({"tag": "t2"})
+
     benchmark(go)
 
 
 @pytest.mark.performance
 def test_dispatch_findandmodify(benchmark, wire_coll):
     """Measure findAndModify dispatch (update one doc)."""
+
     def go():
         wire_coll.find_one_and_update({"x": 42}, {"$inc": {"x": 0}})
+
     benchmark(go)
 
 
 # -- P8: raw BSON encode/decode microbenchmarks --------------------------------
+
 
 @pytest.fixture
 def sample_doc():
@@ -113,6 +130,8 @@ def test_raw_bson_decode(benchmark, sample_bson):
 @pytest.mark.performance
 def test_raw_bson_roundtrip(benchmark, sample_doc):
     """Measure full encode+decode round-trip."""
+
     def go():
         return from_bson(to_bson(sample_doc))
+
     benchmark(go)

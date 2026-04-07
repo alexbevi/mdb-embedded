@@ -21,7 +21,10 @@ fn resolve_user_store(
 ) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
     let ctx_ref = ctx.borrow();
     let cached = ctx_ref.cached_imports()?;
-    Ok((cached.user_store.clone_ref(py), cached.user_store_lock.clone_ref(py)))
+    Ok((
+        cached.user_store.clone_ref(py),
+        cached.user_store_lock.clone_ref(py),
+    ))
 }
 
 fn cmd_get_log(
@@ -105,7 +108,9 @@ fn cmd_list_databases(
 
     {
         let lc = ctx.borrow().local_client.clone_ref(py);
-        let lc_ref = lc.bind(py).cast::<crate::storage_engine::RustLocalClient>()?;
+        let lc_ref = lc
+            .bind(py)
+            .cast::<crate::storage_engine::RustLocalClient>()?;
         let result: PyResult<()> = (|| {
             let mut session = lc_ref.borrow().open_session_typed()?;
             let mut cursor = session.open_cursor_typed("metadata:", None)?;
@@ -208,7 +213,7 @@ fn cmd_list_collections(
     let result = PyList::empty(py);
     for name in &coll_names {
         let entry = PyDict::new(py);
-        entry.set_item("name", &name)?;
+        entry.set_item("name", name)?;
         entry.set_item("type", "collection")?;
 
         if !name_only {
@@ -263,7 +268,9 @@ fn cmd_list_collections(
     let cr = ctx.borrow().cursor_registry.clone_ref(py);
     let cr_reg = cr.bind(py).cast::<CursorRegistry>()?;
     let (cursor_id, first_batch) =
-        cr_reg.borrow().create(py, &ns, &result, Some(batch_size as usize))?;
+        cr_reg
+            .borrow()
+            .create(py, &ns, &result, Some(batch_size as usize))?;
 
     let cursor_dict = PyDict::new(py);
     cursor_dict.set_item("id", bson_int64(py, cursor_id)?)?;
@@ -524,12 +531,20 @@ fn cmd_compact(
     let coll_py = get_collection_typed(ctx, &db_name, &coll_name)?;
     let before: i64 = {
         let stats = coll_py.bind(py).borrow().storage_stats(py)?;
-        stats.bind(py).get_item("storageSize")?.map(|v| v.extract().unwrap_or(0)).unwrap_or(0)
+        stats
+            .bind(py)
+            .get_item("storageSize")?
+            .map(|v| v.extract().unwrap_or(0))
+            .unwrap_or(0)
     };
     coll_py.bind(py).as_any().call_method0("compact")?;
     let after: i64 = {
         let stats = coll_py.bind(py).borrow().storage_stats(py)?;
-        stats.bind(py).get_item("storageSize")?.map(|v| v.extract().unwrap_or(0)).unwrap_or(0)
+        stats
+            .bind(py)
+            .get_item("storageSize")?
+            .map(|v| v.extract().unwrap_or(0))
+            .unwrap_or(0)
     };
     let freed = (before - after).max(0);
     let resp = PyDict::new(py);
@@ -552,8 +567,14 @@ fn cmd_coll_stats(
     let coll_py = get_collection_typed(ctx, &db_name, &coll_name)?;
     let stats = coll_py.bind(py).borrow().storage_stats(py)?;
     let stats = stats.bind(py);
-    let count: i64 = stats.get_item("count")?.map(|v| v.extract().unwrap_or(0)).unwrap_or(0);
-    let data_size: i64 = stats.get_item("dataSize")?.map(|v| v.extract().unwrap_or(0)).unwrap_or(0);
+    let count: i64 = stats
+        .get_item("count")?
+        .map(|v| v.extract().unwrap_or(0))
+        .unwrap_or(0);
+    let data_size: i64 = stats
+        .get_item("dataSize")?
+        .map(|v| v.extract().unwrap_or(0))
+        .unwrap_or(0);
     let resp = PyDict::new(py);
     resp.set_item("ns", format!("{db_name}.{coll_name}"))?;
     resp.set_item("count", count)?;
@@ -686,8 +707,8 @@ fn cmd_server_status(
     let si = crate::cached_modules::system_info(py)?;
     let resource_mod = crate::cached_modules::resource_mod(py)?;
     let utc = crate::cached_modules::datetime_tz_utc(py)?;
-    let local_time = crate::cached_modules::datetime_datetime_cls(py)?
-        .call_method1("now", (&utc,))?;
+    let local_time =
+        crate::cached_modules::datetime_datetime_cls(py)?.call_method1("now", (&utc,))?;
 
     let rss_mb: f64 = (|| -> PyResult<f64> {
         let rusage =
@@ -703,7 +724,9 @@ fn cmd_server_status(
 
     let wt_stats: Bound<'_, PyDict> = (|| -> PyResult<Bound<'_, PyDict>> {
         let lc = ctx.borrow().local_client.clone_ref(py);
-        let lc_ref = lc.bind(py).cast::<crate::storage_engine::RustLocalClient>()?;
+        let lc_ref = lc
+            .bind(py)
+            .cast::<crate::storage_engine::RustLocalClient>()?;
         lc_ref.borrow().connection_stats(py)
     })()
     .unwrap_or_else(|_| PyDict::new(py));
@@ -777,7 +800,9 @@ fn cmd_fsync(
 
     let checkpoint_result: PyResult<()> = (|| {
         let lc = ctx.borrow().local_client.clone_ref(py);
-        let lc_ref = lc.bind(py).cast::<crate::storage_engine::RustLocalClient>()?;
+        let lc_ref = lc
+            .bind(py)
+            .cast::<crate::storage_engine::RustLocalClient>()?;
         let mut session = lc_ref.borrow().open_session_typed()?;
         session.checkpoint_typed(None)?;
         session.close_typed()?;
@@ -792,7 +817,9 @@ fn cmd_fsync(
     let mut tables_flushed: i64 = 0;
     let _: PyResult<()> = (|| {
         let lc = ctx.borrow().local_client.clone_ref(py);
-        let lc_ref = lc.bind(py).cast::<crate::storage_engine::RustLocalClient>()?;
+        let lc_ref = lc
+            .bind(py)
+            .cast::<crate::storage_engine::RustLocalClient>()?;
         let mut session = lc_ref.borrow().open_session_typed()?;
         let mut cursor = session.open_cursor_typed("metadata:", None)?;
         loop {
@@ -1086,7 +1113,10 @@ fn cmd_list_commands(
     let (help_dict, handlers) = {
         let ctx_ref = ctx.borrow();
         let cached = ctx_ref.cached_imports()?;
-        (cached.help_dict.clone_ref(py), cached.handlers.clone_ref(py))
+        (
+            cached.help_dict.clone_ref(py),
+            cached.handlers.clone_ref(py),
+        )
     };
     let help_dict = help_dict.into_bound(py);
     let handlers = handlers.into_bound(py);
@@ -1378,7 +1408,9 @@ fn persist_user_to_wt(
     user_doc: &Bound<'_, PyAny>,
 ) -> PyResult<()> {
     let lc = ctx.borrow().local_client.clone_ref(py);
-    let lc_ref = lc.bind(py).cast::<crate::storage_engine::RustLocalClient>()?;
+    let lc_ref = lc
+        .bind(py)
+        .cast::<crate::storage_engine::RustLocalClient>()?;
     let mut session = lc_ref.borrow().open_session_typed()?;
     let _ = session.create_typed("table:__users", "key_format=S,value_format=S");
     let json_util = crate::cached_modules::bson_json_util(py)?;
@@ -1396,7 +1428,9 @@ fn delete_user_from_wt(
     key: &str,
 ) -> PyResult<()> {
     let lc = ctx.borrow().local_client.clone_ref(py);
-    let lc_ref = lc.bind(py).cast::<crate::storage_engine::RustLocalClient>()?;
+    let lc_ref = lc
+        .bind(py)
+        .cast::<crate::storage_engine::RustLocalClient>()?;
     let mut session = lc_ref.borrow().open_session_typed()?;
     let _ = session.create_typed("table:__users", "key_format=S,value_format=S");
     let mut cursor = session.open_cursor_typed("table:__users", None)?;
@@ -1498,14 +1532,19 @@ fn cmd_grant_roles_to_user(
     let user = dict_get_str(cmd, "grantRolesToUser", "")?;
     let key = format!("{db_name}.{user}");
 
-    let new_roles = cmd.get_item("roles")?
+    let new_roles = cmd
+        .get_item("roles")?
         .ok_or_else(|| PyRuntimeError::new_err("grantRolesToUser requires 'roles' array"))?;
 
     let _guard = lock.call_method1("__enter__", ())?;
     let result = (|| -> PyResult<Py<PyAny>> {
         let existing = store.call_method1("get", (&key,))?;
         if existing.is_none() {
-            let r = make_error(py, "UserNotFound", &format!("User \"{user}@{db_name}\" not found"))?;
+            let r = make_error(
+                py,
+                "UserNotFound",
+                &format!("User \"{user}@{db_name}\" not found"),
+            )?;
             return Ok(r.into_any().unbind());
         }
         let entry = store.get_item(&key)?;
@@ -1541,14 +1580,19 @@ fn cmd_revoke_roles_from_user(
     let user = dict_get_str(cmd, "revokeRolesFromUser", "")?;
     let key = format!("{db_name}.{user}");
 
-    let revoke_roles = cmd.get_item("roles")?
+    let revoke_roles = cmd
+        .get_item("roles")?
         .ok_or_else(|| PyRuntimeError::new_err("revokeRolesFromUser requires 'roles' array"))?;
 
     let _guard = lock.call_method1("__enter__", ())?;
     let result = (|| -> PyResult<Py<PyAny>> {
         let existing = store.call_method1("get", (&key,))?;
         if existing.is_none() {
-            let r = make_error(py, "UserNotFound", &format!("User \"{user}@{db_name}\" not found"))?;
+            let r = make_error(
+                py,
+                "UserNotFound",
+                &format!("User \"{user}@{db_name}\" not found"),
+            )?;
             return Ok(r.into_any().unbind());
         }
         let entry = store.get_item(&key)?;

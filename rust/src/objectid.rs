@@ -212,22 +212,14 @@ impl ObjectId {
                 CompareOp::Gt => self.raw > other_oid.raw,
                 CompareOp::Ge => self.raw >= other_oid.raw,
             };
-            return Ok(result
-                .into_pyobject(py)?
-                .to_owned()
-                .into_any()
-                .unbind());
+            return Ok(result.into_pyobject(py)?.to_owned().into_any().unbind());
         }
 
         if matches!(op, CompareOp::Eq | CompareOp::Ne) {
             if let Ok(s) = other.extract::<&str>() {
                 let eq = self.hex() == s;
                 let result = if matches!(op, CompareOp::Eq) { eq } else { !eq };
-                return Ok(result
-                    .into_pyobject(py)?
-                    .to_owned()
-                    .into_any()
-                    .unbind());
+                return Ok(result.into_pyobject(py)?.to_owned().into_any().unbind());
             }
         }
 
@@ -317,6 +309,9 @@ mod tests {
         // The OID's counter must be strictly ahead of the snapshot we took
         // (it was fetched-and-incremented after our load).
         let delta = in_oid.wrapping_sub(before) & 0x00FF_FFFF;
-        assert!(delta >= 1 && delta <= 64, "counter delta {delta} out of expected range");
+        assert!(
+            delta >= 1 && delta <= 64,
+            "counter delta {delta} out of expected range"
+        );
     }
 }

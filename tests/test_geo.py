@@ -24,7 +24,6 @@ from smongo.aggregation.geo import (
     geo_near_stage,
 )
 
-
 # ── Test data ────────────────────────────────────────────────────────
 
 NYC = {"type": "Point", "coordinates": [-73.9857, 40.7484]}
@@ -101,10 +100,13 @@ class TestExtractCoords:
 
 class TestGeoNearStage:
     def test_basic_nearest_sort(self, places):
-        result = geo_near_stage(places, {
-            "near": NYC,
-            "distanceField": "dist",
-        })
+        result = geo_near_stage(
+            places,
+            {
+                "near": NYC,
+                "distanceField": "dist",
+            },
+        )
         assert len(result) == 5
         assert result[0]["name"] == "Times Square"
         assert result[0]["dist"] == pytest.approx(0.0, abs=1.0)
@@ -112,19 +114,25 @@ class TestGeoNearStage:
         assert names[0] == "Times Square"
 
     def test_sorted_nearest_first(self, places):
-        result = geo_near_stage(places, {
-            "near": NYC,
-            "distanceField": "dist",
-        })
+        result = geo_near_stage(
+            places,
+            {
+                "near": NYC,
+                "distanceField": "dist",
+            },
+        )
         distances = [d["dist"] for d in result]
         assert distances == sorted(distances)
 
     def test_max_distance_filter(self, places):
-        result = geo_near_stage(places, {
-            "near": NYC,
-            "distanceField": "dist",
-            "maxDistance": 1_500_000,
-        })
+        result = geo_near_stage(
+            places,
+            {
+                "near": NYC,
+                "distanceField": "dist",
+                "maxDistance": 1_500_000,
+            },
+        )
         for doc in result:
             assert doc["dist"] <= 1_500_000
         names = {d["name"] for d in result}
@@ -132,52 +140,70 @@ class TestGeoNearStage:
         assert "Big Ben" not in names
 
     def test_min_distance_filter(self, places):
-        result = geo_near_stage(places, {
-            "near": NYC,
-            "distanceField": "dist",
-            "minDistance": 1_000_000,
-        })
+        result = geo_near_stage(
+            places,
+            {
+                "near": NYC,
+                "distanceField": "dist",
+                "minDistance": 1_000_000,
+            },
+        )
         for doc in result:
             assert doc["dist"] >= 1_000_000
         names = {d["name"] for d in result}
         assert "Times Square" not in names
 
     def test_limit(self, places):
-        result = geo_near_stage(places, {
-            "near": NYC,
-            "distanceField": "dist",
-            "limit": 2,
-        })
+        result = geo_near_stage(
+            places,
+            {
+                "near": NYC,
+                "distanceField": "dist",
+                "limit": 2,
+            },
+        )
         assert len(result) == 2
 
     def test_distance_multiplier(self, places):
-        base = geo_near_stage(places, {
-            "near": NYC,
-            "distanceField": "dist",
-        })
-        scaled = geo_near_stage(places, {
-            "near": NYC,
-            "distanceField": "dist",
-            "distanceMultiplier": 0.001,
-        })
+        base = geo_near_stage(
+            places,
+            {
+                "near": NYC,
+                "distanceField": "dist",
+            },
+        )
+        scaled = geo_near_stage(
+            places,
+            {
+                "near": NYC,
+                "distanceField": "dist",
+                "distanceMultiplier": 0.001,
+            },
+        )
         for b, s in zip(base, scaled):
             assert s["dist"] == pytest.approx(b["dist"] * 0.001, rel=1e-9)
 
     def test_query_filter(self, places):
-        result = geo_near_stage(places, {
-            "near": NYC,
-            "distanceField": "dist",
-            "query": {"city": "SF"},
-        })
+        result = geo_near_stage(
+            places,
+            {
+                "near": NYC,
+                "distanceField": "dist",
+                "query": {"city": "SF"},
+            },
+        )
         assert len(result) == 1
         assert result[0]["name"] == "Golden Gate"
 
     def test_include_locs(self, places):
-        result = geo_near_stage(places, {
-            "near": NYC,
-            "distanceField": "dist",
-            "includeLocs": "matchedLocation",
-        })
+        result = geo_near_stage(
+            places,
+            {
+                "near": NYC,
+                "distanceField": "dist",
+                "includeLocs": "matchedLocation",
+            },
+        )
         assert result[0]["matchedLocation"] == NYC
 
     def test_custom_key(self):
@@ -185,11 +211,14 @@ class TestGeoNearStage:
             {"_id": "1", "name": "A", "geo": {"coords": NYC}},
             {"_id": "2", "name": "B", "geo": {"coords": SF}},
         ]
-        result = geo_near_stage(docs, {
-            "near": NYC,
-            "distanceField": "dist",
-            "key": "geo.coords",
-        })
+        result = geo_near_stage(
+            docs,
+            {
+                "near": NYC,
+                "distanceField": "dist",
+                "key": "geo.coords",
+            },
+        )
         assert len(result) == 2
         assert result[0]["name"] == "A"
 
@@ -198,38 +227,50 @@ class TestGeoNearStage:
             {"_id": "1", "name": "A", "location": [-73.9857, 40.7484]},
             {"_id": "2", "name": "B", "location": [-122.4194, 37.7749]},
         ]
-        result = geo_near_stage(docs, {
-            "near": [-73.9857, 40.7484],
-            "distanceField": "dist",
-        })
+        result = geo_near_stage(
+            docs,
+            {
+                "near": [-73.9857, 40.7484],
+                "distanceField": "dist",
+            },
+        )
         assert result[0]["name"] == "A"
         assert result[0]["dist"] == pytest.approx(0.0, abs=1.0)
 
     def test_skips_docs_without_location(self, places):
         places.append({"_id": "6", "name": "No Location", "city": "?"})
-        result = geo_near_stage(places, {
-            "near": NYC,
-            "distanceField": "dist",
-        })
+        result = geo_near_stage(
+            places,
+            {
+                "near": NYC,
+                "distanceField": "dist",
+            },
+        )
         names = {d["name"] for d in result}
         assert "No Location" not in names
         assert len(result) == 5
 
     def test_does_not_mutate_input(self, places):
         originals = [dict(d) for d in places]
-        geo_near_stage(places, {
-            "near": NYC,
-            "distanceField": "dist",
-        })
+        geo_near_stage(
+            places,
+            {
+                "near": NYC,
+                "distanceField": "dist",
+            },
+        )
         for orig, doc in zip(originals, places):
             assert "dist" not in doc
             assert doc["name"] == orig["name"]
 
     def test_empty_input(self):
-        result = geo_near_stage([], {
-            "near": NYC,
-            "distanceField": "dist",
-        })
+        result = geo_near_stage(
+            [],
+            {
+                "near": NYC,
+                "distanceField": "dist",
+            },
+        )
         assert result == []
 
     def test_missing_near_raises(self, places):
@@ -242,18 +283,24 @@ class TestGeoNearStage:
 
     def test_invalid_near_raises(self, places):
         with pytest.raises(ValueError, match="GeoJSON Point"):
-            geo_near_stage(places, {
-                "near": "not a point",
-                "distanceField": "dist",
-            })
+            geo_near_stage(
+                places,
+                {
+                    "near": "not a point",
+                    "distanceField": "dist",
+                },
+            )
 
     def test_spherical_false_raises(self, places):
         with pytest.raises(NotImplementedError, match="spherical=false"):
-            geo_near_stage(places, {
-                "near": NYC,
-                "distanceField": "dist",
-                "spherical": False,
-            })
+            geo_near_stage(
+                places,
+                {
+                    "near": NYC,
+                    "distanceField": "dist",
+                    "spherical": False,
+                },
+            )
 
 
 # ── Stub error tests ─────────────────────────────────────────────────

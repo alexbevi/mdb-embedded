@@ -14,9 +14,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyString};
 
 use wiredtiger_sys::{
-    WT_CURSOR, WT_ITEM, WT_NOTFOUND,
-    wt_shim_get_key_str, wt_shim_get_value_raw, wt_shim_get_value_str,
-    wt_shim_set_key_str, wt_shim_set_value_raw, wt_shim_set_value_str,
+    wt_shim_get_key_str, wt_shim_get_value_raw, wt_shim_get_value_str, wt_shim_set_key_str,
+    wt_shim_set_value_raw, wt_shim_set_value_str, WT_CURSOR, WT_ITEM, WT_NOTFOUND,
 };
 
 use crate::wt_safe::{WtError, WtResult, WtSession};
@@ -55,7 +54,8 @@ pub(crate) fn borrow_wt_session(
     context: &str,
 ) -> PyResult<std::mem::ManuallyDrop<WtSession>> {
     let effective = TXN_SESSION_OVERRIDE.with(|c| c.get()).or(raw);
-    let raw = effective.ok_or_else(|| PyRuntimeError::new_err(format!("{context} session is closed")))?;
+    let raw =
+        effective.ok_or_else(|| PyRuntimeError::new_err(format!("{context} session is closed")))?;
     // SAFETY: raw was set during construction from a valid WT_SESSION and is
     // cleared to None on close().  ManuallyDrop prevents Drop from closing
     // the session we don't own.
@@ -90,7 +90,9 @@ unsafe impl Sync for RustWtSession {}
 impl RustWtSession {
     /// Construct from an already-opened safe session (Rust-side only).
     pub fn from_safe(session: WtSession) -> Self {
-        Self { inner: Some(session) }
+        Self {
+            inner: Some(session),
+        }
     }
 
     /// Borrow the inner safe session (Rust-side only).
@@ -574,14 +576,14 @@ impl RustWtCursor {
         // set_value: dispatch on Python type
         if let Ok(s) = value.extract::<String>() {
             // str → null-terminated CString via set_value_str (value_format=S)
-            let c_val = CString::new(s)
-                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            let c_val = CString::new(s).map_err(|e| PyValueError::new_err(e.to_string()))?;
             let fn_ptr = unsafe { (*self.raw).set_value };
             unsafe { wt_shim_set_value_str(fn_ptr, self.raw, c_val.as_ptr()) };
             self._val_buf = Some(c_val);
         } else {
             // bytes → raw WT_ITEM (value_format=u)
-            let bytes: &[u8] = value.extract()
+            let bytes: &[u8] = value
+                .extract()
                 .map_err(|_| PyTypeError::new_err("value must be str or bytes"))?;
             let item = WT_ITEM {
                 data: bytes.as_ptr() as *const c_void,

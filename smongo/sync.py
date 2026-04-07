@@ -16,7 +16,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 try:
     from pymongo import DeleteOne, InsertOne, UpdateOne
@@ -38,6 +38,10 @@ try:
 except ImportError:
     BsonObjectId = None  # type: ignore[misc, assignment]
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from smongo._smongo_core import ejson_default as _ejson_default
+from smongo._smongo_core import ejson_object_hook as _ejson_object_hook
 from smongo._smongo_core import from_pymongo as _from_pymongo
 from smongo._smongo_core import to_pymongo as _to_pymongo
 
@@ -168,24 +172,67 @@ DEFAULT_TOMBSTONE_TTL_SEC = 7 * 24 * 3600  # 7 days
 
 
 class TombstoneRegistry:
-    """Track deleted document IDs with timestamps for tombstone expiry."""
+    """Track deleted document IDs with timestamps for tombstone expiry.
 
-    def __init__(self, ttl_sec: int = DEFAULT_TOMBSTONE_TTL_SEC) -> None:
-        self._tombstones: dict[str, float] = {}
+    When *session* and *uri* are provided, tombstones are persisted in a
+    WiredTiger table and survive process restarts.  Otherwise falls back to
+    an in-memory dict (useful for unit tests without a WT connection).
+    """
+
+    def __init__(
+        self,
+        ttl_sec: int = DEFAULT_TOMBSTONE_TTL_SEC,
+        session: Any = None,
+        uri: str | None = None,
+    ) -> None:
         self._ttl = ttl_sec
         self._lock = threading.Lock()
+        self._session = session
+        self._uri = uri
+        self._persistent = session is not None and uri is not None
+        if not self._persistent:
+            self._tombstones: dict[str, float] = {}
 
     def mark_deleted(self, doc_id: Any) -> None:
+        key = str(doc_id)
         with self._lock:
-            self._tombstones[str(doc_id)] = time.time()
+            if self._persistent:
+                cursor = self._session.open_cursor(self._uri, None, "overwrite=true")
+                cursor[key] = str(time.time())
+                cursor.close()
+            else:
+                self._tombstones[key] = time.time()
 
     def is_tombstoned(self, doc_id: Any) -> bool:
+        key = str(doc_id)
         with self._lock:
-            return str(doc_id) in self._tombstones
+            if self._persistent:
+                cursor = self._session.open_cursor(self._uri, None, None)
+                cursor.set_key(key)
+                found = bool(cursor.search() == 0)
+                cursor.close()
+                return found
+            return key in self._tombstones
 
     def expire(self) -> int:
         now = time.time()
         with self._lock:
+            if self._persistent:
+                cursor = self._session.open_cursor(self._uri, None, None)
+                to_remove: list[str] = []
+                while cursor.next() == 0:
+                    k: str = cursor.get_key()
+                    ts = float(cursor.get_value())
+                    if now - ts > self._ttl:
+                        to_remove.append(k)
+                cursor.close()
+                if to_remove:
+                    cursor = self._session.open_cursor(self._uri, None, "overwrite=true")
+                    for k in to_remove:
+                        cursor.set_key(k)
+                        cursor.remove()
+                    cursor.close()
+                return len(to_remove)
             expired = [k for k, ts in self._tombstones.items() if now - ts > self._ttl]
             for k in expired:
                 del self._tombstones[k]
@@ -193,11 +240,24 @@ class TombstoneRegistry:
 
     def to_dict(self) -> dict[str, float]:
         with self._lock:
+            if self._persistent:
+                result: dict[str, float] = {}
+                cursor = self._session.open_cursor(self._uri, None, None)
+                while cursor.next() == 0:
+                    result[cursor.get_key()] = float(cursor.get_value())
+                cursor.close()
+                return result
             return dict(self._tombstones)
 
     def load(self, data: dict[str, float]) -> None:
         with self._lock:
-            self._tombstones.update(data)
+            if self._persistent:
+                cursor = self._session.open_cursor(self._uri, None, "overwrite=true")
+                for k, v in data.items():
+                    cursor[k] = str(v)
+                cursor.close()
+            else:
+                self._tombstones.update(data)
 
 
 # ------------------------------------------------------------------
@@ -311,7 +371,7 @@ def _resolve_variables(query: dict[str, Any], context: dict[str, Any]) -> dict[s
                 return context[var_name]
         return obj
 
-    return _walk(copy.deepcopy(query))
+    return cast(dict[str, Any], _walk(copy.deepcopy(query)))
 
 
 # ------------------------------------------------------------------
@@ -345,6 +405,7 @@ class SyncManager:
         "crdt_fields": {},  # {"field": "counter" | "set"}
         "sync_rules": None,  # Per-document sync rules: MQL filter dict
         "variables": {},  # User-defined $$VAR substitutions for sync rules
+        "push_concurrency": 4,
     }
 
     def __init__(
@@ -385,16 +446,24 @@ class SyncManager:
         self._error_count = 0
         self._consecutive_errors = 0
         self._state = "offline"
+        self._last_cycle_pushed = 0
+        self._last_cycle_pulled = 0
 
         wt_conn = local_client.client.conn
         self._ck_session: Any = wt_conn.open_session()
+        self._ck_lock = threading.Lock()
         self._ck_uri = "table:__sync_checkpoint"
         self._ck_session.create(self._ck_uri, "key_format=S,value_format=S")
+
+        self._ts_uri = "table:__tombstones"
+        self._ck_session.create(self._ts_uri, "key_format=S,value_format=S")
 
         self._tracked: dict[str, tuple[Any, Any, Predicate | None]] = {}
         self._local_field_history: dict[tuple[str, Any], set[str]] = {}
         self._tombstones = TombstoneRegistry(
-            ttl_sec=int(cfg.get("tombstone_ttl_sec", DEFAULT_TOMBSTONE_TTL_SEC))
+            ttl_sec=int(cfg.get("tombstone_ttl_sec", DEFAULT_TOMBSTONE_TTL_SEC)),
+            session=self._ck_session,
+            uri=self._ts_uri,
         )
         self._vector_clocks: dict[str, VectorClock] = {}
         self._node_id: str = cfg.get("node_id", "local")
@@ -404,6 +473,10 @@ class SyncManager:
         self._user_variables: dict[str, Any] = cfg.get("variables", {})
         self._active_sync_filter: Predicate | None = None
         self._recompile_sync_filter()
+
+        self._ns_stats: dict[str, dict[str, Any]] = {}
+        self._last_cycle_start: float = 0.0
+        self._last_cycle_duration: float = 0.0
 
         self._raw_collection_filters: dict[str, dict[str, Any]] = {}
         if isinstance(cfg.get("collections"), dict):
@@ -465,6 +538,10 @@ class SyncManager:
 
     def status(self) -> dict[str, Any]:
         with self._lock:
+            cycle_ops = self._last_cycle_pushed + self._last_cycle_pulled
+            ops_per_sec = (
+                cycle_ops / self._last_cycle_duration if self._last_cycle_duration > 0 else 0.0
+            )
             return {
                 "running": self._thread is not None and self._thread.is_alive(),
                 "pending": self._pending_count,
@@ -476,6 +553,9 @@ class SyncManager:
                 "pulled": self._pulled_count,
                 "conflicts": self._conflict_count,
                 "errors": self._error_count,
+                "collections": dict(self._ns_stats),
+                "throughput_ops_sec": round(ops_per_sec, 2),
+                "last_cycle_duration_sec": round(self._last_cycle_duration, 4),
             }
 
     # -- sync rule variable resolution ---------------------------------
@@ -558,6 +638,11 @@ class SyncManager:
     def _sync_cycle(self) -> None:
         self._recompile_sync_filter()
         self._recompile_collection_filters()
+        self._last_cycle_start = time.time()
+
+        with self._lock:
+            pushed_before = self._pushed_count
+            pulled_before = self._pulled_count
 
         mode: str = self._config["mode"]
 
@@ -569,170 +654,270 @@ class SyncManager:
 
         with self._lock:
             self._last_sync_ts = time.time()
+            self._last_cycle_pushed = self._pushed_count - pushed_before
+            self._last_cycle_pulled = self._pulled_count - pulled_before
+        self._last_cycle_duration = time.time() - self._last_cycle_start
 
     # -- push (local -> Atlas) -----------------------------------------
 
     def _push(self) -> None:
         batch_size: int = self._config["batch_size"]
+        concurrency = int(self._config.get("push_concurrency", 4))
 
-        for ns, (local_coll, remote_coll, ns_filter) in self._tracked.items():
-            checkpoint = self._get_checkpoint(f"push:{ns}")
-            reader = local_coll.get_oplog_reader()
-            entries = reader.read_from(checkpoint, skip_internal=True)
+        namespaces = list(self._tracked.items())
+        if not namespaces:
+            return
 
-            if not entries:
-                continue
-
-            ops: list[Any] = []
-            last_key: str | None = None
-            safe_key: str | None = None
-            batch_start_key: str | None = None
-
-            for key, entry in entries:
-                op = entry["op"]
-                doc_id = entry["doc_id"]
-                payload = entry["payload"]
-                changed_fields = entry.get("changed_fields") or []
-
-                has_filter = ns_filter or self._active_sync_filter
-                if has_filter and payload and op in ("insert", "update", "delete"):
-                    filter_doc = payload
-                    if op == "update":
-                        try:
-                            filter_doc = local_coll.get_by_id(doc_id) or payload
-                        except (KeyError, TypeError, RuntimeError):
-                            filter_doc = payload
-                    if ns_filter:
-                        try:
-                            if not ns_filter(filter_doc):
-                                last_key = key
-                                if not ops:
-                                    safe_key = key
-                                continue
-                        except (KeyError, TypeError):
-                            pass
-                    if not self._doc_passes_sync_filter(filter_doc):
-                        last_key = key
-                        if not ops:
-                            safe_key = key
-                        continue
-
-                if op == "insert":
-                    doc = _to_pymongo(dict(payload))
-                    doc["_lastModified"] = entry["ts"]
-                    ops.append(InsertOne(doc))
-                elif op == "update":
-                    update_spec = _to_pymongo(dict(payload))
-                    if "$set" not in update_spec:
-                        update_spec["$set"] = {}
-                    update_spec["$set"]["_lastModified"] = entry["ts"]
-                    ops.append(UpdateOne({"_id": _to_pymongo(doc_id)}, update_spec, upsert=True))
-                    self._local_field_history[(ns, str(doc_id))] = set(changed_fields)
-                elif op == "delete":
-                    ops.append(DeleteOne({"_id": _to_pymongo(doc_id)}))
-                elif op == "index_create":
+        if concurrency <= 1 or len(namespaces) <= 1:
+            for ns, (local_coll, remote_coll, ns_filter) in namespaces:
+                self._push_namespace(ns, local_coll, remote_coll, ns_filter, batch_size)
+        else:
+            with ThreadPoolExecutor(max_workers=min(concurrency, len(namespaces))) as pool:
+                futures = {
+                    pool.submit(self._push_namespace, ns, lc, rc, nf, batch_size): ns
+                    for ns, (lc, rc, nf) in namespaces
+                }
+                for fut in as_completed(futures):
+                    ns_name = futures[fut]
                     try:
-                        idx_keys = payload.get("keys", [])
-                        idx_kwargs = {k: v for k, v in payload.items() if k != "keys"}
-                        remote_coll.create_index(idx_keys, **idx_kwargs)
-                    except PyMongoError as exc:
-                        log.warning("Failed to sync index create %s: %s", doc_id, exc)
-                elif op == "index_drop":
-                    try:
-                        remote_coll.drop_index(doc_id)
-                    except PyMongoError as exc:
-                        log.warning("Failed to sync index drop %s: %s", doc_id, exc)
-
-                last_key = key
-                if batch_start_key is None and ops:
-                    batch_start_key = key
-
-                if len(ops) >= batch_size:
-                    if self._flush_bulk(remote_coll, ops):
-                        safe_key = key
+                        fut.result()
+                    except Exception as exc:
+                        log.warning("Push failed for namespace %s: %s", ns_name, exc)
                         with self._lock:
-                            self._pushed_count += len(ops)
-                    else:
-                        log.warning("Batch failed for %s; entries retained in oplog for retry", ns)
-                    ops = []
-                    batch_start_key = None
+                            self._error_count += 1
 
-            if ops:
-                if self._flush_bulk(remote_coll, ops):
-                    safe_key = last_key
-                    with self._lock:
-                        self._pushed_count += len(ops)
-                else:
-                    log.warning(
-                        "Final batch failed for %s; entries retained in oplog for retry", ns
-                    )
+        with self._lock:
+            self._pending_count = 0
 
-            if last_key:
-                self._set_checkpoint(f"push:{ns}", last_key)
+    def _push_namespace(
+        self,
+        ns: str,
+        local_coll: Any,
+        remote_coll: Any,
+        ns_filter: Predicate | None,
+        batch_size: int,
+    ) -> None:
+        """Push pending oplog entries for a single namespace to the remote."""
+        checkpoint = self._get_checkpoint(f"push:{ns}")
+        reader = local_coll.get_oplog_reader()
+        entries = reader.read_from(checkpoint, skip_internal=True)
 
-            if safe_key and self._config.get("oplog_auto_compact", True):
+        if not entries:
+            return
+
+        ops: list[Any] = []
+        last_key: str | None = None
+        safe_key: str | None = None
+        batch_start_key: str | None = None
+        ns_pushed = 0
+
+        for key, entry in entries:
+            op = entry["op"]
+            doc_id = entry["doc_id"]
+            payload = entry["payload"]
+            changed_fields = entry.get("changed_fields") or []
+
+            has_filter = ns_filter or self._active_sync_filter
+            if has_filter and payload and op in ("insert", "update", "delete"):
+                filter_doc = payload
+                if op == "update":
+                    try:
+                        filter_doc = local_coll.get_by_id(doc_id) or payload
+                    except (KeyError, TypeError, RuntimeError):
+                        filter_doc = payload
+                if ns_filter:
+                    try:
+                        if not ns_filter(filter_doc):
+                            last_key = key
+                            if not ops:
+                                safe_key = key
+                            continue
+                    except (KeyError, TypeError):
+                        pass
+                if not self._doc_passes_sync_filter(filter_doc):
+                    last_key = key
+                    if not ops:
+                        safe_key = key
+                    continue
+
+            if op == "insert":
+                doc = _to_pymongo(dict(payload))
+                doc["_lastModified"] = entry["ts"]
+                ops.append(InsertOne(doc))
+            elif op == "update":
+                update_spec = _to_pymongo(dict(payload))
+                if "$set" not in update_spec:
+                    update_spec["$set"] = {}
+                update_spec["$set"]["_lastModified"] = entry["ts"]
+                ops.append(UpdateOne({"_id": _to_pymongo(doc_id)}, update_spec, upsert=True))
+                self._local_field_history[(ns, str(doc_id))] = set(changed_fields)
+            elif op == "delete":
+                ops.append(DeleteOne({"_id": _to_pymongo(doc_id)}))
+            elif op == "index_create":
                 try:
-                    local_coll._oplog_w.truncate_before(safe_key)
-                except (RuntimeError, OSError, KeyError, ValueError) as exc:
-                    log.debug("Oplog auto-compact failed for %s: %s", ns, exc)
+                    idx_keys = payload.get("keys", [])
+                    idx_kwargs = {k: v for k, v in payload.items() if k != "keys"}
+                    remote_coll.create_index(idx_keys, **idx_kwargs)
+                except PyMongoError as exc:
+                    log.warning("Failed to sync index create %s: %s", doc_id, exc)
+            elif op == "index_drop":
+                try:
+                    remote_coll.drop_index(doc_id)
+                except PyMongoError as exc:
+                    log.warning("Failed to sync index drop %s: %s", doc_id, exc)
 
-            with self._lock:
-                self._pending_count = 0
+            last_key = key
+            if batch_start_key is None and ops:
+                batch_start_key = key
 
-    def _flush_bulk(self, remote_coll: Any, ops: list[Any]) -> bool:
-        """Flush a batch of operations to remote. Returns True on full success."""
+            if len(ops) >= batch_size:
+                n_ok = self._flush_bulk(remote_coll, ops)
+                if n_ok > 0:
+                    safe_key = key
+                    with self._lock:
+                        self._pushed_count += n_ok
+                    ns_pushed += n_ok
+                if n_ok < len(ops):
+                    log.warning("Batch failed for %s; entries retained in oplog for retry", ns)
+                ops = []
+                batch_start_key = None
+
+        if ops:
+            n_ok = self._flush_bulk(remote_coll, ops)
+            if n_ok > 0:
+                safe_key = last_key
+                with self._lock:
+                    self._pushed_count += n_ok
+                ns_pushed += n_ok
+            if n_ok < len(ops):
+                log.warning("Final batch failed for %s; entries retained in oplog for retry", ns)
+
+        if safe_key:
+            if self._config.get("oplog_auto_compact", True):
+                self._atomic_checkpoint_and_compact(ns, safe_key, local_coll._oplog_w.oplog_uri)
+            else:
+                self._set_checkpoint(f"push:{ns}", safe_key)
+
+        stats = self._ensure_ns_stats(ns)
+        stats["last_push_ts"] = time.time()
+        stats["last_push_count"] = ns_pushed
+
+    def _atomic_checkpoint_and_compact(self, ns: str, safe_key: str, oplog_uri: str) -> None:
+        """Atomically update the push checkpoint and truncate the oplog.
+
+        Both operations run inside a single WiredTiger transaction so a crash
+        between checkpoint write and oplog truncation cannot cause duplicate
+        ops on restart.
+        """
+        with self._ck_lock:
+            self._ck_session.begin_transaction()
+            try:
+                cursor = self._ck_session.open_cursor(self._ck_uri, None, "overwrite=true")
+                cursor[f"push:{ns}"] = safe_key
+                cursor.close()
+
+                cursor = self._ck_session.open_cursor(oplog_uri, None, "overwrite=true")
+                to_remove: list[str] = []
+                while cursor.next() == 0:
+                    k: str = cursor.get_key()
+                    if k >= safe_key:
+                        break
+                    to_remove.append(k)
+                cursor.close()
+
+                if to_remove:
+                    cursor = self._ck_session.open_cursor(oplog_uri, None, "overwrite=true")
+                    for k in to_remove:
+                        cursor.set_key(k)
+                        cursor.remove()
+                    cursor.close()
+
+                self._ck_session.commit_transaction()
+            except Exception:
+                try:
+                    self._ck_session.rollback_transaction()
+                except Exception:
+                    pass
+                raise
+
+    def _flush_bulk(self, remote_coll: Any, ops: list[Any]) -> int:
+        """Flush a batch of operations to remote.
+
+        Returns the number of successfully written ops (``len(ops)`` on full
+        success, 0..n on partial failure, ``-1`` on total failure).
+        """
         try:
             remote_coll.bulk_write(ops, ordered=False)
-            return True
+            return len(ops)
         except BulkWriteError as bwe:
-            log.warning("Bulk write partial failure: %s", bwe.details)
-            return False
+            details = bwe.details or {}
+            write_errors = details.get("writeErrors", [])
+            n_failed = len(write_errors)
+            n_ok = len(ops) - n_failed
+            for err in write_errors:
+                log.warning(
+                    "Sync bulk_write error: op_index=%s code=%s msg=%s",
+                    err.get("index"),
+                    err.get("code"),
+                    err.get("errmsg", ""),
+                )
+            log.warning("Bulk write partial failure: %d/%d ops succeeded", n_ok, len(ops))
+            return n_ok
 
     # -- pull (Atlas -> local) -----------------------------------------
 
     def _pull(self) -> None:
         for ns, (local_coll, remote_coll, ns_filter) in self._tracked.items():
-            if self._config.get("use_change_stream_pull", True):
-                used_stream = self._pull_via_change_stream(ns, local_coll, remote_coll, ns_filter)
-                if used_stream:
+            with self._lock:
+                pulled_before = self._pulled_count
+            try:
+                if self._config.get("use_change_stream_pull", True):
+                    used_stream = self._pull_via_change_stream(
+                        ns, local_coll, remote_coll, ns_filter
+                    )
+                    if used_stream:
+                        self._pull_index_defs(ns, local_coll, remote_coll)
+                        continue
+
+                last_ts_str = self._get_checkpoint(f"pull_ts:{ns}")
+                last_ts = float(last_ts_str) if last_ts_str else 0.0
+
+                query: dict[str, Any] = {"_lastModified": {"$gt": last_ts}}
+                try:
+                    remote_docs: list[Document] = list(
+                        remote_coll.find(query).sort("_lastModified", 1)
+                    )
+                except PyMongoError as exc:
+                    log.warning("Pull query failed for %s: %s", ns, exc)
+                    continue
+
+                if not remote_docs:
                     self._pull_index_defs(ns, local_coll, remote_coll)
                     continue
 
-            last_ts_str = self._get_checkpoint(f"pull_ts:{ns}")
-            last_ts = float(last_ts_str) if last_ts_str else 0.0
+                max_ts = last_ts
 
-            query: dict[str, Any] = {"_lastModified": {"$gt": last_ts}}
-            try:
-                remote_docs: list[Document] = list(remote_coll.find(query).sort("_lastModified", 1))
-            except PyMongoError as exc:
-                log.warning("Pull query failed for %s: %s", ns, exc)
-                continue
+                for rdoc in remote_docs:
+                    if ns_filter:
+                        try:
+                            if not ns_filter(rdoc):
+                                continue
+                        except (KeyError, TypeError):
+                            pass
+                    if not self._doc_passes_sync_filter(rdoc):
+                        continue
+                    remote_ts = rdoc.get("_lastModified", 0)
+                    self._upsert_remote_doc(ns, local_coll, rdoc)
+                    with self._lock:
+                        self._pulled_count += 1
 
-            if not remote_docs:
+                    if remote_ts > max_ts:
+                        max_ts = remote_ts
+
+                self._set_checkpoint(f"pull_ts:{ns}", str(max_ts))
                 self._pull_index_defs(ns, local_coll, remote_coll)
-                continue
-
-            max_ts = last_ts
-
-            for rdoc in remote_docs:
-                if ns_filter:
-                    try:
-                        if not ns_filter(rdoc):
-                            continue
-                    except (KeyError, TypeError):
-                        pass
-                if not self._doc_passes_sync_filter(rdoc):
-                    continue
-                remote_ts = rdoc.get("_lastModified", 0)
-                self._upsert_remote_doc(ns, local_coll, rdoc)
-                with self._lock:
-                    self._pulled_count += 1
-
-                if remote_ts > max_ts:
-                    max_ts = remote_ts
-
-            self._set_checkpoint(f"pull_ts:{ns}", str(max_ts))
-            self._pull_index_defs(ns, local_coll, remote_coll)
+            finally:
+                self._record_ns_pull(ns, pulled_before)
 
     _SYNC_META_FIELDS = frozenset({"_lastModified"})
 
@@ -813,17 +998,37 @@ class SyncManager:
         """
         init_key = f"pull_cs_init:{ns}"
         if not self._get_checkpoint(init_key):
+            page_key = f"pull_cs_page:{ns}"
+            page_size = int(self._config.get("batch_size", 100))
+            last_id_raw = self._get_checkpoint(page_key)
+            last_id: Any = (
+                json.loads(last_id_raw, object_hook=_ejson_object_hook) if last_id_raw else None
+            )
             try:
-                for rdoc in remote_coll.find({}):
-                    if ns_filter:
-                        try:
-                            if not ns_filter(rdoc):
-                                continue
-                        except (KeyError, TypeError):
-                            pass
-                    if not self._doc_passes_sync_filter(rdoc):
-                        continue
-                    self._upsert_remote_doc(ns, local_coll, rdoc)
+                while True:
+                    find_q: dict[str, Any] = (
+                        {"_id": {"$gt": last_id}} if last_id is not None else {}
+                    )
+                    page = list(remote_coll.find(find_q).sort("_id", 1).limit(page_size))
+                    for rdoc in page:
+                        raw_id = rdoc.get("_id")
+                        if ns_filter:
+                            try:
+                                if not ns_filter(rdoc):
+                                    continue
+                            except (KeyError, TypeError):
+                                pass
+                        if not self._doc_passes_sync_filter(rdoc):
+                            continue
+                        self._upsert_remote_doc(ns, local_coll, rdoc)
+                        last_id = raw_id
+                    if page and last_id is not None:
+                        self._set_checkpoint(
+                            page_key,
+                            json.dumps(last_id, default=_ejson_default),
+                        )
+                    if len(page) < page_size:
+                        break
                 self._set_checkpoint(init_key, "1")
             except PyMongoError as exc:
                 log.warning("Initial change-stream snapshot failed for %s: %s", ns, exc)
@@ -992,18 +1197,39 @@ class SyncManager:
         except (AttributeError, TypeError):
             pass
 
+    # -- per-namespace stats -------------------------------------------
+
+    def _ensure_ns_stats(self, ns: str) -> dict[str, Any]:
+        if ns not in self._ns_stats:
+            self._ns_stats[ns] = {
+                "last_push_ts": None,
+                "last_pull_ts": None,
+                "last_push_count": 0,
+                "last_pull_count": 0,
+            }
+        return self._ns_stats[ns]
+
+    def _record_ns_pull(self, ns: str, pulled_before: int) -> None:
+        with self._lock:
+            ns_pulled = self._pulled_count - pulled_before
+        stats = self._ensure_ns_stats(ns)
+        stats["last_pull_ts"] = time.time()
+        stats["last_pull_count"] = ns_pulled
+
     # -- checkpoint persistence ----------------------------------------
 
     def _get_checkpoint(self, key: str) -> str | None:
-        cursor = self._ck_session.open_cursor(self._ck_uri, None, None)
-        cursor.set_key(key)
-        val: str | None = None
-        if cursor.search() == 0:
-            val = cursor.get_value()
-        cursor.close()
-        return val
+        with self._ck_lock:
+            cursor = self._ck_session.open_cursor(self._ck_uri, None, None)
+            cursor.set_key(key)
+            val: str | None = None
+            if cursor.search() == 0:
+                val = cursor.get_value()
+            cursor.close()
+            return val
 
     def _set_checkpoint(self, key: str, value: str) -> None:
-        cursor = self._ck_session.open_cursor(self._ck_uri, None, "overwrite=true")
-        cursor[key] = value
-        cursor.close()
+        with self._ck_lock:
+            cursor = self._ck_session.open_cursor(self._ck_uri, None, "overwrite=true")
+            cursor[key] = value
+            cursor.close()

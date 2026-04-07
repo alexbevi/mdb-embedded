@@ -20,11 +20,12 @@ import shutil
 import sys
 import tempfile
 import time
-from typing import List
 
 import numpy as np
 from langchain_core.embeddings import Embeddings
-from smongo import MongoClient as SmongoClient, WireServer
+
+from smongo import MongoClient as SmongoClient
+from smongo import WireServer
 
 PORT = 27020
 
@@ -36,15 +37,15 @@ class LocalEmbeddings(Embeddings):
 
     DIM = 64
 
-    def _embed(self, text: str) -> List[float]:
+    def _embed(self, text: str) -> list[float]:
         np.random.seed(abs(hash(text)) % (2**32))
         vec = np.random.rand(self.DIM).astype(np.float32)
         return (vec / np.linalg.norm(vec)).tolist()
 
-    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
         return [self._embed(t) for t in texts]
 
-    def embed_query(self, text: str) -> List[float]:
+    def embed_query(self, text: str) -> list[float]:
         return self._embed(text)
 
 
@@ -76,11 +77,15 @@ def main() -> None:
 
     native = SmongoClient(f"local://{db_path}")
     coll = native["langchain_db"]["vectors"]
-    coll.insert_many([
-        {"text": t, "embedding": embeddings.embed_documents([t])[0], "source": f"doc_{i}"}
-        for i, t in enumerate(texts)
-    ])
-    print(f"   Stored {coll.count_documents({})} documents with {LocalEmbeddings.DIM}-dim embeddings.")
+    coll.insert_many(
+        [
+            {"text": t, "embedding": embeddings.embed_documents([t])[0], "source": f"doc_{i}"}
+            for i, t in enumerate(texts)
+        ]
+    )
+    print(
+        f"   Stored {coll.count_documents({})} documents with {LocalEmbeddings.DIM}-dim embeddings."
+    )
     native.close()
 
     # ── 2. Start the wire server ───────────────────────────────
@@ -119,7 +124,7 @@ def main() -> None:
         ]
 
         for query in queries:
-            print(f"   Query: \"{query}\"")
+            print(f'   Query: "{query}"')
             results = vectorstore.similarity_search_with_score(query, k=2)
             for doc, score in results:
                 print(f"     [{score:.4f}] {doc.page_content[:70]}...")
@@ -144,10 +149,12 @@ def main() -> None:
         context = "\n".join(f"  - {d.page_content}" for d in docs)
         user_question = "What makes smongo special for AI applications?"
 
-        rag_prompt = ChatPromptTemplate.from_messages([
-            ("system", "Answer using ONLY this context:\n{context}"),
-            ("human", "{question}"),
-        ])
+        rag_prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", "Answer using ONLY this context:\n{context}"),
+                ("human", "{question}"),
+            ]
+        )
 
         formatted = rag_prompt.format(context=context, question=user_question)
         for line in formatted.split("\n"):

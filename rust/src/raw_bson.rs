@@ -174,10 +174,7 @@ pub(crate) fn raw_decode_document<'py>(
 }
 
 /// Convenience wrapper: decode a complete BSON document from a byte slice.
-pub(crate) fn raw_decode_slice<'py>(
-    py: Python<'py>,
-    data: &[u8],
-) -> PyResult<Bound<'py, PyDict>> {
+pub(crate) fn raw_decode_slice<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Bound<'py, PyDict>> {
     let mut offset = 0;
     raw_decode_document(py, data, &mut offset, 0)
 }
@@ -344,8 +341,7 @@ fn decode_value<'py>(
                 return Err(PyValueError::new_err("BSON CodeWScope string length < 1"));
             }
             ensure(data, *offset, str_len)?;
-            let code =
-                std::str::from_utf8(&data[*offset..*offset + str_len - 1]).unwrap_or("");
+            let code = std::str::from_utf8(&data[*offset..*offset + str_len - 1]).unwrap_or("");
             *offset = scope_end;
             Ok(PyString::new(py, code).into_any())
         }
@@ -442,10 +438,7 @@ fn decimal128_to_f64(data: &[u8], off: usize) -> f64 {
 /// Handles engine types directly: `smongo.ObjectId` → 12-byte OID,
 /// `_id` 24-char hex string → ObjectId, `datetime` → BSON DateTime, etc.
 /// No intermediate `bson::Document` is allocated.
-pub(crate) fn raw_encode_document(
-    py: Python<'_>,
-    dict: &Bound<'_, PyDict>,
-) -> PyResult<Vec<u8>> {
+pub(crate) fn raw_encode_document(py: Python<'_>, dict: &Bound<'_, PyDict>) -> PyResult<Vec<u8>> {
     let mut buf = Vec::with_capacity(256);
     encode_doc_into(py, &mut buf, dict, 0)?;
     Ok(buf)
@@ -723,21 +716,51 @@ mod tests {
             let decoded = raw_decode_slice(py, &encoded).unwrap();
 
             assert_eq!(
-                decoded.get_item("str").unwrap().unwrap().extract::<String>().unwrap(),
+                decoded
+                    .get_item("str")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
                 "hello"
             );
             assert_eq!(
-                decoded.get_item("int32").unwrap().unwrap().extract::<i32>().unwrap(),
+                decoded
+                    .get_item("int32")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<i32>()
+                    .unwrap(),
                 42
             );
             assert_eq!(
-                decoded.get_item("int64").unwrap().unwrap().extract::<i64>().unwrap(),
+                decoded
+                    .get_item("int64")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<i64>()
+                    .unwrap(),
                 3_000_000_000i64
             );
-            let fv: f64 = decoded.get_item("float").unwrap().unwrap().extract().unwrap();
+            let fv: f64 = decoded
+                .get_item("float")
+                .unwrap()
+                .unwrap()
+                .extract()
+                .unwrap();
             assert!((fv - 1.234).abs() < 1e-10);
-            assert!(decoded.get_item("bool_t").unwrap().unwrap().extract::<bool>().unwrap());
-            assert!(!decoded.get_item("bool_f").unwrap().unwrap().extract::<bool>().unwrap());
+            assert!(decoded
+                .get_item("bool_t")
+                .unwrap()
+                .unwrap()
+                .extract::<bool>()
+                .unwrap());
+            assert!(!decoded
+                .get_item("bool_f")
+                .unwrap()
+                .unwrap()
+                .extract::<bool>()
+                .unwrap());
             assert!(decoded.get_item("none").unwrap().unwrap().is_none());
         });
     }
@@ -757,7 +780,15 @@ mod tests {
 
             let nested_val = decoded.get_item("nested").unwrap().unwrap();
             let nested = nested_val.cast::<PyDict>().unwrap();
-            assert_eq!(nested.get_item("x").unwrap().unwrap().extract::<i32>().unwrap(), 1);
+            assert_eq!(
+                nested
+                    .get_item("x")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<i32>()
+                    .unwrap(),
+                1
+            );
 
             let list_val = decoded.get_item("list").unwrap().unwrap();
             let list = list_val.cast::<PyList>().unwrap();
@@ -927,9 +958,22 @@ mod tests {
             doc.insert("y", bson::Bson::String("world".to_string()));
             let bson_bytes = bson::to_vec(&doc).unwrap();
             let decoded = raw_decode_slice(py, &bson_bytes).unwrap();
-            assert_eq!(decoded.get_item("x").unwrap().unwrap().extract::<i32>().unwrap(), 99);
             assert_eq!(
-                decoded.get_item("y").unwrap().unwrap().extract::<String>().unwrap(),
+                decoded
+                    .get_item("x")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<i32>()
+                    .unwrap(),
+                99
+            );
+            assert_eq!(
+                decoded
+                    .get_item("y")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
                 "world"
             );
         });

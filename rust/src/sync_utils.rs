@@ -31,9 +31,9 @@ pub fn doc_checksum(py: Python<'_>, doc: &Bound<'_, PyAny>) -> PyResult<Option<S
     if doc.is_none() {
         return Ok(None);
     }
-    let dict = doc.cast::<PyDict>().map_err(|_| {
-        PyValueError::new_err("doc_checksum expects a dict or None")
-    })?;
+    let dict = doc
+        .cast::<PyDict>()
+        .map_err(|_| PyValueError::new_err("doc_checksum expects a dict or None"))?;
     let raw = py_sort_keys_json(py, dict)?;
     let mut hasher = Sha256::new();
     hasher.update(raw.as_bytes());
@@ -85,9 +85,9 @@ impl VectorClock {
         }
         let all_keys: std::collections::HashSet<&String> =
             self.clock.keys().chain(other.clock.keys()).collect();
-        all_keys.iter().any(|nid| {
-            *self.clock.get(*nid).unwrap_or(&0) > *other.clock.get(*nid).unwrap_or(&0)
-        })
+        all_keys
+            .iter()
+            .any(|nid| *self.clock.get(*nid).unwrap_or(&0) > *other.clock.get(*nid).unwrap_or(&0))
     }
 
     fn concurrent_with(&self, other: &VectorClock) -> bool {
@@ -227,10 +227,7 @@ fn get_last_modified(doc: &Bound<'_, PyDict>) -> f64 {
 
 /// Last-write-wins: compare _lastModified timestamps.
 #[pyfunction]
-pub fn lww<'py>(
-    local: &Bound<'py, PyDict>,
-    remote: &Bound<'py, PyDict>,
-) -> Bound<'py, PyDict> {
+pub fn lww<'py>(local: &Bound<'py, PyDict>, remote: &Bound<'py, PyDict>) -> Bound<'py, PyDict> {
     let local_ts = get_last_modified(local);
     let remote_ts = get_last_modified(remote);
     if remote_ts >= local_ts {
@@ -312,9 +309,7 @@ pub fn field_merge<'py>(
 
     for field in &all_fields {
         if field == "_id" {
-            let id_val = local
-                .get_item("_id")?
-                .or(remote.get_item("_id")?);
+            let id_val = local.get_item("_id")?.or(remote.get_item("_id")?);
             if let Some(v) = id_val {
                 merged.set_item("_id", v)?;
             }
@@ -545,24 +540,16 @@ mod tests {
 
     #[test]
     fn test_vector_clock_dominates() {
-        let a = VectorClock::new(Some(
-            [("x".into(), 5), ("y".into(), 3)].into(),
-        ));
-        let b = VectorClock::new(Some(
-            [("x".into(), 3), ("y".into(), 2)].into(),
-        ));
+        let a = VectorClock::new(Some([("x".into(), 5), ("y".into(), 3)].into()));
+        let b = VectorClock::new(Some([("x".into(), 3), ("y".into(), 2)].into()));
         assert!(a.dominates(&b));
         assert!(!b.dominates(&a));
     }
 
     #[test]
     fn test_vector_clock_concurrent() {
-        let a = VectorClock::new(Some(
-            [("x".into(), 5), ("y".into(), 1)].into(),
-        ));
-        let b = VectorClock::new(Some(
-            [("x".into(), 3), ("y".into(), 4)].into(),
-        ));
+        let a = VectorClock::new(Some([("x".into(), 5), ("y".into(), 1)].into()));
+        let b = VectorClock::new(Some([("x".into(), 3), ("y".into(), 4)].into()));
         assert!(a.concurrent_with(&b));
         assert!(b.concurrent_with(&a));
     }

@@ -82,10 +82,7 @@ impl QueryPlan {
         }
     }
 
-    fn index_scan(
-        name: String,
-        bounds: (Vec<BoundSegment>, Vec<BoundSegment>),
-    ) -> Self {
+    fn index_scan(name: String, bounds: (Vec<BoundSegment>, Vec<BoundSegment>)) -> Self {
         Self {
             plan_type: PlanType::IndexScan,
             index_name: Some(name.clone()),
@@ -118,22 +115,36 @@ impl QueryPlan {
             let lower_list = PyList::empty(py);
             for seg in lower {
                 if let Some(ref enc) = seg.encoded {
-                    let label = if seg.inclusive { "inclusive" } else { "exclusive" };
-                    let pair = pyo3::types::PyTuple::new(py, [
-                        enc.into_pyobject(py)?.into_any(),
-                        label.into_pyobject(py)?.into_any(),
-                    ])?;
+                    let label = if seg.inclusive {
+                        "inclusive"
+                    } else {
+                        "exclusive"
+                    };
+                    let pair = pyo3::types::PyTuple::new(
+                        py,
+                        [
+                            enc.into_pyobject(py)?.into_any(),
+                            label.into_pyobject(py)?.into_any(),
+                        ],
+                    )?;
                     lower_list.append(pair)?;
                 }
             }
             let upper_list = PyList::empty(py);
             for seg in upper {
                 if let Some(ref enc) = seg.encoded {
-                    let label = if seg.inclusive { "inclusive" } else { "exclusive" };
-                    let pair = pyo3::types::PyTuple::new(py, [
-                        enc.into_pyobject(py)?.into_any(),
-                        label.into_pyobject(py)?.into_any(),
-                    ])?;
+                    let label = if seg.inclusive {
+                        "inclusive"
+                    } else {
+                        "exclusive"
+                    };
+                    let pair = pyo3::types::PyTuple::new(
+                        py,
+                        [
+                            enc.into_pyobject(py)?.into_any(),
+                            label.into_pyobject(py)?.into_any(),
+                        ],
+                    )?;
                     upper_list.append(pair)?;
                 }
             }
@@ -191,11 +202,7 @@ impl RustQueryPlanner {
 
     // -- planning ----------------------------------------------------------
 
-    pub(crate) fn plan(
-        &self,
-        py: Python<'_>,
-        query: &Bound<'_, PyDict>,
-    ) -> PyResult<QueryPlan> {
+    pub(crate) fn plan(&self, py: Python<'_>, query: &Bound<'_, PyDict>) -> PyResult<QueryPlan> {
         if query.is_empty() {
             return Ok(QueryPlan::collection_scan());
         }
@@ -218,11 +225,7 @@ impl RustQueryPlanner {
         self.plan_simple(py, query)
     }
 
-    fn plan_simple(
-        &self,
-        py: Python<'_>,
-        query: &Bound<'_, PyDict>,
-    ) -> PyResult<QueryPlan> {
+    fn plan_simple(&self, py: Python<'_>, query: &Bound<'_, PyDict>) -> PyResult<QueryPlan> {
         let mut field_conditions: HashMap<String, Bound<'_, PyAny>> = HashMap::new();
         for (key, cond) in query.iter() {
             let ks: String = key.extract()?;
@@ -272,14 +275,10 @@ impl RustQueryPlanner {
         }
     }
 
-    fn plan_or(
-        &self,
-        py: Python<'_>,
-        query: &Bound<'_, PyDict>,
-    ) -> PyResult<QueryPlan> {
-        let or_branches = query.get_item("$or")?.ok_or_else(|| {
-            PyRuntimeError::new_err("$or key missing")
-        })?;
+    fn plan_or(&self, py: Python<'_>, query: &Bound<'_, PyDict>) -> PyResult<QueryPlan> {
+        let or_branches = query
+            .get_item("$or")?
+            .ok_or_else(|| PyRuntimeError::new_err("$or key missing"))?;
 
         let other_conditions = PyDict::new(py);
         for (k, v) in query.iter() {
@@ -342,8 +341,14 @@ impl RustQueryPlanner {
                 if *dir == IndexDir::Desc {
                     encoded = invert_encoded_impl(&encoded);
                 }
-                lower_segments.push(BoundSegment { encoded: Some(encoded.clone()), inclusive: true });
-                upper_segments.push(BoundSegment { encoded: Some(encoded), inclusive: true });
+                lower_segments.push(BoundSegment {
+                    encoded: Some(encoded.clone()),
+                    inclusive: true,
+                });
+                upper_segments.push(BoundSegment {
+                    encoded: Some(encoded),
+                    inclusive: true,
+                });
             } else {
                 let cond_dict = cond.cast::<PyDict>()?;
                 let mut low_val: Option<Bound<'_, PyAny>> = None;
@@ -394,8 +399,14 @@ impl RustQueryPlanner {
                         Some(ref v) => Some(sortable_encode_impl(py, v)?),
                         None => None,
                     };
-                    lower_segments.push(BoundSegment { encoded: wt_low, inclusive: low_inc });
-                    upper_segments.push(BoundSegment { encoded: wt_high, inclusive: high_inc });
+                    lower_segments.push(BoundSegment {
+                        encoded: wt_low,
+                        inclusive: low_inc,
+                    });
+                    upper_segments.push(BoundSegment {
+                        encoded: wt_high,
+                        inclusive: high_inc,
+                    });
                 } else {
                     let wt_low = match high_val {
                         Some(ref v) => Some(invert_encoded_impl(&sortable_encode_impl(py, v)?)),
@@ -405,8 +416,14 @@ impl RustQueryPlanner {
                         Some(ref v) => Some(invert_encoded_impl(&sortable_encode_impl(py, v)?)),
                         None => None,
                     };
-                    lower_segments.push(BoundSegment { encoded: wt_low, inclusive: high_inc });
-                    upper_segments.push(BoundSegment { encoded: wt_high, inclusive: low_inc });
+                    lower_segments.push(BoundSegment {
+                        encoded: wt_low,
+                        inclusive: high_inc,
+                    });
+                    upper_segments.push(BoundSegment {
+                        encoded: wt_high,
+                        inclusive: low_inc,
+                    });
                 }
 
                 let vals_equal = match (&low_val, &high_val) {
@@ -430,20 +447,24 @@ impl RustQueryPlanner {
         plan: &QueryPlan,
         session_raw: Option<*mut wiredtiger_sys::WT_SESSION>,
     ) -> PyResult<Vec<String>> {
-        let idx_name = plan.index_def_name.as_ref().ok_or_else(|| {
-            PyRuntimeError::new_err("index_scan plan has no index_def_name")
-        })?;
+        let idx_name = plan
+            .index_def_name
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("index_scan plan has no index_def_name"))?;
         let mgr = self.index_mgr.bind(py).borrow();
-        let idx = mgr.indexes().get(idx_name).ok_or_else(|| {
-            PyRuntimeError::new_err(format!("index {idx_name} not found"))
-        })?;
-        let table_uri = idx.table_uri.as_ref().ok_or_else(|| {
-            PyRuntimeError::new_err(format!("index {idx_name} has no table_uri"))
-        })?;
+        let idx = mgr
+            .indexes()
+            .get(idx_name)
+            .ok_or_else(|| PyRuntimeError::new_err(format!("index {idx_name} not found")))?;
+        let table_uri = idx
+            .table_uri
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err(format!("index {idx_name} has no table_uri")))?;
 
-        let (ref lower_segs, ref upper_segs) = plan.bounds.as_ref().ok_or_else(|| {
-            PyRuntimeError::new_err("index_scan plan has no bounds")
-        })?;
+        let (ref lower_segs, ref upper_segs) = plan
+            .bounds
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("index_scan plan has no bounds"))?;
 
         let low_key = build_bound_key(lower_segs, true);
         let high_key = build_bound_key(upper_segs, false);
@@ -496,12 +517,14 @@ impl RustQueryPlanner {
         session_raw: Option<*mut wiredtiger_sys::WT_SESSION>,
     ) -> PyResult<Vec<String>> {
         let mgr = self.index_mgr.bind(py).borrow();
-        let idx = mgr.indexes().get(idx_name).ok_or_else(|| {
-            PyRuntimeError::new_err(format!("index {idx_name} not found"))
-        })?;
-        let table_uri = idx.table_uri.as_ref().ok_or_else(|| {
-            PyRuntimeError::new_err(format!("index {idx_name} has no table_uri"))
-        })?;
+        let idx = mgr
+            .indexes()
+            .get(idx_name)
+            .ok_or_else(|| PyRuntimeError::new_err(format!("index {idx_name} not found")))?;
+        let table_uri = idx
+            .table_uri
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err(format!("index {idx_name} has no table_uri")))?;
 
         let first_dir = idx.keys.first().map(|(_, d)| *d).unwrap_or(IndexDir::Asc);
 
@@ -558,11 +581,7 @@ impl RustQueryPlanner {
     }
 
     #[pyo3(name = "plan")]
-    fn py_plan<'py>(
-        &self,
-        py: Python<'py>,
-        query: &Bound<'py, PyDict>,
-    ) -> PyResult<Py<PyDict>> {
+    fn py_plan<'py>(&self, py: Python<'py>, query: &Bound<'py, PyDict>) -> PyResult<Py<PyDict>> {
         let plan = self.plan(py, query)?;
         plan.to_py_dict(py)
     }

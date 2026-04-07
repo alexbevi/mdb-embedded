@@ -13,26 +13,45 @@ from collections import defaultdict
 from typing import Any
 
 from smongo._smongo_core import (
-    add_fields_stage,  # noqa: F401
-    bucket_auto_stage,  # noqa: F401
-    bucket_stage,  # noqa: F401
-    count_stage,  # noqa: F401
-    group_stage,  # noqa: F401
-    limit_stage,  # noqa: F401
-    project_stage,  # noqa: F401
-    redact_stage,  # noqa: F401
-    replace_root_stage,  # noqa: F401
-    sample_stage,  # noqa: F401
-    set_window_fields_stage,  # noqa: F401
-    skip_stage,  # noqa: F401
-    sort_by_count_stage,  # noqa: F401
+    add_fields_stage,
+    bucket_auto_stage,
+    bucket_stage,
+    count_stage,
+    group_stage,
+    limit_stage,
+    project_stage,
+    redact_stage,
+    replace_root_stage,
+    sample_stage,
+    set_window_fields_stage,
+    skip_stage,
+    sort_by_count_stage,
     sort_stage,
-    unset_stage,  # noqa: F401
-    unwind_stage,  # noqa: F401
+    unset_stage,
+    unwind_stage,
 )
 
 from .._types import Document
 from ..query import get_value, resolve_expr
+
+__all__ = [
+    "add_fields_stage",
+    "bucket_auto_stage",
+    "bucket_stage",
+    "count_stage",
+    "group_stage",
+    "limit_stage",
+    "project_stage",
+    "redact_stage",
+    "replace_root_stage",
+    "sample_stage",
+    "set_window_fields_stage",
+    "skip_stage",
+    "sort_by_count_stage",
+    "sort_stage",
+    "unset_stage",
+    "unwind_stage",
+]
 
 
 def _py_group_stage(

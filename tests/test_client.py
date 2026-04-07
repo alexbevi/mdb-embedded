@@ -2,7 +2,6 @@
 
 import pytest
 
-import smongo.client as client_mod
 from smongo.aggregation import Cursor
 from smongo.client import Collection, Database, MongoClient
 

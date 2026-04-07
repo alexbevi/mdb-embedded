@@ -105,9 +105,7 @@ impl Drop for WtConnection {
 ///
 /// # Safety
 /// `conn` must be a valid, open `WT_CONNECTION` pointer.
-pub(crate) fn open_session_from_conn_ptr(
-    conn: *mut WT_CONNECTION,
-) -> WtResult<WtSession> {
+pub(crate) fn open_session_from_conn_ptr(conn: *mut WT_CONNECTION) -> WtResult<WtSession> {
     if conn.is_null() {
         return Err(WtError {
             code: -1,

@@ -19,15 +19,17 @@ import sys
 import tempfile
 import time
 
-from smongo import MongoClient as SmongoClient, WireServer
+from smongo import MongoClient as SmongoClient
+from smongo import WireServer
 
 PORT = 27021
 
 
 def main() -> None:
     try:
-        from crewai import Agent, Task, Crew, Process
+        from crewai import Agent, Crew, Process, Task
         from langchain_core.tools import tool
+
         HAS_CREWAI = True
     except ImportError:
         HAS_CREWAI = False
@@ -42,22 +44,70 @@ def main() -> None:
     employees = native["company"]["employees"]
     projects = native["company"]["projects"]
 
-    employees.insert_many([
-        {"name": "Alice",   "role": "Senior Engineer",  "skills": ["Python", "Rust", "MongoDB"],    "team": "platform"},
-        {"name": "Bob",     "role": "Product Manager",  "skills": ["Agile", "Scrum", "SQL"],        "team": "product"},
-        {"name": "Charlie", "role": "Data Scientist",   "skills": ["Python", "ML", "PyTorch"],      "team": "ai"},
-        {"name": "Diana",   "role": "DevOps Engineer",  "skills": ["Docker", "Kubernetes", "AWS"],   "team": "platform"},
-        {"name": "Eve",     "role": "ML Engineer",      "skills": ["Python", "TensorFlow", "CUDA"], "team": "ai"},
-        {"name": "Frank",   "role": "Backend Engineer", "skills": ["Go", "PostgreSQL", "gRPC"],     "team": "platform"},
-    ])
+    employees.insert_many(
+        [
+            {
+                "name": "Alice",
+                "role": "Senior Engineer",
+                "skills": ["Python", "Rust", "MongoDB"],
+                "team": "platform",
+            },
+            {
+                "name": "Bob",
+                "role": "Product Manager",
+                "skills": ["Agile", "Scrum", "SQL"],
+                "team": "product",
+            },
+            {
+                "name": "Charlie",
+                "role": "Data Scientist",
+                "skills": ["Python", "ML", "PyTorch"],
+                "team": "ai",
+            },
+            {
+                "name": "Diana",
+                "role": "DevOps Engineer",
+                "skills": ["Docker", "Kubernetes", "AWS"],
+                "team": "platform",
+            },
+            {
+                "name": "Eve",
+                "role": "ML Engineer",
+                "skills": ["Python", "TensorFlow", "CUDA"],
+                "team": "ai",
+            },
+            {
+                "name": "Frank",
+                "role": "Backend Engineer",
+                "skills": ["Go", "PostgreSQL", "gRPC"],
+                "team": "platform",
+            },
+        ]
+    )
 
-    projects.insert_many([
-        {"name": "RAG Pipeline",     "required_skills": ["Python", "ML", "MongoDB"], "status": "planning"},
-        {"name": "API Gateway",      "required_skills": ["Go", "Docker", "gRPC"],    "status": "active"},
-        {"name": "Data Warehouse",   "required_skills": ["Python", "SQL", "AWS"],    "status": "planning"},
-    ])
+    projects.insert_many(
+        [
+            {
+                "name": "RAG Pipeline",
+                "required_skills": ["Python", "ML", "MongoDB"],
+                "status": "planning",
+            },
+            {
+                "name": "API Gateway",
+                "required_skills": ["Go", "Docker", "gRPC"],
+                "status": "active",
+            },
+            {
+                "name": "Data Warehouse",
+                "required_skills": ["Python", "SQL", "AWS"],
+                "status": "planning",
+            },
+        ]
+    )
 
-    print(f"   {employees.count_documents({})} employees, {projects.count_documents({})} projects seeded.")
+    print(
+        f"   {employees.count_documents({})} employees, {projects.count_documents({})} projects seeded."
+    )
     native.close()
 
     # ── 2. Start wire server ───────────────────────────────────
@@ -88,10 +138,12 @@ def main() -> None:
             @tool("Search Employees by Skill")
             def search_by_skill(skill: str) -> str:
                 """Search the company database for employees with a specific skill."""
-                results = list(emp_coll.find(
-                    {"skills": {"$regex": skill, "$options": "i"}},
-                    {"_id": 0, "name": 1, "role": 1, "team": 1, "skills": 1}
-                ))
+                results = list(
+                    emp_coll.find(
+                        {"skills": {"$regex": skill, "$options": "i"}},
+                        {"_id": 0, "name": 1, "role": 1, "team": 1, "skills": 1},
+                    )
+                )
                 if not results:
                     return f"No employees found with skill: {skill}"
                 lines = [f"- {r['name']} ({r['role']}, team: {r['team']})" for r in results]
@@ -100,13 +152,16 @@ def main() -> None:
             @tool("Find Projects Needing Staff")
             def find_projects(status: str) -> str:
                 """Find projects by status (planning/active) and their required skills."""
-                results = list(proj_coll.find(
-                    {"status": status},
-                    {"_id": 0, "name": 1, "required_skills": 1, "status": 1}
-                ))
+                results = list(
+                    proj_coll.find(
+                        {"status": status}, {"_id": 0, "name": 1, "required_skills": 1, "status": 1}
+                    )
+                )
                 if not results:
                     return f"No projects with status: {status}"
-                lines = [f"- {r['name']} (needs: {', '.join(r['required_skills'])})" for r in results]
+                lines = [
+                    f"- {r['name']} (needs: {', '.join(r['required_skills'])})" for r in results
+                ]
                 return f"Found {len(results)} {status} projects:\n" + "\n".join(lines)
 
         # ── 5. Run the agent (or simulate) ─────────────────────
@@ -146,25 +201,31 @@ def main() -> None:
 
             # Simulate: agent searches for Python + ML engineers
             print("\n   Tool: Search Employees by Skill('Python')")
-            python_devs = list(emp_coll.find(
-                {"skills": {"$regex": "Python", "$options": "i"}},
-                {"_id": 0, "name": 1, "role": 1, "skills": 1}
-            ))
+            python_devs = list(
+                emp_coll.find(
+                    {"skills": {"$regex": "Python", "$options": "i"}},
+                    {"_id": 0, "name": 1, "role": 1, "skills": 1},
+                )
+            )
             for e in python_devs:
                 skills_str = ", ".join(e.get("skills", []))
                 print(f"     -> {e['name']} ({e['role']}): {skills_str}")
 
             print("\n   Tool: Search Employees by Skill('MongoDB')")
-            mongo_devs = list(emp_coll.find(
-                {"skills": {"$regex": "MongoDB", "$options": "i"}},
-                {"_id": 0, "name": 1, "role": 1, "skills": 1}
-            ))
+            mongo_devs = list(
+                emp_coll.find(
+                    {"skills": {"$regex": "MongoDB", "$options": "i"}},
+                    {"_id": 0, "name": 1, "role": 1, "skills": 1},
+                )
+            )
             for e in mongo_devs:
                 skills_str = ", ".join(e.get("skills", []))
                 print(f"     -> {e['name']} ({e['role']}): {skills_str}")
 
             print("\n   Agent recommendation (simulated):")
-            print("     RAG Pipeline team: Alice (Python + MongoDB), Charlie (Python + ML), Eve (Python + TensorFlow)")
+            print(
+                "     RAG Pipeline team: Alice (Python + MongoDB), Charlie (Python + ML), Eve (Python + TensorFlow)"
+            )
             print("\n   All queries went through standard PyMongo over the wire protocol.")
             print("   CrewAI and PyMongo had no idea smongo was the engine.\n")
 

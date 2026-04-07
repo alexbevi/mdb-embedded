@@ -85,10 +85,7 @@ pub fn scan_and_filter_batch<'py>(
 // ---------------------------------------------------------------------------
 
 #[pyfunction]
-pub fn batch_insert<'py>(
-    cursor: &Bound<'py, PyAny>,
-    docs: &Bound<'py, PyList>,
-) -> PyResult<()> {
+pub fn batch_insert<'py>(cursor: &Bound<'py, PyAny>, docs: &Bound<'py, PyList>) -> PyResult<()> {
     for doc_any in docs.iter() {
         let doc_dict = doc_any.cast::<PyDict>()?;
         let id_val = doc_dict
@@ -122,12 +119,7 @@ pub fn batch_update<'py>(
     for doc_any in docs.iter() {
         let doc_dict = doc_any.cast::<PyDict>()?;
 
-        query_update::apply_update(
-            doc_dict,
-            update_spec,
-            array_filters,
-            query,
-        )?;
+        query_update::apply_update(doc_dict, update_spec, array_filters, query)?;
 
         let id_val = doc_dict
             .get_item("_id")?
@@ -150,7 +142,10 @@ pub fn batch_update<'py>(
 
 /// Decode raw BSON bytes (from `cursor.get_value()`) into a Python dict.
 #[pyfunction]
-pub fn cursor_get_doc<'py>(py: Python<'py>, raw_value: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> {
+pub fn cursor_get_doc<'py>(
+    py: Python<'py>,
+    raw_value: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyDict>> {
     let raw_bytes: &[u8] = raw_value.extract()?;
     bson_helpers::from_bson(py, raw_bytes)
 }

@@ -90,7 +90,9 @@ fn cmd_list_indexes(
     let cr_reg = cr.bind(py).cast::<CursorRegistry>()?;
     let cmd_ns = format!("{db_name}.$cmd.listIndexes.{coll_name}");
     let (cursor_id, first_batch) =
-        cr_reg.borrow().create(py, &cmd_ns, &formatted, Some(batch_size as usize))?;
+        cr_reg
+            .borrow()
+            .create(py, &cmd_ns, &formatted, Some(batch_size as usize))?;
 
     let cursor_dict = PyDict::new(py);
     cursor_dict.set_item("id", bson_int64(py, cursor_id)?)?;
@@ -115,13 +117,7 @@ fn cmd_create_indexes(
         .extract()?;
     let coll_py = get_collection_typed(ctx, &db_name, &coll_name)?;
 
-    let before: i64 = coll_py
-        .bind(py)
-        .borrow()
-        .list_indexes(py)?
-        .bind(py)
-        .len()? as i64
-        + 1;
+    let before: i64 = coll_py.bind(py).borrow().list_indexes(py)?.bind(py).len()? as i64 + 1;
 
     let indexes = cmd
         .get_item("indexes")?
@@ -158,13 +154,7 @@ fn cmd_create_indexes(
             .create_index(py, keys_list.as_any(), false, Some(&kwargs))?;
     }
 
-    let after: i64 = coll_py
-        .bind(py)
-        .borrow()
-        .list_indexes(py)?
-        .bind(py)
-        .len()? as i64
-        + 1;
+    let after: i64 = coll_py.bind(py).borrow().list_indexes(py)?.bind(py).len()? as i64 + 1;
 
     let resp = PyDict::new(py);
     resp.set_item("numIndexesBefore", before)?;
@@ -186,13 +176,7 @@ fn cmd_drop_indexes(
         .extract()?;
     let coll_py = get_collection_typed(ctx, &db_name, &coll_name)?;
 
-    let n_before: i64 = coll_py
-        .bind(py)
-        .borrow()
-        .list_indexes(py)?
-        .bind(py)
-        .len()? as i64
-        + 1;
+    let n_before: i64 = coll_py.bind(py).borrow().list_indexes(py)?.bind(py).len()? as i64 + 1;
     let index = cmd.get_item("index")?;
 
     if let Some(ref idx) = index {

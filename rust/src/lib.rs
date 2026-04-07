@@ -4,18 +4,27 @@ mod aggregation_joins;
 mod bson_helpers;
 mod cached_modules;
 mod index_encoding;
+mod index_manager;
+mod local_collection;
 mod locking;
 mod objectid;
 mod oplog;
 mod paths;
 mod query_compiler;
 mod query_expressions;
+mod query_planner;
 mod query_update;
+mod raw_bson;
+pub(crate) mod rbac;
 mod results;
+pub(crate) mod schema;
+pub(crate) mod scram;
 mod storage;
+mod storage_engine;
+mod streaming;
 mod sync_manager;
 mod sync_utils;
-mod raw_bson;
+mod transaction;
 mod wire_codec;
 mod wire_commands;
 mod wire_context;
@@ -27,15 +36,6 @@ mod wire_profiler;
 mod wire_server;
 mod wire_sessions;
 mod wire_transactions;
-pub(crate) mod scram;
-pub(crate) mod rbac;
-pub(crate) mod schema;
-mod index_manager;
-mod local_collection;
-mod query_planner;
-mod storage_engine;
-mod streaming;
-mod transaction;
 mod wt_bridge;
 mod wt_safe;
 
@@ -68,8 +68,14 @@ fn register_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(index_encoding::sortable_encode, m)?)?;
     m.add_function(wrap_pyfunction!(index_encoding::invert_encoded, m)?)?;
     m.add_function(wrap_pyfunction!(index_encoding::encode_index_key, m)?)?;
-    m.add_function(wrap_pyfunction!(index_encoding::encode_index_key_prefix, m)?)?;
-    m.add("ValidationError", m.py().get_type::<schema::ValidationError>())?;
+    m.add_function(wrap_pyfunction!(
+        index_encoding::encode_index_key_prefix,
+        m
+    )?)?;
+    m.add(
+        "ValidationError",
+        m.py().get_type::<schema::ValidationError>(),
+    )?;
     m.add_function(wrap_pyfunction!(schema::py_validate_document, m)?)?;
     Ok(())
 }
@@ -90,7 +96,10 @@ fn register_storage(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<storage_engine::RustLocalDB>()?;
     m.add_class::<local_collection::RustLocalCollection>()?;
     m.add_class::<index_manager::RustIndexManager>()?;
-    m.add("DuplicateKeyError", m.py().get_type::<index_manager::DuplicateKeyError>())?;
+    m.add(
+        "DuplicateKeyError",
+        m.py().get_type::<index_manager::DuplicateKeyError>(),
+    )?;
     m.add_function(wrap_pyfunction!(index_manager::rs_tokenize, m)?)?;
     m.add_function(wrap_pyfunction!(index_manager::rs_hash_value, m)?)?;
     m.add_function(wrap_pyfunction!(index_manager::rs_flatten_doc, m)?)?;
@@ -121,7 +130,10 @@ fn register_aggregation(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(aggregation_joins::lookup_stage, m)?)?;
     m.add_function(wrap_pyfunction!(aggregation_joins::graph_lookup_stage, m)?)?;
     m.add_function(wrap_pyfunction!(aggregation_joins::facet_stage, m)?)?;
-    m.add_function(wrap_pyfunction!(aggregation_joins::pipeline_lookup_stage, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        aggregation_joins::pipeline_lookup_stage,
+        m
+    )?)?;
     Ok(())
 }
 
@@ -151,8 +163,14 @@ fn register_sync(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
 fn register_wire(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Wire protocol: msg parsing
-    m.add("ProtocolError", m.py().get_type::<wire_msg::ProtocolError>())?;
-    m.add("ChecksumMismatch", m.py().get_type::<wire_msg::ChecksumMismatch>())?;
+    m.add(
+        "ProtocolError",
+        m.py().get_type::<wire_msg::ProtocolError>(),
+    )?;
+    m.add(
+        "ChecksumMismatch",
+        m.py().get_type::<wire_msg::ChecksumMismatch>(),
+    )?;
     m.add_class::<wire_msg::MsgHeader>()?;
     m.add_function(wrap_pyfunction!(wire_msg::decode_header, m)?)?;
     m.add_function(wrap_pyfunction!(wire_msg::decode_msg, m)?)?;
@@ -176,7 +194,10 @@ fn register_wire(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("MAX_WRITE_BATCH_SIZE", wire_cursors::MAX_WRITE_BATCH_SIZE)?;
     // Wire protocol: sessions
     m.add_class::<wire_sessions::SessionRegistry>()?;
-    m.add("TooManySessions", m.py().get_type::<wire_sessions::TooManySessions>())?;
+    m.add(
+        "TooManySessions",
+        m.py().get_type::<wire_sessions::TooManySessions>(),
+    )?;
     m.add("MAX_SESSIONS", wire_sessions::MAX_SESSIONS)?;
     // Wire protocol: profiler
     m.add_class::<wire_profiler::OpEntry>()?;
@@ -184,13 +205,25 @@ fn register_wire(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<wire_profiler::TopStats>()?;
     m.add_class::<wire_profiler::Profiler>()?;
     // Wire protocol: transactions
-    m.add("TransactionError", m.py().get_type::<wire_transactions::TransactionError>())?;
+    m.add(
+        "TransactionError",
+        m.py().get_type::<wire_transactions::TransactionError>(),
+    )?;
     m.add_class::<wire_transactions::TransactionState>()?;
     m.add_class::<wire_transactions::SessionTransaction>()?;
-    m.add_function(wrap_pyfunction!(wire_transactions::commit_active_transaction, m)?)?;
-    m.add_function(wrap_pyfunction!(wire_transactions::abort_active_transaction, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        wire_transactions::commit_active_transaction,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        wire_transactions::abort_active_transaction,
+        m
+    )?)?;
     // Wire protocol: context helpers
-    m.add("NamespaceError", m.py().get_type::<wire_context::NamespaceError>())?;
+    m.add(
+        "NamespaceError",
+        m.py().get_type::<wire_context::NamespaceError>(),
+    )?;
     m.add_function(wrap_pyfunction!(wire_context::validate_namespace, m)?)?;
     m.add_class::<wire_context::LastWriteResult>()?;
     m.add_class::<wire_context::ParameterStore>()?;

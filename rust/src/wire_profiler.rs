@@ -4,9 +4,9 @@
 //! `TopStats` -- per-namespace timing stats for the `top` command.
 //! `Profiler` -- ring-buffer profiler mirroring `db.setProfilingLevel()`.
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
-use parking_lot::Mutex;
 use std::time::Instant;
 
 use pyo3::prelude::*;
@@ -63,13 +63,7 @@ impl OperationTracker {
         }
     }
 
-    fn start_op(
-        &self,
-        op: &str,
-        ns: &str,
-        command: Py<PyDict>,
-        connection_id: i64,
-    ) -> i64 {
+    fn start_op(&self, op: &str, ns: &str, command: Py<PyDict>, connection_id: i64) -> i64 {
         let op_id = self.counter.fetch_add(1, Ordering::Relaxed);
         let entry = TrackedOp {
             op_id,
@@ -299,7 +293,9 @@ impl Profiler {
 
         let datetime_mod = crate::cached_modules::datetime(py)?;
         let utc = datetime_mod.getattr("timezone")?.getattr("utc")?;
-        let now = datetime_mod.getattr("datetime")?.call_method1("now", (&utc,))?;
+        let now = datetime_mod
+            .getattr("datetime")?
+            .call_method1("now", (&utc,))?;
 
         let entry = PyDict::new(py);
         entry.set_item("op", op)?;
@@ -328,10 +324,7 @@ impl Profiler {
     fn get_entries(&self, py: Python<'_>, limit: usize) -> Vec<Py<PyDict>> {
         let entries = self.entries.lock();
         let start = entries.len().saturating_sub(limit);
-        entries[start..]
-            .iter()
-            .map(|e| e.clone_ref(py))
-            .collect()
+        entries[start..].iter().map(|e| e.clone_ref(py)).collect()
     }
 
     fn clear(&self) {

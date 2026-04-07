@@ -22,7 +22,8 @@ import sys
 import tempfile
 import time
 
-from smongo import MongoClient as SmongoClient, WireServer
+from smongo import MongoClient as SmongoClient
+from smongo import WireServer
 
 PORT = 27023
 
@@ -40,10 +41,10 @@ KNOWLEDGE = [
 
 def main() -> None:
     try:
+        from langchain_core.output_parsers import StrOutputParser
+        from langchain_core.prompts import ChatPromptTemplate
         from langchain_mongodb import MongoDBAtlasVectorSearch
         from langchain_ollama import ChatOllama, OllamaEmbeddings
-        from langchain_core.prompts import ChatPromptTemplate
-        from langchain_core.output_parsers import StrOutputParser
     except ImportError:
         print("Install deps:  pip install langchain-ollama langchain-mongodb pymongo smongo")
         return
@@ -107,14 +108,18 @@ def main() -> None:
         retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 
         # ── 5. RAG chain ──────────────────────────────────────
-        prompt = ChatPromptTemplate.from_messages([
-            ("system",
-             "You are a helpful assistant. Answer the user's question using "
-             "ONLY the context below. Be concise (2-3 sentences). If the "
-             "context doesn't contain the answer, say so.\n\n"
-             "Context:\n{context}"),
-            ("human", "{question}"),
-        ])
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "You are a helpful assistant. Answer the user's question using "
+                    "ONLY the context below. Be concise (2-3 sentences). If the "
+                    "context doesn't contain the answer, say so.\n\n"
+                    "Context:\n{context}",
+                ),
+                ("human", "{question}"),
+            ]
+        )
 
         chain = prompt | llm | StrOutputParser()
 

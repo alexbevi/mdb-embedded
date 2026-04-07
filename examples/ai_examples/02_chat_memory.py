@@ -51,28 +51,53 @@ def main() -> None:
         now = time.time()
 
         conversation = [
-            {"role": "user",      "content": "What is smongo?",                                                              "ts": now},
-            {"role": "assistant", "content": "smongo is a local-first embedded MongoDB engine built on WiredTiger.",          "ts": now + 1},
-            {"role": "user",      "content": "Does it support transactions?",                                                "ts": now + 2},
-            {"role": "assistant", "content": "Yes -- full ACID transactions with snapshot isolation.",                        "ts": now + 3},
-            {"role": "user",      "content": "Can I use it for vector search?",                                              "ts": now + 4},
-            {"role": "assistant", "content": "Absolutely. $vectorSearch runs cosine/euclidean similarity in-memory.",         "ts": now + 5},
-            {"role": "user",      "content": "How do I sync to the cloud?",                                                  "ts": now + 6},
-            {"role": "assistant", "content": "Pass a sync URI to MongoClient and call client.sync.push()/pull().",           "ts": now + 7},
+            {"role": "user", "content": "What is smongo?", "ts": now},
+            {
+                "role": "assistant",
+                "content": "smongo is a local-first embedded MongoDB engine built on WiredTiger.",
+                "ts": now + 1,
+            },
+            {"role": "user", "content": "Does it support transactions?", "ts": now + 2},
+            {
+                "role": "assistant",
+                "content": "Yes -- full ACID transactions with snapshot isolation.",
+                "ts": now + 3,
+            },
+            {"role": "user", "content": "Can I use it for vector search?", "ts": now + 4},
+            {
+                "role": "assistant",
+                "content": "Absolutely. $vectorSearch runs cosine/euclidean similarity in-memory.",
+                "ts": now + 5,
+            },
+            {"role": "user", "content": "How do I sync to the cloud?", "ts": now + 6},
+            {
+                "role": "assistant",
+                "content": "Pass a sync URI to MongoClient and call client.sync.push()/pull().",
+                "ts": now + 7,
+            },
         ]
 
-        messages.insert_many([
-            {"session_id": session_id, "role": m["role"], "content": m["content"], "timestamp": m["ts"]}
-            for m in conversation
-        ])
+        messages.insert_many(
+            [
+                {
+                    "session_id": session_id,
+                    "role": m["role"],
+                    "content": m["content"],
+                    "timestamp": m["ts"],
+                }
+                for m in conversation
+            ]
+        )
 
-        sessions.insert_one({
-            "session_id": session_id,
-            "user": "fabian",
-            "started_at": now,
-            "message_count": len(conversation),
-            "tags": ["smongo", "getting-started"],
-        })
+        sessions.insert_one(
+            {
+                "session_id": session_id,
+                "user": "fabian",
+                "started_at": now,
+                "message_count": len(conversation),
+                "tags": ["smongo", "getting-started"],
+            }
+        )
 
         print(f"   Stored {len(conversation)} messages in session {session_id}")
 
@@ -83,7 +108,9 @@ def main() -> None:
             messages.find(
                 {"session_id": session_id},
                 {"role": 1, "content": 1, "_id": 0},
-            ).sort("timestamp", -1).limit(4)
+            )
+            .sort("timestamp", -1)
+            .limit(4)
         )
         recent.reverse()
 
@@ -95,20 +122,44 @@ def main() -> None:
         print("\n4. Adding a second conversation...")
 
         session_id_2 = "sess_002"
-        messages.insert_many([
-            {"session_id": session_id_2, "role": "user",      "content": "How fast is smongo?",                                       "timestamp": now + 100},
-            {"session_id": session_id_2, "role": "assistant", "content": "Benchmarks show ~2x faster than pymongo for single-doc ops.", "timestamp": now + 101},
-            {"session_id": session_id_2, "role": "user",      "content": "What about aggregation?",                                    "timestamp": now + 102},
-            {"session_id": session_id_2, "role": "assistant", "content": "25+ pipeline stages run in Rust with spill-to-disk.",         "timestamp": now + 103},
-        ])
+        messages.insert_many(
+            [
+                {
+                    "session_id": session_id_2,
+                    "role": "user",
+                    "content": "How fast is smongo?",
+                    "timestamp": now + 100,
+                },
+                {
+                    "session_id": session_id_2,
+                    "role": "assistant",
+                    "content": "Benchmarks show ~2x faster than pymongo for single-doc ops.",
+                    "timestamp": now + 101,
+                },
+                {
+                    "session_id": session_id_2,
+                    "role": "user",
+                    "content": "What about aggregation?",
+                    "timestamp": now + 102,
+                },
+                {
+                    "session_id": session_id_2,
+                    "role": "assistant",
+                    "content": "25+ pipeline stages run in Rust with spill-to-disk.",
+                    "timestamp": now + 103,
+                },
+            ]
+        )
 
-        sessions.insert_one({
-            "session_id": session_id_2,
-            "user": "fabian",
-            "started_at": now + 100,
-            "message_count": 4,
-            "tags": ["smongo", "performance"],
-        })
+        sessions.insert_one(
+            {
+                "session_id": session_id_2,
+                "user": "fabian",
+                "started_at": now + 100,
+                "message_count": 4,
+                "tags": ["smongo", "performance"],
+            }
+        )
 
         print(f"   Total messages across all sessions: {messages.count_documents({})}")
 
@@ -122,17 +173,21 @@ def main() -> None:
         print("\n6. Chat analytics (aggregation pipeline):\n")
 
         print("   Messages per role:")
-        for r in messages.aggregate([
-            {"$group": {"_id": "$role", "count": {"$sum": 1}}},
-            {"$sort": {"count": -1}},
-        ]):
+        for r in messages.aggregate(
+            [
+                {"$group": {"_id": "$role", "count": {"$sum": 1}}},
+                {"$sort": {"count": -1}},
+            ]
+        ):
             print(f"     {r['_id']:12s}  {r['count']} messages")
 
         print("\n   Messages per session:")
-        for r in messages.aggregate([
-            {"$group": {"_id": "$session_id", "count": {"$sum": 1}}},
-            {"$sort": {"_id": 1}},
-        ]):
+        for r in messages.aggregate(
+            [
+                {"$group": {"_id": "$session_id", "count": {"$sum": 1}}},
+                {"$sort": {"_id": 1}},
+            ]
+        ):
             print(f"     {r['_id']:12s}  {r['count']} messages")
 
         # ── 7. Assemble LLM prompt from history ────────────────
@@ -146,7 +201,7 @@ def main() -> None:
             ).sort("timestamp", 1)
         )
 
-        llm_messages = [{"role": "system", "content": system_msg}] + history
+        llm_messages = [{"role": "system", "content": system_msg}, *history]
 
         print(f"   Prompt: {len(llm_messages)} messages (1 system + {len(history)} history)")
         print("   Ready to send to OpenAI / Anthropic / Ollama / any LLM API\n")

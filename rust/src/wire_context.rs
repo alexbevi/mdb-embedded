@@ -20,7 +20,11 @@ use crate::wire_profiler::{OperationTracker, Profiler, TopStats};
 use crate::wire_sessions::SessionRegistry;
 use crate::wire_transactions::{SessionTransaction, TransactionError, TransactionState};
 
-pyo3::create_exception!(smongo._smongo_core, NamespaceError, pyo3::exceptions::PyValueError);
+pyo3::create_exception!(
+    smongo._smongo_core,
+    NamespaceError,
+    pyo3::exceptions::PyValueError
+);
 
 // ── Cached Python imports (resolved once at server startup) ──────────
 
@@ -190,7 +194,11 @@ impl ParameterStore {
         insert_int(&mut map, "maxTransactionLockRequestTimeoutMillis", 5000)?;
         insert_int(&mut map, "transactionLifetimeLimitSeconds", 60)?;
         insert_int(&mut map, "cursorTimeoutMillis", 600_000)?;
-        insert_int(&mut map, "internalQueryExecMaxBlockingSortBytes", 104_857_600)?;
+        insert_int(
+            &mut map,
+            "internalQueryExecMaxBlockingSortBytes",
+            104_857_600,
+        )?;
         insert_bool(&mut map, "failIndexKeyTooLong", true)?;
         insert_int(&mut map, "slowOpThresholdMs", 100)?;
         insert_float(&mut map, "slowOpSampleRate", 1.0)?;
@@ -353,11 +361,7 @@ impl ConnectionContext {
 
     /// Typed DB accessor -- downcasts `local_client` to `RustLocalClient` and
     /// calls `get_db` directly, bypassing Python method dispatch.
-    pub(crate) fn get_db_typed(
-        &self,
-        py: Python<'_>,
-        db_name: &str,
-    ) -> PyResult<Py<RustLocalDB>> {
+    pub(crate) fn get_db_typed(&self, py: Python<'_>, db_name: &str) -> PyResult<Py<RustLocalDB>> {
         let mut dbs = self.dbs.lock();
         if let Some(db) = dbs.get(db_name) {
             return Ok(db.clone_ref(py));
@@ -412,7 +416,11 @@ impl ConnectionContext {
     ) -> PyResult<Self> {
         let sr = match session_registry {
             Some(s) => s.clone().unbind(),
-            None => Py::new(py, SessionRegistry::new(30, crate::wire_sessions::MAX_SESSIONS))?.into_any(),
+            None => Py::new(
+                py,
+                SessionRegistry::new(30, crate::wire_sessions::MAX_SESSIONS),
+            )?
+            .into_any(),
         };
         let ot = match op_tracker {
             Some(o) => o.clone().unbind(),
@@ -432,7 +440,10 @@ impl ConnectionContext {
         };
         let lb = match log_buffer {
             Some(l) => l.clone().unbind(),
-            None => crate::cached_modules::smongo_wire_context(py)?.getattr("LogBuffer")?.call0()?.unbind(),
+            None => crate::cached_modules::smongo_wire_context(py)?
+                .getattr("LogBuffer")?
+                .call0()?
+                .unbind(),
         };
         let cc = match conn_counter {
             Some(c) => c.clone().unbind(),
@@ -448,7 +459,9 @@ impl ConnectionContext {
             connection_id,
             address: address.clone().unbind(),
             cursor_registry: cursor_registry.clone().unbind(),
-            sync_mgr: sync_mgr.map(|s| s.clone().unbind()).unwrap_or_else(|| py.None()),
+            sync_mgr: sync_mgr
+                .map(|s| s.clone().unbind())
+                .unwrap_or_else(|| py.None()),
             dbs: Mutex::new(HashMap::new()),
             compressor_id: py.None(),
             session_registry: sr,
@@ -506,8 +519,15 @@ impl ConnectionContext {
         Ok(self.get_db_typed(py, db_name)?.into_any())
     }
 
-    fn get_collection(&self, py: Python<'_>, db_name: &str, coll_name: &str) -> PyResult<Py<PyAny>> {
-        Ok(self.get_collection_typed(py, db_name, coll_name)?.into_any())
+    fn get_collection(
+        &self,
+        py: Python<'_>,
+        db_name: &str,
+        coll_name: &str,
+    ) -> PyResult<Py<PyAny>> {
+        Ok(self
+            .get_collection_typed(py, db_name, coll_name)?
+            .into_any())
     }
 
     fn list_known_dbs(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
@@ -537,7 +557,8 @@ impl ConnectionContext {
         let storage_txn = if let Ok(rs_txn) = RustTransactionSession::new(py, &conn) {
             Py::new(py, rs_txn)?.into_any()
         } else {
-            let cls = crate::cached_modules::smongo_storage_txn(py)?.getattr("TransactionSession")?;
+            let cls =
+                crate::cached_modules::smongo_storage_txn(py)?.getattr("TransactionSession")?;
             cls.call1((&conn,))?.unbind()
         };
         storage_txn.bind(py).call_method0("activate")?;
@@ -575,10 +596,10 @@ impl ConnectionContext {
             Some(t) => {
                 let bound = t.bind(py);
                 let st: &Bound<'_, SessionTransaction> = bound.cast()?;
-                crate::wire_transactions::commit_active_transaction(py, &lc, Some(st))?;
+                crate::wire_transactions::commit_active_transaction(py, lc, Some(st))?;
             }
             None => {
-                crate::wire_transactions::commit_active_transaction(py, &lc, None)?;
+                crate::wire_transactions::commit_active_transaction(py, lc, None)?;
             }
         }
         Ok(())

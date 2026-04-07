@@ -8,9 +8,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from smongo._smongo_core import facet_stage  # noqa: F401
+from smongo._smongo_core import facet_stage
 
 from .._types import CollectionGetter, Document
+
+__all__ = [
+    "_OUT_BATCH_SIZE",
+    "facet_stage",
+    "merge_stage",
+    "out_stage",
+]
 
 _OUT_BATCH_SIZE = 1_000
 

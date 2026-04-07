@@ -47,11 +47,7 @@ pub fn error_response<'py>(
 }
 
 #[pyfunction]
-pub fn make_error<'py>(
-    py: Python<'py>,
-    name: &str,
-    message: &str,
-) -> PyResult<Bound<'py, PyDict>> {
+pub fn make_error<'py>(py: Python<'py>, name: &str, message: &str) -> PyResult<Bound<'py, PyDict>> {
     let (code, code_name) = lookup_error(name);
     error_response(py, code, code_name, message)
 }

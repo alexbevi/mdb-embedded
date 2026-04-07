@@ -50,14 +50,16 @@ def generate_readings(device: dict, hours: int = 6) -> list[dict]:
             ts = base + timedelta(hours=hour, minutes=minute)
             diurnal = 2.0 * math.sin((hour + 6) * math.pi / 12)
             noise = (hash(f"{device['node_id']}_{hour}_{minute}") % 100 - 50) / 100.0
-            readings.append({
-                "device_id": device["node_id"],
-                "facility": device["facility"],
-                "timestamp": ts.isoformat(),
-                "temp_c": round(device["base_temp"] + diurnal + noise, 2),
-                "humidity_pct": round(50 + (hash(f"h_{hour}_{minute}") % 20 - 10), 1),
-                "_lastModified": time.time(),
-            })
+            readings.append(
+                {
+                    "device_id": device["node_id"],
+                    "facility": device["facility"],
+                    "timestamp": ts.isoformat(),
+                    "temp_c": round(device["base_temp"] + diurnal + noise, 2),
+                    "humidity_pct": round(50 + (hash(f"h_{hour}_{minute}") % 20 - 10), 1),
+                    "_lastModified": time.time(),
+                }
+            )
     return readings
 
 
@@ -127,9 +129,7 @@ def main() -> None:
         print(f"\n   Central hub total: {remote_total} readings")
 
         for dev in DEVICES:
-            count = central[DB_NAME]["readings"].count_documents(
-                {"device_id": dev["node_id"]}
-            )
+            count = central[DB_NAME]["readings"].count_documents({"device_id": dev["node_id"]})
             print(f"   {dev['node_id']:25s}  {count} docs on central")
 
         # -- 4. Verify isolation: pull doesn't cross-pollinate ---------------
@@ -151,10 +151,12 @@ def main() -> None:
 
         central[DB_NAME]["events"].drop()
         now = time.time()
-        central[DB_NAME]["events"].insert_many([
-            {"_id": "old_event", "msg": "ancient", "_lastModified": now - 86400 * 30},
-            {"_id": "new_event", "msg": "recent", "_lastModified": now - 3600},
-        ])
+        central[DB_NAME]["events"].insert_many(
+            [
+                {"_id": "old_event", "msg": "ancient", "_lastModified": now - 86400 * 30},
+                {"_id": "new_event", "msg": "recent", "_lastModified": now - 3600},
+            ]
+        )
 
         tw_tmp = tempfile.mkdtemp(prefix="smongo_timewin_")
         tmp_dirs.append(tw_tmp)
@@ -188,8 +190,8 @@ def main() -> None:
         print("=" * 64)
         print(f"\n  Devices:           {len(DEVICES)}")
         print(f"  Central hub docs:  {remote_total}")
-        print("  Sync rules:        {{\"device_id\": \"$$NODE_ID\"}}")
-        print("  Time-window rule:  {{\"_lastModified\": {{\"$gt\": \"$$WINDOW_START\"}}}}")
+        print('  Sync rules:        {{"device_id": "$$NODE_ID"}}')
+        print('  Time-window rule:  {{"_lastModified": {{"$gt": "$$WINDOW_START"}}}}')
         print("\n  Each device wrote locally, pushed only its own data,")
         print("  and pulled only its own data back. Same MQL everywhere.")
         print("  No separate sync DSL. No translation layer.\n")

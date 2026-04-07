@@ -48,7 +48,9 @@ import tempfile
 import time
 
 import numpy as np
-from smongo import MongoClient as SmongoClient, WireServer
+
+from smongo import MongoClient as SmongoClient
+from smongo import WireServer
 
 PORT = 27017
 DB_PATH = os.path.join(tempfile.gettempdir(), "smongo_compass_demo")
@@ -62,20 +64,118 @@ def seed_data(db_path: str) -> None:
     # ── Employees ──────────────────────────────────────────────
     employees = db["employees"]
     employees.delete_many({})
-    employees.insert_many([
-        {"name": "Alice Chen",     "age": 34, "city": "New York",    "dept": "engineering", "salary": 145000, "skills": ["Python", "Rust", "MongoDB"],           "level": "senior"},
-        {"name": "Bob Martinez",   "age": 28, "city": "San Francisco","dept": "engineering", "salary": 128000, "skills": ["JavaScript", "React", "Node.js"],      "level": "mid"},
-        {"name": "Charlie Park",   "age": 40, "city": "New York",    "dept": "management",  "salary": 175000, "skills": ["Leadership", "Strategy"],              "level": "director"},
-        {"name": "Diana Okafor",   "age": 25, "city": "Los Angeles", "dept": "design",      "salary":  98000, "skills": ["Figma", "CSS", "User Research"],       "level": "junior"},
-        {"name": "Eve Johnson",    "age": 31, "city": "San Francisco","dept": "engineering", "salary": 155000, "skills": ["Python", "Machine Learning", "PyTorch"],"level": "senior"},
-        {"name": "Frank Kim",      "age": 36, "city": "Chicago",     "dept": "engineering", "salary": 140000, "skills": ["Go", "Kubernetes", "gRPC"],            "level": "senior"},
-        {"name": "Grace Liu",      "age": 29, "city": "New York",    "dept": "data",        "salary": 135000, "skills": ["Python", "SQL", "Spark"],              "level": "mid"},
-        {"name": "Hank Williams",  "age": 45, "city": "San Francisco","dept": "management",  "salary": 190000, "skills": ["Leadership", "Finance", "M&A"],       "level": "vp"},
-        {"name": "Ivy Patel",      "age": 27, "city": "Los Angeles", "dept": "design",      "salary": 105000, "skills": ["Figma", "HTML", "Prototyping"],        "level": "mid"},
-        {"name": "Jack Torres",    "age": 33, "city": "New York",    "dept": "engineering", "salary": 142000, "skills": ["Java", "Spring", "PostgreSQL"],        "level": "senior"},
-        {"name": "Karen Singh",    "age": 30, "city": "Chicago",     "dept": "data",        "salary": 130000, "skills": ["Python", "TensorFlow", "SQL"],         "level": "mid"},
-        {"name": "Leo Nakamura",   "age": 38, "city": "San Francisco","dept": "engineering", "salary": 165000, "skills": ["Rust", "C++", "Systems"],             "level": "staff"},
-    ])
+    employees.insert_many(
+        [
+            {
+                "name": "Alice Chen",
+                "age": 34,
+                "city": "New York",
+                "dept": "engineering",
+                "salary": 145000,
+                "skills": ["Python", "Rust", "MongoDB"],
+                "level": "senior",
+            },
+            {
+                "name": "Bob Martinez",
+                "age": 28,
+                "city": "San Francisco",
+                "dept": "engineering",
+                "salary": 128000,
+                "skills": ["JavaScript", "React", "Node.js"],
+                "level": "mid",
+            },
+            {
+                "name": "Charlie Park",
+                "age": 40,
+                "city": "New York",
+                "dept": "management",
+                "salary": 175000,
+                "skills": ["Leadership", "Strategy"],
+                "level": "director",
+            },
+            {
+                "name": "Diana Okafor",
+                "age": 25,
+                "city": "Los Angeles",
+                "dept": "design",
+                "salary": 98000,
+                "skills": ["Figma", "CSS", "User Research"],
+                "level": "junior",
+            },
+            {
+                "name": "Eve Johnson",
+                "age": 31,
+                "city": "San Francisco",
+                "dept": "engineering",
+                "salary": 155000,
+                "skills": ["Python", "Machine Learning", "PyTorch"],
+                "level": "senior",
+            },
+            {
+                "name": "Frank Kim",
+                "age": 36,
+                "city": "Chicago",
+                "dept": "engineering",
+                "salary": 140000,
+                "skills": ["Go", "Kubernetes", "gRPC"],
+                "level": "senior",
+            },
+            {
+                "name": "Grace Liu",
+                "age": 29,
+                "city": "New York",
+                "dept": "data",
+                "salary": 135000,
+                "skills": ["Python", "SQL", "Spark"],
+                "level": "mid",
+            },
+            {
+                "name": "Hank Williams",
+                "age": 45,
+                "city": "San Francisco",
+                "dept": "management",
+                "salary": 190000,
+                "skills": ["Leadership", "Finance", "M&A"],
+                "level": "vp",
+            },
+            {
+                "name": "Ivy Patel",
+                "age": 27,
+                "city": "Los Angeles",
+                "dept": "design",
+                "salary": 105000,
+                "skills": ["Figma", "HTML", "Prototyping"],
+                "level": "mid",
+            },
+            {
+                "name": "Jack Torres",
+                "age": 33,
+                "city": "New York",
+                "dept": "engineering",
+                "salary": 142000,
+                "skills": ["Java", "Spring", "PostgreSQL"],
+                "level": "senior",
+            },
+            {
+                "name": "Karen Singh",
+                "age": 30,
+                "city": "Chicago",
+                "dept": "data",
+                "salary": 130000,
+                "skills": ["Python", "TensorFlow", "SQL"],
+                "level": "mid",
+            },
+            {
+                "name": "Leo Nakamura",
+                "age": 38,
+                "city": "San Francisco",
+                "dept": "engineering",
+                "salary": 165000,
+                "skills": ["Rust", "C++", "Systems"],
+                "level": "staff",
+            },
+        ]
+    )
     employees.create_index([("dept", 1)])
     employees.create_index([("city", 1), ("salary", -1)])
     employees.create_index([("level", 1)])
@@ -85,12 +185,24 @@ def seed_data(db_path: str) -> None:
     # ── Departments ────────────────────────────────────────────
     departments = db["departments"]
     departments.delete_many({})
-    departments.insert_many([
-        {"_id": "engineering", "label": "Engineering",  "budget": 2_500_000, "head": "Charlie Park"},
-        {"_id": "design",      "label": "Design",       "budget":   800_000, "head": "Ivy Patel"},
-        {"_id": "data",        "label": "Data Science",  "budget": 1_200_000, "head": "Grace Liu"},
-        {"_id": "management",  "label": "Management",    "budget":   500_000, "head": "Hank Williams"},
-    ])
+    departments.insert_many(
+        [
+            {
+                "_id": "engineering",
+                "label": "Engineering",
+                "budget": 2_500_000,
+                "head": "Charlie Park",
+            },
+            {"_id": "design", "label": "Design", "budget": 800_000, "head": "Ivy Patel"},
+            {"_id": "data", "label": "Data Science", "budget": 1_200_000, "head": "Grace Liu"},
+            {
+                "_id": "management",
+                "label": "Management",
+                "budget": 500_000,
+                "head": "Hank Williams",
+            },
+        ]
+    )
     print(f"   departments: {departments.count_documents({})} docs")
 
     # ── Knowledge base with vector embeddings ──────────────────
@@ -108,10 +220,16 @@ def seed_data(db_path: str) -> None:
     ]
 
     np.random.seed(42)
-    knowledge.insert_many([
-        {"text": t, "embedding": (np.random.rand(32).astype(np.float32) / 3).tolist(), "chunk_id": i}
-        for i, t in enumerate(texts)
-    ])
+    knowledge.insert_many(
+        [
+            {
+                "text": t,
+                "embedding": (np.random.rand(32).astype(np.float32) / 3).tolist(),
+                "chunk_id": i,
+            }
+            for i, t in enumerate(texts)
+        ]
+    )
     print(f"   knowledge_base: {knowledge.count_documents({})} docs with 32-dim embeddings")
 
     native.close()
@@ -149,7 +267,7 @@ def main() -> None:
     print(f"║     mongosh mongodb://localhost:{PORT}                       ║")
     print("║                                                              ║")
     print("║   PYMONGO:                                                   ║")
-    print(f"║     MongoClient(\"mongodb://localhost:{PORT}\")                ║")
+    print(f'║     MongoClient("mongodb://localhost:{PORT}")                ║')
     print("║                                                              ║")
     print("║   Press Ctrl+C to stop the server.                           ║")
     print("║                                                              ║")

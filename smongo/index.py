@@ -36,6 +36,19 @@ from ._compat import WTError as _WTError
 from ._types import Document, Filter
 from .query import compile_query, get_value
 
+__all__ = [
+    "DuplicateKeyError",
+    "IndexDef",
+    "IndexManager",
+    "_flatten_doc",
+    "_hash_value",
+    "_invert_encoded",
+    "_sortable_encode",
+    "_tokenize",
+    "encode_index_key",
+    "encode_index_key_prefix",
+]
+
 # ------------------------------------------------------------------
 # Index definition
 # ------------------------------------------------------------------

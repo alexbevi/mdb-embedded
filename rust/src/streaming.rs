@@ -138,7 +138,9 @@ impl RustStreamingCursor {
 
         match plan.plan_type {
             crate::query_planner::PlanType::PkLookup => self.init_pk_lookup(py, query)?,
-            crate::query_planner::PlanType::IndexScan => self.init_index_scan_typed(py, query, &plan)?,
+            crate::query_planner::PlanType::IndexScan => {
+                self.init_index_scan_typed(py, query, &plan)?
+            }
             crate::query_planner::PlanType::OrUnion if plan.subplans.is_some() => {
                 self.init_or_union_typed(py, query, &plan)?;
             }
@@ -147,11 +149,7 @@ impl RustStreamingCursor {
         Ok(())
     }
 
-    fn init_pk_lookup(
-        &mut self,
-        py: Python<'_>,
-        query: &Bound<'_, PyDict>,
-    ) -> PyResult<()> {
+    fn init_pk_lookup(&mut self, py: Python<'_>, query: &Bound<'_, PyDict>) -> PyResult<()> {
         let raw_id = match query.get_item("_id")? {
             Some(v) => v,
             None => {
@@ -223,32 +221,42 @@ impl RustStreamingCursor {
                     if let Ok(cd) = cond.cast::<PyDict>() {
                         if let Some(in_vals) = cd.get_item("$in")? {
                             self.planner.bind(py).borrow().execute_in_scan(
-                                py, idx_name, &in_vals, self.session_raw,
+                                py,
+                                idx_name,
+                                &in_vals,
+                                self.session_raw,
                             )?
                         } else {
                             self.planner.bind(py).borrow().execute_index_scan(
-                                py, plan, self.session_raw,
+                                py,
+                                plan,
+                                self.session_raw,
                             )?
                         }
                     } else {
                         self.planner.bind(py).borrow().execute_index_scan(
-                            py, plan, self.session_raw,
+                            py,
+                            plan,
+                            self.session_raw,
                         )?
                     }
                 } else {
-                    self.planner.bind(py).borrow().execute_index_scan(
-                        py, plan, self.session_raw,
-                    )?
+                    self.planner
+                        .bind(py)
+                        .borrow()
+                        .execute_index_scan(py, plan, self.session_raw)?
                 }
             } else {
-                self.planner.bind(py).borrow().execute_index_scan(
-                    py, plan, self.session_raw,
-                )?
+                self.planner
+                    .bind(py)
+                    .borrow()
+                    .execute_index_scan(py, plan, self.session_raw)?
             }
         } else {
-            self.planner.bind(py).borrow().execute_index_scan(
-                py, plan, self.session_raw,
-            )?
+            self.planner
+                .bind(py)
+                .borrow()
+                .execute_index_scan(py, plan, self.session_raw)?
         };
 
         let session = self.borrow_session()?;
@@ -299,7 +307,9 @@ impl RustStreamingCursor {
                 }
                 crate::query_planner::PlanType::IndexScan => {
                     let scan_ids = self.planner.bind(py).borrow().execute_index_scan(
-                        py, sub, self.session_raw,
+                        py,
+                        sub,
+                        self.session_raw,
                     )?;
                     for sid in scan_ids {
                         if seen.insert(sid.clone()) {

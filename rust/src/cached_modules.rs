@@ -11,7 +11,7 @@
 use std::sync::OnceLock;
 
 use pyo3::prelude::*;
-use pyo3::sync::{PyOnceLock, OnceLockExt};
+use pyo3::sync::{OnceLockExt, PyOnceLock};
 use pyo3::types::PyModule;
 
 macro_rules! cached_module {
@@ -19,9 +19,7 @@ macro_rules! cached_module {
         static $lock: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
 
         pub fn $fn_name(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
-            let m = $lock.get_or_try_init(py, || {
-                Ok::<_, PyErr>(py.import($module)?.unbind())
-            })?;
+            let m = $lock.get_or_try_init(py, || Ok::<_, PyErr>(py.import($module)?.unbind()))?;
             Ok(m.bind(py).clone())
         }
     };
@@ -78,16 +76,37 @@ cached_module!(BSON_JSON_UTIL, bson_json_util, "bson.json_util");
 
 // ── Cached class/function attributes (resolved once, atomic thereafter) ──
 cached_attr!(BSON_OBJECTID_CLS, bson_objectid_cls, bson_mod, "ObjectId");
-cached_attr!(BSON_DECIMAL128_CLS, bson_decimal128_cls, bson_mod, "Decimal128");
+cached_attr!(
+    BSON_DECIMAL128_CLS,
+    bson_decimal128_cls,
+    bson_mod,
+    "Decimal128"
+);
 cached_attr!(BSON_REGEX_CLS, bson_regex_cls, bson_mod, "Regex");
-cached_attr!(BSON_TIMESTAMP_CLS, bson_timestamp_cls, bson_mod, "Timestamp");
+cached_attr!(
+    BSON_TIMESTAMP_CLS,
+    bson_timestamp_cls,
+    bson_mod,
+    "Timestamp"
+);
 cached_attr!(BSON_BINARY_CLS, bson_binary_cls, bson_mod, "Binary");
 cached_attr!(BSON_INT64_CLS, bson_int64_cls, bson_mod, "Int64");
 cached_attr!(BUILTINS_INT, builtins_int, builtins, "int");
 cached_attr!(BUILTINS_FLOAT, builtins_float, builtins, "float");
 cached_attr!(BUILTINS_ROUND, builtins_round, builtins, "round");
-cached_attr!(DATETIME_DATETIME_CLS, datetime_datetime_cls, datetime, "datetime");
-cached_nested_attr!(DATETIME_TZ_UTC, datetime_tz_utc, datetime, "timezone", "utc");
+cached_attr!(
+    DATETIME_DATETIME_CLS,
+    datetime_datetime_cls,
+    datetime,
+    "datetime"
+);
+cached_nested_attr!(
+    DATETIME_TZ_UTC,
+    datetime_tz_utc,
+    datetime,
+    "timezone",
+    "utc"
+);
 
 // ── Cached system info (platform/os -- static for process lifetime) ──
 
@@ -111,18 +130,30 @@ pub fn system_info(py: Python<'_>) -> PyResult<&'static CachedSystemInfo> {
 
         let (system, release, machine, node, platform_name) = match &platform {
             Some(p) => (
-                p.call_method0("system").and_then(|v| v.extract()).unwrap_or_default(),
-                p.call_method0("release").and_then(|v| v.extract()).unwrap_or_default(),
-                p.call_method0("machine").and_then(|v| v.extract()).unwrap_or_default(),
-                p.call_method0("node").and_then(|v| v.extract()).unwrap_or_default(),
-                p.call_method0("platform").and_then(|v| v.extract()).unwrap_or_default(),
+                p.call_method0("system")
+                    .and_then(|v| v.extract())
+                    .unwrap_or_default(),
+                p.call_method0("release")
+                    .and_then(|v| v.extract())
+                    .unwrap_or_default(),
+                p.call_method0("machine")
+                    .and_then(|v| v.extract())
+                    .unwrap_or_default(),
+                p.call_method0("node")
+                    .and_then(|v| v.extract())
+                    .unwrap_or_default(),
+                p.call_method0("platform")
+                    .and_then(|v| v.extract())
+                    .unwrap_or_default(),
             ),
             None => Default::default(),
         };
 
         let (num_cores, page_size) = match &os {
             Some(o) => (
-                o.call_method0("cpu_count").and_then(|v| v.extract()).unwrap_or(1),
+                o.call_method0("cpu_count")
+                    .and_then(|v| v.extract())
+                    .unwrap_or(1),
                 if o.hasattr("sysconf").unwrap_or(false) {
                     o.call_method1("sysconf", ("SC_PAGE_SIZE",))
                         .and_then(|v| v.extract())
@@ -162,13 +193,41 @@ pub fn cached_pid(py: Python<'_>) -> PyResult<i64> {
 }
 
 // ── smongo internals ─────────────────────────────────────────────────
-cached_module!(SMONGO_AGG_STAGES, smongo_agg_stages, "smongo.aggregation.stages");
-cached_module!(SMONGO_AGG_CONSTANTS, smongo_agg_constants, "smongo.aggregation.constants");
-cached_module!(SMONGO_AGG_OUTPUT, smongo_agg_output, "smongo.aggregation.output");
-cached_module!(SMONGO_AGG_JOINS, smongo_agg_joins, "smongo.aggregation.joins");
-cached_module!(SMONGO_AGG_VECTOR, smongo_agg_vector, "smongo.aggregation.vector");
+cached_module!(
+    SMONGO_AGG_STAGES,
+    smongo_agg_stages,
+    "smongo.aggregation.stages"
+);
+cached_module!(
+    SMONGO_AGG_CONSTANTS,
+    smongo_agg_constants,
+    "smongo.aggregation.constants"
+);
+cached_module!(
+    SMONGO_AGG_OUTPUT,
+    smongo_agg_output,
+    "smongo.aggregation.output"
+);
+cached_module!(
+    SMONGO_AGG_JOINS,
+    smongo_agg_joins,
+    "smongo.aggregation.joins"
+);
+cached_module!(
+    SMONGO_AGG_VECTOR,
+    smongo_agg_vector,
+    "smongo.aggregation.vector"
+);
 cached_module!(SMONGO_AGG_GEO, smongo_agg_geo, "smongo.aggregation.geo");
-cached_module!(SMONGO_WIRE_CONTEXT, smongo_wire_context, "smongo.wire.context");
+cached_module!(
+    SMONGO_WIRE_CONTEXT,
+    smongo_wire_context,
+    "smongo.wire.context"
+);
 cached_module!(SMONGO_AUDIT, smongo_audit, "smongo.audit");
 cached_module!(SMONGO_OBJECTID, smongo_objectid, "smongo.objectid");
-cached_module!(SMONGO_STORAGE_TXN, smongo_storage_txn, "smongo.storage.transaction");
+cached_module!(
+    SMONGO_STORAGE_TXN,
+    smongo_storage_txn,
+    "smongo.storage.transaction"
+);

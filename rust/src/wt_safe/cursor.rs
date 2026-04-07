@@ -4,9 +4,9 @@ use std::os::raw::{c_char, c_int, c_void};
 use std::ptr;
 
 use wiredtiger_sys::{
-    WT_CURSOR, WT_DUPLICATE_KEY, WT_ITEM, WT_NOTFOUND,
-    wt_shim_get_key_str, wt_shim_get_value_raw, wt_shim_get_value_str,
-    wt_shim_set_key_str, wt_shim_set_value_raw, wt_shim_set_value_str,
+    wt_shim_get_key_str, wt_shim_get_value_raw, wt_shim_get_value_str, wt_shim_set_key_str,
+    wt_shim_set_value_raw, wt_shim_set_value_str, WT_CURSOR, WT_DUPLICATE_KEY, WT_ITEM,
+    WT_NOTFOUND,
 };
 
 use super::{check, WtError, WtResult};
@@ -116,8 +116,10 @@ impl WtCursor {
     // -- cursor navigation --
 
     pub fn search(&self) -> WtResult<()> {
-        let search_fn = unsafe { (*self.raw).search }
-            .ok_or_else(|| WtError { code: -1, message: "search vtable null".into() })?;
+        let search_fn = unsafe { (*self.raw).search }.ok_or_else(|| WtError {
+            code: -1,
+            message: "search vtable null".into(),
+        })?;
         // SAFETY: raw is a valid WT_CURSOR with a key set.
         let rc = unsafe { search_fn(self.raw) };
         check(rc)
@@ -125,8 +127,10 @@ impl WtCursor {
 
     /// Returns the `exact` value: 0 = exact match, <0 = positioned before, >0 = positioned after.
     pub fn search_near(&self) -> WtResult<c_int> {
-        let search_near_fn = unsafe { (*self.raw).search_near }
-            .ok_or_else(|| WtError { code: -1, message: "search_near vtable null".into() })?;
+        let search_near_fn = unsafe { (*self.raw).search_near }.ok_or_else(|| WtError {
+            code: -1,
+            message: "search_near vtable null".into(),
+        })?;
         let mut exact: c_int = 0;
         // SAFETY: raw is a valid WT_CURSOR with a key set.
         let rc = unsafe { search_near_fn(self.raw, &mut exact) };
@@ -135,16 +139,20 @@ impl WtCursor {
     }
 
     pub fn next(&self) -> WtResult<()> {
-        let next_fn = unsafe { (*self.raw).next }
-            .ok_or_else(|| WtError { code: -1, message: "next vtable null".into() })?;
+        let next_fn = unsafe { (*self.raw).next }.ok_or_else(|| WtError {
+            code: -1,
+            message: "next vtable null".into(),
+        })?;
         // SAFETY: raw is a valid WT_CURSOR.
         let rc = unsafe { next_fn(self.raw) };
         check(rc)
     }
 
     pub fn prev(&self) -> WtResult<()> {
-        let prev_fn = unsafe { (*self.raw).prev }
-            .ok_or_else(|| WtError { code: -1, message: "prev vtable null".into() })?;
+        let prev_fn = unsafe { (*self.raw).prev }.ok_or_else(|| WtError {
+            code: -1,
+            message: "prev vtable null".into(),
+        })?;
         // SAFETY: raw is a valid WT_CURSOR.
         let rc = unsafe { prev_fn(self.raw) };
         check(rc)
@@ -166,32 +174,40 @@ impl WtCursor {
     }
 
     pub fn insert(&self) -> WtResult<()> {
-        let insert_fn = unsafe { (*self.raw).insert }
-            .ok_or_else(|| WtError { code: -1, message: "insert vtable null".into() })?;
+        let insert_fn = unsafe { (*self.raw).insert }.ok_or_else(|| WtError {
+            code: -1,
+            message: "insert vtable null".into(),
+        })?;
         // SAFETY: raw is a valid WT_CURSOR with key/value set.
         let rc = unsafe { insert_fn(self.raw) };
         check(rc)
     }
 
     pub fn update(&self) -> WtResult<()> {
-        let update_fn = unsafe { (*self.raw).update }
-            .ok_or_else(|| WtError { code: -1, message: "update vtable null".into() })?;
+        let update_fn = unsafe { (*self.raw).update }.ok_or_else(|| WtError {
+            code: -1,
+            message: "update vtable null".into(),
+        })?;
         // SAFETY: raw is a valid WT_CURSOR with key/value set.
         let rc = unsafe { update_fn(self.raw) };
         check(rc)
     }
 
     pub fn remove(&self) -> WtResult<()> {
-        let remove_fn = unsafe { (*self.raw).remove }
-            .ok_or_else(|| WtError { code: -1, message: "remove vtable null".into() })?;
+        let remove_fn = unsafe { (*self.raw).remove }.ok_or_else(|| WtError {
+            code: -1,
+            message: "remove vtable null".into(),
+        })?;
         // SAFETY: raw is a valid WT_CURSOR with key set.
         let rc = unsafe { remove_fn(self.raw) };
         check(rc)
     }
 
     pub fn reset(&self) -> WtResult<()> {
-        let reset_fn = unsafe { (*self.raw).reset }
-            .ok_or_else(|| WtError { code: -1, message: "reset vtable null".into() })?;
+        let reset_fn = unsafe { (*self.raw).reset }.ok_or_else(|| WtError {
+            code: -1,
+            message: "reset vtable null".into(),
+        })?;
         // SAFETY: raw is a valid WT_CURSOR.
         let rc = unsafe { reset_fn(self.raw) };
         check(rc)
@@ -200,8 +216,10 @@ impl WtCursor {
     /// Close the cursor. Called automatically on drop.
     pub fn close(&mut self) -> WtResult<()> {
         if !self.raw.is_null() {
-            let close_fn = unsafe { (*self.raw).close }
-                .ok_or_else(|| WtError { code: -1, message: "cursor close vtable null".into() })?;
+            let close_fn = unsafe { (*self.raw).close }.ok_or_else(|| WtError {
+                code: -1,
+                message: "cursor close vtable null".into(),
+            })?;
             // SAFETY: raw is a valid WT_CURSOR; after close the pointer is invalidated.
             let rc = unsafe { close_fn(self.raw) };
             self.raw = ptr::null_mut();

@@ -186,7 +186,9 @@ pub fn rs_dispatch(
         let c = ctx_typed.borrow();
         (c.op_tracker.clone_ref(py), c.connection_id)
     };
-    let op_id = tracker.bind(py).call_method1("start_op", (op_kind, &ns, command_doc, conn_id))?;
+    let op_id = tracker
+        .bind(py)
+        .call_method1("start_op", (op_kind, &ns, command_doc, conn_id))?;
     let t0 = Instant::now();
 
     // Call handler with exception mapping -- Rust handlers take priority.
@@ -240,7 +242,9 @@ pub fn rs_dispatch(
     let top_bucket = top_bucket_for(&cmd_name);
     {
         let top_stats = ctx_typed.borrow().top_stats.clone_ref(py);
-        let _ = top_stats.bind(py).call_method1("record", (&ns, top_bucket, elapsed_us));
+        let _ = top_stats
+            .bind(py)
+            .call_method1("record", (&ns, top_bucket, elapsed_us));
     }
     {
         let (profiler, plan_summary) = {
@@ -250,7 +254,10 @@ pub fn rs_dispatch(
         let kwargs = PyDict::new(py);
         let _ = kwargs.set_item("command", command_doc);
         let _ = kwargs.set_item("plan_summary", &plan_summary);
-        let _ = profiler.bind(py).call_method("log", (op_kind, &ns, elapsed_us / 1000), Some(&kwargs));
+        let _ =
+            profiler
+                .bind(py)
+                .call_method("log", (op_kind, &ns, elapsed_us / 1000), Some(&kwargs));
     }
     ctx_typed.borrow_mut().last_plan_summary = String::new();
 
@@ -260,7 +267,10 @@ pub fn rs_dispatch(
     let audit_fallback;
     let audit_ref = match audit_mod {
         Some(m) => m,
-        None => { audit_fallback = crate::cached_modules::smongo_audit(py)?.into_any(); &audit_fallback }
+        None => {
+            audit_fallback = crate::cached_modules::smongo_audit(py)?.into_any();
+            &audit_fallback
+        }
     };
     let audit_enabled: bool = audit_ref.call_method0("is_enabled")?.extract()?;
     if audit_enabled {
@@ -270,7 +280,8 @@ pub fn rs_dispatch(
             .lock()
             .clone()
             .unwrap_or_default();
-        let db_name: String = command_doc.get_item("$db")?
+        let db_name: String = command_doc
+            .get_item("$db")?
             .map(|v| v.extract::<String>().unwrap_or_default())
             .unwrap_or_default();
         let addr = ctx_typed.borrow().address.clone_ref(py);
@@ -285,7 +296,15 @@ pub fn rs_dispatch(
         let duration_ms = elapsed_us as f64 / 1000.0;
         audit_ref.call_method1(
             "log_command",
-            (user_str, db_name, &cmd_name, &ns, remote_str, success, duration_ms),
+            (
+                user_str,
+                db_name,
+                &cmd_name,
+                &ns,
+                remote_str,
+                success,
+                duration_ms,
+            ),
         )?;
     }
 

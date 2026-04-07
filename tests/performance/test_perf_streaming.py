@@ -12,8 +12,8 @@ import random
 
 import pytest
 
-from smongo.aggregation import Cursor
 from smongo._smongo_core import RustLocalClient
+from smongo.aggregation import Cursor
 
 pytestmark = pytest.mark.performance
 

@@ -55,36 +55,34 @@ pub fn lookup_stage<'py>(
 ) -> PyResult<Bound<'py, PyList>> {
     let from_coll: Option<String> = spec.get_item("from")?.and_then(|v| v.extract().ok());
     let local_field: Option<String> = spec.get_item("localField")?.and_then(|v| v.extract().ok());
-    let foreign_field: Option<String> = spec.get_item("foreignField")?.and_then(|v| v.extract().ok());
+    let foreign_field: Option<String> = spec
+        .get_item("foreignField")?
+        .and_then(|v| v.extract().ok());
     let as_field: Option<String> = spec.get_item("as")?.and_then(|v| v.extract().ok());
 
-    let (from_coll, local_field, foreign_field, as_field) = match (
-        from_coll,
-        local_field,
-        foreign_field,
-        as_field,
-    ) {
-        (Some(fc), Some(lf), Some(ff), Some(af)) => (fc, lf, ff, af),
-        (fc, lf, ff, af) => {
-            let mut missing = Vec::new();
-            if fc.is_none() {
-                missing.push("from");
+    let (from_coll, local_field, foreign_field, as_field) =
+        match (from_coll, local_field, foreign_field, as_field) {
+            (Some(fc), Some(lf), Some(ff), Some(af)) => (fc, lf, ff, af),
+            (fc, lf, ff, af) => {
+                let mut missing = Vec::new();
+                if fc.is_none() {
+                    missing.push("from");
+                }
+                if lf.is_none() {
+                    missing.push("localField");
+                }
+                if ff.is_none() {
+                    missing.push("foreignField");
+                }
+                if af.is_none() {
+                    missing.push("as");
+                }
+                return Err(PyValueError::new_err(format!(
+                    "$lookup missing required fields: {}",
+                    missing.join(", ")
+                )));
             }
-            if lf.is_none() {
-                missing.push("localField");
-            }
-            if ff.is_none() {
-                missing.push("foreignField");
-            }
-            if af.is_none() {
-                missing.push("as");
-            }
-            return Err(PyValueError::new_err(format!(
-                "$lookup missing required fields: {}",
-                missing.join(", ")
-            )));
-        }
-    };
+        };
 
     let foreign_coll = get_foreign_collection(py, collection_getter, &from_coll)?;
 
@@ -178,12 +176,8 @@ pub fn graph_lookup_stage<'py>(
         .get_item("as")?
         .ok_or_else(|| PyValueError::new_err("$graphLookup missing 'as'"))?
         .extract()?;
-    let max_depth: Option<usize> = spec
-        .get_item("maxDepth")?
-        .and_then(|v| v.extract().ok());
-    let depth_field: Option<String> = spec
-        .get_item("depthField")?
-        .and_then(|v| v.extract().ok());
+    let max_depth: Option<usize> = spec.get_item("maxDepth")?.and_then(|v| v.extract().ok());
+    let depth_field: Option<String> = spec.get_item("depthField")?.and_then(|v| v.extract().ok());
     let restrict_search = spec.get_item("restrictSearchWithMatch")?;
 
     let foreign_coll = get_foreign_collection(py, collection_getter, &from_coll_name)?;
@@ -337,11 +331,17 @@ pub fn pipeline_lookup_stage<'py>(
         .get_item("as")?
         .ok_or_else(|| PyValueError::new_err("$lookup with pipeline requires 'as'"))?
         .extract()?;
-    let let_vars = spec.get_item("let")?.unwrap_or_else(|| PyDict::new(py).into_any());
-    let pipeline = spec.get_item("pipeline")?.unwrap_or_else(|| PyList::empty(py).into_any());
+    let let_vars = spec
+        .get_item("let")?
+        .unwrap_or_else(|| PyDict::new(py).into_any());
+    let pipeline = spec
+        .get_item("pipeline")?
+        .unwrap_or_else(|| PyList::empty(py).into_any());
 
-    let foreign_coll = get_foreign_collection(py, collection_getter, &from_coll_name)?
-        .ok_or_else(|| PyValueError::new_err("$lookup with pipeline requires a collection getter"))?;
+    let foreign_coll =
+        get_foreign_collection(py, collection_getter, &from_coll_name)?.ok_or_else(|| {
+            PyValueError::new_err("$lookup with pipeline requires a collection getter")
+        })?;
 
     let copy_mod = crate::cached_modules::copy_mod(py)?;
     let results = PyList::empty(py);

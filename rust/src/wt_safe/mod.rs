@@ -7,11 +7,11 @@
 //! and the storage engine (`storage_engine`, `local_collection`, etc.).
 
 mod connection;
-mod session;
 mod cursor;
+mod session;
 
-pub use connection::WtConnection;
 pub(crate) use connection::open_session_from_conn_ptr;
+pub use connection::WtConnection;
 pub use cursor::WtCursor;
 pub use session::WtSession;
 
@@ -101,9 +101,8 @@ mod tests {
     fn test_open_close_connection() {
         let lib = load_wt();
         let dir = temp_dir();
-        let mut conn =
-            WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create"))
-                .expect("failed to open connection");
+        let mut conn = WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create"))
+            .expect("failed to open connection");
         conn.close().expect("failed to close connection");
     }
 
@@ -112,8 +111,7 @@ mod tests {
         let lib = load_wt();
         let dir = temp_dir();
         let conn =
-            WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create"))
-                .expect("open");
+            WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create")).expect("open");
         let session = conn.open_session(None).expect("open_session");
         session
             .create("table:test", "key_format=S,value_format=S")
@@ -128,8 +126,7 @@ mod tests {
         let lib = load_wt();
         let dir = temp_dir();
         let conn =
-            WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create"))
-                .expect("open");
+            WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create")).expect("open");
         let session = conn.open_session(None).expect("open_session");
         session
             .create("table:oc", "key_format=S,value_format=S")
@@ -143,8 +140,7 @@ mod tests {
         let lib = load_wt();
         let dir = temp_dir();
         let conn =
-            WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create"))
-                .expect("open");
+            WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create")).expect("open");
         let session = conn.open_session(None).expect("open_session");
         session
             .create("table:kv", "key_format=S,value_format=S")
@@ -193,8 +189,7 @@ mod tests {
         let lib = load_wt();
         let dir = temp_dir();
         let conn =
-            WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create"))
-                .expect("open");
+            WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create")).expect("open");
         let session = conn.open_session(None).expect("open_session");
         session
             .create("table:sn", "key_format=S,value_format=S")
@@ -222,8 +217,7 @@ mod tests {
         let lib = load_wt();
         let dir = temp_dir();
         let conn =
-            WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create"))
-                .expect("open");
+            WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create")).expect("open");
         let session = conn.open_session(None).expect("open_session");
         session
             .create("table:ur", "key_format=S,value_format=S")
@@ -261,14 +255,15 @@ mod tests {
         let lib = load_wt();
         let dir = temp_dir();
         let conn =
-            WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create"))
-                .expect("open");
+            WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create")).expect("open");
         let session = conn.open_session(None).expect("open_session");
         session
             .create("table:prev", "key_format=S,value_format=S")
             .expect("create");
 
-        let mut cursor = session.open_cursor("table:prev", None).expect("open_cursor");
+        let mut cursor = session
+            .open_cursor("table:prev", None)
+            .expect("open_cursor");
         for (k, v) in &[("a", "1"), ("b", "2"), ("c", "3")] {
             cursor.set_key_str(k);
             cursor.set_value_str(v);
@@ -290,8 +285,7 @@ mod tests {
         let lib = load_wt();
         let dir = temp_dir();
         let conn =
-            WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create"))
-                .expect("open");
+            WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create")).expect("open");
         let session = conn.open_session(None).expect("open_session");
         session
             .create("table:raw", "key_format=S,value_format=u")
@@ -314,8 +308,7 @@ mod tests {
         let lib = load_wt();
         let dir = temp_dir();
         let conn =
-            WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create"))
-                .expect("open");
+            WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create")).expect("open");
         let session = conn.open_session(None).expect("open_session");
         session
             .create("table:txn", "key_format=S,value_format=S")
@@ -341,8 +334,7 @@ mod tests {
         let lib = load_wt();
         let dir = temp_dir();
         let conn =
-            WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create"))
-                .expect("open");
+            WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create")).expect("open");
         let session = conn.open_session(None).expect("open_session");
         session
             .create("table:rb", "key_format=S,value_format=S")
@@ -368,8 +360,7 @@ mod tests {
         let lib = load_wt();
         let dir = temp_dir();
         let conn =
-            WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create"))
-                .expect("open");
+            WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create")).expect("open");
         let session = conn.open_session(None).expect("open_session");
         session
             .create("table:cp", "key_format=S,value_format=S")
@@ -389,8 +380,7 @@ mod tests {
         let lib = load_wt();
         let dir = temp_dir();
         let conn =
-            WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create"))
-                .expect("open");
+            WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create")).expect("open");
         let session = conn.open_session(None).expect("open_session");
         session
             .create("table:vc", "key_format=S,value_format=S")
@@ -405,8 +395,7 @@ mod tests {
         let lib = load_wt();
         let dir = temp_dir();
         let conn =
-            WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create"))
-                .expect("open");
+            WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create")).expect("open");
         let session = conn.open_session(None).expect("open_session");
         session
             .create("table:rst", "key_format=S,value_format=S")
@@ -434,8 +423,7 @@ mod tests {
         let lib = load_wt();
         let dir = temp_dir();
         let conn =
-            WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create"))
-                .expect("open");
+            WtConnection::open(lib, dir.path().to_str().unwrap(), Some("create")).expect("open");
         let session = conn.open_session(None).expect("open_session");
         session
             .create("table:meta_test", "key_format=S,value_format=S")

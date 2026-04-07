@@ -46,7 +46,7 @@ fn to_group_key(py: Python<'_>, val: &Bound<'_, PyAny>) -> PyResult<String> {
     }
     let json_mod = crate::cached_modules::json_mod(py)?;
     let dumped: String = json_mod
-        .call_method1("dumps", (val, ))
+        .call_method1("dumps", (val,))
         .and_then(|r| r.extract())?;
     Ok(format!("j:{dumped}"))
 }
@@ -56,9 +56,10 @@ fn stage_parts<'py>(
     stage: &Bound<'py, PyAny>,
 ) -> PyResult<(String, Bound<'py, PyDict>, Bound<'py, PyAny>)> {
     let dict = stage.cast::<PyDict>()?.clone();
-    let (op_obj, spec) = dict.iter().next().ok_or_else(|| {
-        PyValueError::new_err("empty pipeline stage")
-    })?;
+    let (op_obj, spec) = dict
+        .iter()
+        .next()
+        .ok_or_else(|| PyValueError::new_err("empty pipeline stage"))?;
     Ok((op_obj.extract()?, dict, spec))
 }
 
@@ -83,9 +84,9 @@ pub fn group_stage<'py>(
         return Ok(result.cast::<PyList>()?.clone());
     }
 
-    let id_expr = spec.get_item("_id")?.ok_or_else(|| {
-        PyValueError::new_err("$group requires '_id'")
-    })?;
+    let id_expr = spec
+        .get_item("_id")?
+        .ok_or_else(|| PyValueError::new_err("$group requires '_id'"))?;
 
     let mut groups: Vec<(String, Py<PyAny>, Vec<Py<PyAny>>)> = Vec::new();
     let mut key_index: HashMap<String, usize> = HashMap::new();
@@ -135,9 +136,10 @@ fn eval_accumulator<'py>(
     accum: &Bound<'py, PyDict>,
     group_docs: &Bound<'py, PyList>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let (op_obj, val) = accum.iter().next().ok_or_else(|| {
-        PyValueError::new_err("empty accumulator")
-    })?;
+    let (op_obj, val) = accum
+        .iter()
+        .next()
+        .ok_or_else(|| PyValueError::new_err("empty accumulator"))?;
     let op: String = op_obj.extract()?;
 
     match op.as_str() {
@@ -203,7 +205,9 @@ fn eval_accumulator<'py>(
             let (n, input_expr) = extract_n_input(py, &val)?;
             let result = PyList::empty(py);
             for (i, doc) in group_docs.iter().enumerate() {
-                if i >= n { break; }
+                if i >= n {
+                    break;
+                }
                 let v = query_expressions::resolve_expr(doc.as_any(), &input_expr)?;
                 result.append(v)?;
             }
@@ -238,7 +242,9 @@ fn accum_sum<'py>(
     let mut sum_i: i64 = 0;
     for doc in group_docs.iter() {
         let v = query_expressions::resolve_expr(doc.as_any(), val)?;
-        if v.is_none() { continue; }
+        if v.is_none() {
+            continue;
+        }
         if let Ok(i) = v.extract::<i64>() {
             sum_i = sum_i.wrapping_add(i);
             sum_f += i as f64;
@@ -263,7 +269,9 @@ fn accum_avg<'py>(
     let mut count: usize = 0;
     for doc in group_docs.iter() {
         let v = query_expressions::resolve_expr(doc.as_any(), val)?;
-        if v.is_none() { continue; }
+        if v.is_none() {
+            continue;
+        }
         if let Ok(f) = v.extract::<f64>() {
             sum += f;
             count += 1;
@@ -288,16 +296,18 @@ fn accum_min_max<'py>(
     let mut best: Option<Bound<'py, PyAny>> = None;
     for doc in group_docs.iter() {
         let v = query_expressions::resolve_expr(doc.as_any(), val)?;
-        if v.is_none() { continue; }
+        if v.is_none() {
+            continue;
+        }
         best = Some(match best {
             None => v,
             Some(ref cur) => {
-                let cmp: bool = if is_max {
-                    v.gt(cur)?
+                let cmp: bool = if is_max { v.gt(cur)? } else { v.lt(cur)? };
+                if cmp {
+                    v
                 } else {
-                    v.lt(cur)?
-                };
-                if cmp { v } else { cur.clone() }
+                    cur.clone()
+                }
             }
         });
     }
@@ -313,7 +323,9 @@ fn accum_stddev<'py>(
     let mut vals: Vec<f64> = Vec::new();
     for doc in group_docs.iter() {
         let v = query_expressions::resolve_expr(doc.as_any(), val)?;
-        if v.is_none() { continue; }
+        if v.is_none() {
+            continue;
+        }
         if let Ok(f) = v.extract::<f64>() {
             vals.push(f);
         } else if let Ok(i) = v.extract::<i64>() {
@@ -325,7 +337,11 @@ fn accum_stddev<'py>(
     }
     let mean = vals.iter().sum::<f64>() / vals.len() as f64;
     let variance: f64 = vals.iter().map(|v| (v - mean).powi(2)).sum::<f64>();
-    let divisor = if is_sample { (vals.len() - 1) as f64 } else { vals.len() as f64 };
+    let divisor = if is_sample {
+        (vals.len() - 1) as f64
+    } else {
+        vals.len() as f64
+    };
     Ok(PyFloat::new(py, (variance / divisor).sqrt()).into_any())
 }
 
@@ -338,7 +354,9 @@ fn accum_top_bottom<'py>(
     single: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
     let (sort_by, output_expr) = if let Ok(d) = val.cast::<PyDict>() {
-        let sb = d.get_item("sortBy")?.unwrap_or_else(|| PyDict::new(py).into_any());
+        let sb = d
+            .get_item("sortBy")?
+            .unwrap_or_else(|| PyDict::new(py).into_any());
         let out = d.get_item("output")?.unwrap_or_else(|| val.clone());
         (sb, out)
     } else {
@@ -358,7 +376,11 @@ fn accum_top_bottom<'py>(
     let is_bottom = op == "$bottom" || op == "$bottomN";
 
     if single {
-        let idx = if is_bottom { sorted.len().saturating_sub(1) } else { 0 };
+        let idx = if is_bottom {
+            sorted.len().saturating_sub(1)
+        } else {
+            0
+        };
         if sorted.is_empty() {
             return Ok(py_none(py));
         }
@@ -431,15 +453,15 @@ pub fn sort_stage<'py>(
             py,
             None,
             None,
-            move |args: &Bound<'_, pyo3::types::PyTuple>, _kwargs: Option<&Bound<'_, PyDict>>| -> PyResult<Py<PyAny>> {
+            move |args: &Bound<'_, pyo3::types::PyTuple>,
+                  _kwargs: Option<&Bound<'_, PyDict>>|
+                  -> PyResult<Py<PyAny>> {
                 let py = args.py();
                 let doc = args.get_item(0)?;
                 let value = paths::get_value(&doc, &field)?;
                 let is_some = !value.bind(py).is_none();
-                let tup = pyo3::types::PyTuple::new(py, &[
-                    py_bool(py, is_some),
-                    value.into_bound(py),
-                ])?;
+                let tup =
+                    pyo3::types::PyTuple::new(py, &[py_bool(py, is_some), value.into_bound(py)])?;
                 Ok(tup.unbind().into())
             },
         )?;
@@ -487,7 +509,9 @@ pub fn unwind_stage<'py>(
             .is_some_and(|v| v.extract().unwrap_or(false));
         (path_str, preserve)
     } else {
-        return Err(PyTypeError::new_err("$unwind spec must be a string or dict"));
+        return Err(PyTypeError::new_err(
+            "$unwind spec must be a string or dict",
+        ));
     };
 
     let copy_mod = crate::cached_modules::copy_mod(py)?;
@@ -540,9 +564,17 @@ pub fn project_stage<'py>(
             continue; // _id: 0 is allowed in both modes
         }
         if let Ok(i) = expr.extract::<i64>() {
-            if i == 0 { has_exclusion = true; } else { has_inclusion = true; }
+            if i == 0 {
+                has_exclusion = true;
+            } else {
+                has_inclusion = true;
+            }
         } else if let Ok(b) = expr.extract::<bool>() {
-            if !b { has_exclusion = true; } else { has_inclusion = true; }
+            if !b {
+                has_exclusion = true;
+            } else {
+                has_inclusion = true;
+            }
         } else {
             has_inclusion = true; // expression => inclusion mode
         }
@@ -653,7 +685,9 @@ pub fn limit_stage<'py>(
 ) -> PyResult<Bound<'py, PyList>> {
     let results = PyList::empty(py);
     for (i, doc) in docs.iter().enumerate() {
-        if i >= spec { break; }
+        if i >= spec {
+            break;
+        }
         results.append(doc)?;
     }
     Ok(results)
@@ -725,9 +759,9 @@ pub fn replace_root_stage<'py>(
     docs: &Bound<'py, PyList>,
     spec: &Bound<'py, PyDict>,
 ) -> PyResult<Bound<'py, PyList>> {
-    let new_root_expr = spec.get_item("newRoot")?.ok_or_else(|| {
-        PyValueError::new_err("$replaceRoot requires 'newRoot' expression")
-    })?;
+    let new_root_expr = spec
+        .get_item("newRoot")?
+        .ok_or_else(|| PyValueError::new_err("$replaceRoot requires 'newRoot' expression"))?;
     let results = PyList::empty(py);
     for doc in docs.iter() {
         let new_root = query_expressions::resolve_expr(doc.as_any(), &new_root_expr)?;
@@ -878,18 +912,20 @@ pub fn bucket_stage<'py>(
     docs: &Bound<'py, PyList>,
     spec: &Bound<'py, PyDict>,
 ) -> PyResult<Bound<'py, PyList>> {
-    let group_by = spec.get_item("groupBy")?.ok_or_else(|| {
-        PyValueError::new_err("$bucket requires 'groupBy'")
-    })?;
-    let boundaries_obj = spec.get_item("boundaries")?.ok_or_else(|| {
-        PyValueError::new_err("$bucket requires 'boundaries'")
-    })?;
+    let group_by = spec
+        .get_item("groupBy")?
+        .ok_or_else(|| PyValueError::new_err("$bucket requires 'groupBy'"))?;
+    let boundaries_obj = spec
+        .get_item("boundaries")?
+        .ok_or_else(|| PyValueError::new_err("$bucket requires 'boundaries'"))?;
     let boundaries = boundaries_obj.cast::<PyList>()?;
     let default = spec.get_item("default")?;
     let output = spec.get_item("output")?;
 
     if boundaries.len() < 2 {
-        return Err(PyValueError::new_err("$bucket requires at least 2 boundaries"));
+        return Err(PyValueError::new_err(
+            "$bucket requires at least 2 boundaries",
+        ));
     }
 
     let num_buckets = boundaries.len() - 1;
@@ -963,9 +999,9 @@ pub fn bucket_auto_stage<'py>(
     docs: &Bound<'py, PyList>,
     spec: &Bound<'py, PyDict>,
 ) -> PyResult<Bound<'py, PyList>> {
-    let group_by = spec.get_item("groupBy")?.ok_or_else(|| {
-        PyValueError::new_err("$bucketAuto requires 'groupBy'")
-    })?;
+    let group_by = spec
+        .get_item("groupBy")?
+        .ok_or_else(|| PyValueError::new_err("$bucketAuto requires 'groupBy'"))?;
     let granularity: usize = spec
         .get_item("buckets")?
         .map_or(5, |v| v.extract().unwrap_or(5));
@@ -980,9 +1016,9 @@ pub fn bucket_auto_stage<'py>(
     vals.sort_by(|a, b| {
         let a_some = !a.0.is_none();
         let b_some = !b.0.is_none();
-        a_some.cmp(&b_some).then_with(|| {
-            a.0.lt(&b.0).unwrap_or(false).cmp(&true).reverse()
-        })
+        a_some
+            .cmp(&b_some)
+            .then_with(|| a.0.lt(&b.0).unwrap_or(false).cmp(&true).reverse())
     });
 
     let n = granularity.max(1);
@@ -990,7 +1026,9 @@ pub fn bucket_auto_stage<'py>(
     let results = PyList::empty(py);
 
     for chunk in vals.chunks(chunk_size) {
-        if chunk.is_empty() { continue; }
+        if chunk.is_empty() {
+            continue;
+        }
         let lo = &chunk[0].0;
         let hi = &chunk[chunk.len() - 1].0;
         let group_docs = PyList::new(py, chunk.iter().map(|(_, d)| d))?;
@@ -1025,7 +1063,9 @@ pub fn set_window_fields_stage<'py>(
 ) -> PyResult<Bound<'py, PyList>> {
     let partition_by = spec.get_item("partitionBy")?;
     let sort_by = spec.get_item("sortBy")?;
-    let output_spec = spec.get_item("output")?.unwrap_or_else(|| PyDict::new(py).into_any());
+    let output_spec = spec
+        .get_item("output")?
+        .unwrap_or_else(|| PyDict::new(py).into_any());
 
     let working_docs = if let Some(ref sb) = sort_by {
         if let Ok(sb_dict) = sb.cast::<PyDict>() {
@@ -1072,14 +1112,19 @@ pub fn set_window_fields_stage<'py>(
 
             for (field_obj, window_spec_obj) in output_dict.iter() {
                 let field: String = field_obj.extract()?;
-                if !window_spec_obj.is_instance_of::<PyDict>() { continue; }
+                if !window_spec_obj.is_instance_of::<PyDict>() {
+                    continue;
+                }
                 let window_spec = window_spec_obj.cast::<PyDict>()?;
 
-                let (accum_op, accum_val) = window_spec.iter().next().ok_or_else(|| {
-                    PyValueError::new_err("empty window spec")
-                })?;
+                let (accum_op, accum_val) = window_spec
+                    .iter()
+                    .next()
+                    .ok_or_else(|| PyValueError::new_err("empty window spec"))?;
                 let op_str: String = accum_op.extract()?;
-                if op_str == "$window" { continue; }
+                if op_str == "$window" {
+                    continue;
+                }
 
                 let window = window_spec.get_item("window")?;
                 let (lo, hi) = if let Some(ref w) = window {
@@ -1087,10 +1132,13 @@ pub fn set_window_fields_stage<'py>(
                     if let Some(docs_window) = w_dict.get_item("documents")? {
                         let dw = docs_window.cast::<PyList>()?;
                         if dw.len() == 2 {
-                            let lo_bound: i64 = dw.get_item(0)?.extract().unwrap_or(-(part_len as i64));
-                            let hi_bound: i64 = dw.get_item(1)?.extract().unwrap_or(part_len as i64);
+                            let lo_bound: i64 =
+                                dw.get_item(0)?.extract().unwrap_or(-(part_len as i64));
+                            let hi_bound: i64 =
+                                dw.get_item(1)?.extract().unwrap_or(part_len as i64);
                             let lo = (i as i64 + lo_bound).max(0) as usize;
-                            let hi = ((i as i64 + hi_bound + 1).min(part_len as i64)).max(0) as usize;
+                            let hi =
+                                ((i as i64 + hi_bound + 1).min(part_len as i64)).max(0) as usize;
                             (lo, hi)
                         } else {
                             (0, part_len)
@@ -1102,10 +1150,7 @@ pub fn set_window_fields_stage<'py>(
                     (0, part_len)
                 };
 
-                let window_docs = PyList::new(
-                    py,
-                    part_docs[lo..hi].iter().map(|d| d.bind(py)),
-                )?;
+                let window_docs = PyList::new(py, part_docs[lo..hi].iter().map(|d| d.bind(py)))?;
                 let accum_dict = PyDict::new(py);
                 accum_dict.set_item(&op_str, &accum_val)?;
                 let val = eval_accumulator(py, &accum_dict, &window_docs)?;
@@ -1145,24 +1190,43 @@ pub fn aggregate_pipeline<'py>(
         let (op, _, spec) = stage_parts(&stage_obj)?;
 
         let sd = match op.as_str() {
-            "$match" | "$group" | "$project" | "$sort" | "$addFields" | "$set"
-            | "$sample" | "$bucket" | "$bucketAuto" | "$setWindowFields"
-            | "$replaceRoot" | "$lookup" | "$graphLookup" | "$facet" => {
-                Some(spec.cast::<PyDict>()?)
-            }
+            "$match" | "$group" | "$project" | "$sort" | "$addFields" | "$set" | "$sample"
+            | "$bucket" | "$bucketAuto" | "$setWindowFields" | "$replaceRoot" | "$lookup"
+            | "$graphLookup" | "$facet" => Some(spec.cast::<PyDict>()?),
             _ => None,
+        };
+        let stage_dict = || {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "stage {op} requires a document argument"
+            ))
         };
 
         current = match op.as_str() {
-            "$match" => match_stage(py, &current, sd.unwrap())?,
+            "$match" => match_stage(py, &current, sd.ok_or_else(&stage_dict)?)?,
             "$group" => {
-                check_memory(py, &current, "$group", memory_limit_bytes, allow_disk_use, &estimate_fn, &mem_limit_exc)?;
-                group_stage(py, &current, sd.unwrap(), allow_disk_use)?
+                check_memory(
+                    py,
+                    &current,
+                    "$group",
+                    memory_limit_bytes,
+                    allow_disk_use,
+                    &estimate_fn,
+                    &mem_limit_exc,
+                )?;
+                group_stage(py, &current, sd.ok_or_else(&stage_dict)?, allow_disk_use)?
             }
-            "$project" => project_stage(py, &current, sd.unwrap())?,
+            "$project" => project_stage(py, &current, sd.ok_or_else(&stage_dict)?)?,
             "$sort" => {
-                check_memory(py, &current, "$sort", memory_limit_bytes, allow_disk_use, &estimate_fn, &mem_limit_exc)?;
-                sort_stage(py, &current, sd.unwrap(), allow_disk_use)?
+                check_memory(
+                    py,
+                    &current,
+                    "$sort",
+                    memory_limit_bytes,
+                    allow_disk_use,
+                    &estimate_fn,
+                    &mem_limit_exc,
+                )?;
+                sort_stage(py, &current, sd.ok_or_else(&stage_dict)?, allow_disk_use)?
             }
             "$limit" => {
                 let n: usize = spec.extract()?;
@@ -1173,45 +1237,73 @@ pub fn aggregate_pipeline<'py>(
                 skip_stage(py, &current, n)?
             }
             "$unwind" => unwind_stage(py, &current, &spec)?,
-            "$addFields" | "$set" => add_fields_stage(py, &current, sd.unwrap())?,
+            "$addFields" | "$set" => add_fields_stage(py, &current, sd.ok_or_else(&stage_dict)?)?,
             "$count" => {
                 let name: String = spec.extract()?;
                 count_stage(py, &current, &name)?
             }
-            "$replaceRoot" => replace_root_stage(py, &current, sd.unwrap())?,
+            "$replaceRoot" => replace_root_stage(py, &current, sd.ok_or_else(&stage_dict)?)?,
             "$replaceWith" => {
                 let wrapper = PyDict::new(py);
                 wrapper.set_item("newRoot", &spec)?;
                 replace_root_stage(py, &current, &wrapper)?
             }
-            "$sample" => sample_stage(py, &current, sd.unwrap())?,
-            "$bucket" => bucket_stage(py, &current, sd.unwrap())?,
-            "$bucketAuto" => bucket_auto_stage(py, &current, sd.unwrap())?,
+            "$sample" => sample_stage(py, &current, sd.ok_or_else(&stage_dict)?)?,
+            "$bucket" => bucket_stage(py, &current, sd.ok_or_else(&stage_dict)?)?,
+            "$bucketAuto" => bucket_auto_stage(py, &current, sd.ok_or_else(&stage_dict)?)?,
             "$unset" => unset_stage(py, &current, &spec)?,
             "$redact" => redact_stage(py, &current, &spec)?,
             "$sortByCount" => sort_by_count_stage(py, &current, &spec)?,
-            "$setWindowFields" => set_window_fields_stage(py, &current, sd.unwrap())?,
+            "$setWindowFields" => {
+                set_window_fields_stage(py, &current, sd.ok_or_else(&stage_dict)?)?
+            }
             "$lookup" => {
-                let lookup_dict = sd.unwrap();
+                let lookup_dict = sd.ok_or_else(&stage_dict)?;
                 if lookup_dict.contains("pipeline")? && !lookup_dict.contains("localField")? {
-                    crate::aggregation_joins::pipeline_lookup_stage(py, &current, lookup_dict, collection_getter, max_pipeline_docs)?
+                    crate::aggregation_joins::pipeline_lookup_stage(
+                        py,
+                        &current,
+                        lookup_dict,
+                        collection_getter,
+                        max_pipeline_docs,
+                    )?
                 } else {
-                    crate::aggregation_joins::lookup_stage(py, &current, lookup_dict, collection_getter)?
+                    crate::aggregation_joins::lookup_stage(
+                        py,
+                        &current,
+                        lookup_dict,
+                        collection_getter,
+                    )?
                 }
             }
-            "$graphLookup" => {
-                crate::aggregation_joins::graph_lookup_stage(py, &current, sd.unwrap(), collection_getter)?
-            }
-            "$facet" => {
-                crate::aggregation_joins::facet_stage(py, &current, sd.unwrap(), collection_getter, max_pipeline_docs)?
-            }
+            "$graphLookup" => crate::aggregation_joins::graph_lookup_stage(
+                py,
+                &current,
+                sd.ok_or_else(&stage_dict)?,
+                collection_getter,
+            )?,
+            "$facet" => crate::aggregation_joins::facet_stage(
+                py,
+                &current,
+                sd.ok_or_else(&stage_dict)?,
+                collection_getter,
+                max_pipeline_docs,
+            )?,
             "$out" | "$merge" | "$unionWith" | "$vectorSearch" | "$geoNear" => {
-                dispatch_python_stage(py, &current, &stage_obj, &op, &spec, collection_getter, max_pipeline_docs)?
+                dispatch_python_stage(
+                    py,
+                    &current,
+                    &stage_obj,
+                    &op,
+                    &spec,
+                    collection_getter,
+                    max_pipeline_docs,
+                )?
             }
             _ => {
-                return Err(pyo3::exceptions::PyNotImplementedError::new_err(
-                    format!("Aggregation stage {op} not supported"),
-                ));
+                return Err(pyo3::exceptions::PyNotImplementedError::new_err(format!(
+                    "Aggregation stage {op} not supported"
+                )));
             }
         };
 
@@ -1265,9 +1357,9 @@ fn dispatch_python_stage<'py>(
             let result = func.call1((docs, spec_dict?))?;
             Ok(result.cast::<PyList>()?.clone())
         }
-        _ => Err(pyo3::exceptions::PyNotImplementedError::new_err(
-            format!("Stage {op} not supported in Rust dispatch"),
-        )),
+        _ => Err(pyo3::exceptions::PyNotImplementedError::new_err(format!(
+            "Stage {op} not supported in Rust dispatch"
+        ))),
     }
 }
 
@@ -1281,7 +1373,8 @@ fn check_doc_limit<'py>(
         let msg = format!(
             "Aggregation produced {} documents, exceeding the limit of {}. \
              Add earlier $match / $limit stages or raise max_pipeline_docs.",
-            docs.len(), limit
+            docs.len(),
+            limit
         );
         let err = exc_cls.call1((msg,))?;
         Err(PyErr::from_value(err))
@@ -1335,14 +1428,17 @@ fn optimize_pipeline<'py>(
             let (next_op, next_dict, _) = stage_parts(&next_stage)?;
             if next_op == "$match" {
                 let merged = PyDict::new(py);
-                let and_list = PyList::new(py, [
-                    stage_dict.get_item("$match")?.ok_or_else(|| {
-                        PyValueError::new_err("$match stage missing predicate")
-                    })?,
-                    next_dict.get_item("$match")?.ok_or_else(|| {
-                        PyValueError::new_err("$match stage missing predicate")
-                    })?,
-                ])?;
+                let and_list = PyList::new(
+                    py,
+                    [
+                        stage_dict.get_item("$match")?.ok_or_else(|| {
+                            PyValueError::new_err("$match stage missing predicate")
+                        })?,
+                        next_dict.get_item("$match")?.ok_or_else(|| {
+                            PyValueError::new_err("$match stage missing predicate")
+                        })?,
+                    ],
+                )?;
                 let match_dict = PyDict::new(py);
                 match_dict.set_item("$and", and_list)?;
                 merged.set_item("$match", match_dict)?;

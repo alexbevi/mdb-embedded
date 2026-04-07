@@ -7,7 +7,11 @@ use std::time::Instant;
 
 use pyo3::prelude::*;
 
-pyo3::create_exception!(smongo._smongo_core, TransactionError, pyo3::exceptions::PyRuntimeError);
+pyo3::create_exception!(
+    smongo._smongo_core,
+    TransactionError,
+    pyo3::exceptions::PyRuntimeError
+);
 
 // PyO3 simple enums use int discriminants for equality; the Python code only
 // ever compares variants (== TransactionState.ACTIVE), never reads .value.

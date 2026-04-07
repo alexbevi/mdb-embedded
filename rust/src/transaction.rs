@@ -53,7 +53,11 @@ impl RustTransactionSession {
     fn activate(&self, py: Python<'_>) -> PyResult<()> {
         let state = get_txn_state(py)?;
         state.setattr("session", self.session.bind(py))?;
-        let raw = self.session.bind(py).borrow().get()
+        let raw = self
+            .session
+            .bind(py)
+            .borrow()
+            .get()
             .map(|s| s.raw_ptr())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.message))?;
         crate::wt_bridge::set_txn_session_override(raw);

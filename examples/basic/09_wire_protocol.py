@@ -21,8 +21,8 @@ import shutil
 import tempfile
 import time
 
-from smongo import MongoClient as SmongoClient, WireServer
-
+from smongo import MongoClient as SmongoClient
+from smongo import WireServer
 
 PORT = 27018
 
@@ -40,14 +40,16 @@ def _run(db_path: str) -> None:
     print("── seeding data via native smongo client ──")
     native = SmongoClient(f"local://{db_path}")
     employees = native["demo"]["employees"]
-    employees.insert_many([
-        {"name": "Alice",   "age": 34, "city": "NYC", "dept": "engineering", "salary": 145000},
-        {"name": "Bob",     "age": 28, "city": "SF",  "dept": "engineering", "salary": 128000},
-        {"name": "Charlie", "age": 40, "city": "NYC", "dept": "management",  "salary": 175000},
-        {"name": "Diana",   "age": 25, "city": "LA",  "dept": "design",      "salary":  98000},
-        {"name": "Eve",     "age": 31, "city": "SF",  "dept": "engineering", "salary": 155000},
-        {"name": "Frank",   "age": 36, "city": "CHI", "dept": "engineering", "salary": 140000},
-    ])
+    employees.insert_many(
+        [
+            {"name": "Alice", "age": 34, "city": "NYC", "dept": "engineering", "salary": 145000},
+            {"name": "Bob", "age": 28, "city": "SF", "dept": "engineering", "salary": 128000},
+            {"name": "Charlie", "age": 40, "city": "NYC", "dept": "management", "salary": 175000},
+            {"name": "Diana", "age": 25, "city": "LA", "dept": "design", "salary": 98000},
+            {"name": "Eve", "age": 31, "city": "SF", "dept": "engineering", "salary": 155000},
+            {"name": "Frank", "age": 36, "city": "CHI", "dept": "engineering", "salary": 140000},
+        ]
+    )
     employees.create_index([("city", 1)])
     employees.create_index([("dept", 1), ("salary", -1)])
     print(f"  {employees.count_documents({})} employees seeded with 2 indexes\n")
@@ -58,7 +60,7 @@ def _run(db_path: str) -> None:
     print(f"  listening on localhost:{PORT}")
     print("  (Compass / mongosh can connect to mongodb://localhost:27018)\n")
 
-    with WireServer(db_path, port=PORT) as srv:
+    with WireServer(db_path, port=PORT) as _srv:
         time.sleep(0.3)
 
         # ── Connect with the real PyMongo driver ───────────────

@@ -78,7 +78,11 @@ pub(crate) fn sortable_encode_impl(py: Python<'_>, value: &Bound<'_, PyAny>) -> 
 
     let json_mod = crate::cached_modules::json_mod(py)?;
     let dumped: String = json_mod
-        .call_method("dumps", (value,), Some(&[("sort_keys", true)].into_py_dict(py)?))
+        .call_method(
+            "dumps",
+            (value,),
+            Some(&[("sort_keys", true)].into_py_dict(py)?),
+        )
         .and_then(|r| r.extract())?;
     Ok(format!("2{}", hex::encode(dumped.as_bytes())))
 }
