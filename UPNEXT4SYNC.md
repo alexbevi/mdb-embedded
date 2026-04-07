@@ -7,7 +7,7 @@ Where we are                 Where we're going
 ─────────────────            ──────────────────────────────────
 Crash-safe sync              Tier 0  Stop losing data        ✓
   with concurrent push  ──►  Tier 1  Survive crashes         ✓
-                             Tier 2  Scale                   (2.2 done)
+                             Tier 2  Scale                   (2.1, 2.2, 2.3 done)
                              Tier 3  Parity with Device Sync (3.4 phase 1 done)
                              Tier 4  Beyond Device Sync
 ```
@@ -73,13 +73,11 @@ The initial `find({})` snapshot is now paginated using `_id`-based cursor pagina
 
 *Effort: ~3-5 days each. Unlocks: high-throughput sync for large fleets.*
 
-### 2.1 BSON oplog encoding
+### 2.1 BSON oplog encoding -- DONE
 
-**Files:** `smongo/oplog.py` `OplogWriter.log()`, `OplogReader`
+**Files:** `smongo/oplog.py` `OplogWriter.log()`, `OplogReader`, `smongo/storage/collection.py`
 
-**Problem:** Every oplog entry goes through `json.dumps` on write and `json.loads` on read. JSON is ~2x larger than BSON and slower to serialize.
-
-**Fix:** Use the Rust BSON encoder (`_smongo_core`) that's already in the crate. Store oplog entries as raw BSON bytes in WiredTiger. This cuts oplog storage in half and eliminates the Python JSON serialization bottleneck on the hot path.
+Oplog entries are now stored as raw BSON bytes via the Rust encoder (`to_bson`/`from_bson` from `_smongo_core`). The oplog table format changed from `value_format=S` to `value_format=u`. Existing tables are auto-migrated (drop + recreate) on first startup. This cuts oplog storage roughly in half and removes Python JSON serialization from the hot path.
 
 ### 2.2 Concurrent namespace push -- DONE
 
@@ -87,13 +85,11 @@ The initial `find({})` snapshot is now paginated using `_id`-based cursor pagina
 
 Push body extracted into `_push_namespace()` and dispatched via `ThreadPoolExecutor` when `push_concurrency > 1` and multiple namespaces are tracked. Per-namespace checkpointing was already in place. New `push_concurrency` config option (default: 4). Single-namespace syncs remain sequential to avoid thread-pool overhead.
 
-### 2.3 Dead-letter queue for failed ops
+### 2.3 Dead-letter queue for failed ops -- DONE
 
-**Files:** `smongo/sync.py` `_flush_bulk()`, new WiredTiger table
+**Files:** `smongo/sync.py` `_flush_bulk()`, `_dlq_enqueue()`, `_sweep_dlq()`, `table:__sync_dlq`
 
-**Problem:** When individual ops within a `bulk_write` fail, they're logged and forgotten. No retry path exists.
-
-**Fix:** Store failed ops in a `table:__sync_dlq` table with the original oplog key, error code, retry count, and next-retry timestamp. A separate sweep in the sync cycle retries DLQ entries with exponential backoff. After N retries, move to a permanent failure log.
+Failed ops from `bulk_write` are now captured in `table:__sync_dlq` with the original oplog entry, error code, retry count, and next-retry timestamp. `_sweep_dlq()` runs at the start of each push cycle and retries eligible entries with exponential backoff (configurable via `dlq_backoff_base_sec` and `max_dlq_retries`). After exhausting retries, entries are marked `permanently_failed`. `status()` exposes `dlq_depth` and `dlq_permanent_failures`.
 
 ### 2.4 Backpressure and rate limiting
 
@@ -233,7 +229,9 @@ Each tier should include test coverage before moving to the next:
 | 1 | ~~Tombstone persistence across process restart~~ (unit tested) |
 | 1 | ~~Interrupted initial snapshot resume~~ (unit tested) |
 | 2 | ~~Concurrent push correctness under contention~~ (unit tested with barrier) |
-| 2 | DLQ retry lifecycle (fail, enqueue, retry, succeed or exhaust) |
+| 2 | ~~DLQ retry lifecycle (fail, enqueue, retry, succeed or exhaust)~~ (unit tested) |
+| 2 | ~~BSON oplog round-trip~~ (unit tested) |
+| 2 | ~~Change stream pull snapshot + delete~~ (integration tested) |
 | 2 | Rate limiting behavior under simulated remote latency |
 | 3 | Server-side rule rejection (bad document blocked on Atlas side) |
 | 3 | Schema migration on pull (v1 doc pulled into v2 local schema) |

@@ -1,10 +1,12 @@
 """Integration fixtures using Docker MongoDB via testcontainers."""
 
+import time
 import uuid
 
 import pytest
 from pymongo import MongoClient as PyMongoClient
-from testcontainers.mongodb import MongoDbContainer
+from testcontainers.core.container import DockerContainer
+from testcontainers.core.waiting_utils import wait_for_logs
 
 from smongo import MongoClient as EmbeddedClient
 from smongo import SyncManager
@@ -12,14 +14,41 @@ from smongo import SyncManager
 
 @pytest.fixture(scope="session")
 def mongo_container():
-    """Real MongoDB container for integration tests."""
-    with MongoDbContainer("mongo:7") as container:
-        yield container
+    """Real MongoDB container running as a single-node replica set."""
+    container = DockerContainer("mongo:7")
+    container.with_exposed_ports(27017)
+    container.with_command("mongod --replSet rs0 --bind_ip_all")
+    container.start()
+    wait_for_logs(container, "Waiting for connections")
+
+    host = container.get_container_host_ip()
+    port = container.get_exposed_port(27017)
+    direct_uri = f"mongodb://{host}:{port}/?directConnection=true"
+    client = PyMongoClient(direct_uri, serverSelectionTimeoutMS=5000)
+    client.admin.command("replSetInitiate")
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        try:
+            if client.admin.command("hello").get("isWritablePrimary"):
+                break
+        except Exception:
+            pass
+        time.sleep(0.5)
+    else:
+        client.close()
+        container.stop()
+        raise RuntimeError("MongoDB replica set failed to elect primary")
+    client.close()
+
+    yield container
+    container.stop()
 
 
 @pytest.fixture(scope="session")
 def mongo_uri(mongo_container):
-    return mongo_container.get_connection_url()
+    host = mongo_container.get_container_host_ip()
+    port = mongo_container.get_exposed_port(27017)
+    return f"mongodb://{host}:{port}/?directConnection=true"
 
 
 @pytest.fixture

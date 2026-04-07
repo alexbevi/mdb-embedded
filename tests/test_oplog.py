@@ -23,7 +23,7 @@ def oplog_env(tmp_path):
     conn = wt.wiredtiger_open(db_path, "create")
     session = conn.open_session()
     uri = "table:__oplog_test"
-    session.create(uri, "key_format=S,value_format=S")
+    session.create(uri, "key_format=S,value_format=u")
     yield session, uri, "testdb.testcoll"
     session.close()
     conn.close()

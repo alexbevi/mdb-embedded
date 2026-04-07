@@ -165,3 +165,64 @@ def test_status_and_lifecycle(sync_manager, embedded_client, db_name):
     sync_manager.stop()
     st3 = sync_manager.status()
     assert st3["running"] is False
+
+
+def test_status_includes_dlq(sync_manager, embedded_client, db_name):
+    _wire(sync_manager, embedded_client, db_name)
+    s = sync_manager.status()
+    assert "dlq_depth" in s
+    assert "dlq_permanent_failures" in s
+    assert s["dlq_depth"] == 0
+
+
+# ── Change Stream Pull Tests ─────────────────────────────────────────
+
+
+def test_change_stream_pull_snapshot(embedded_client, remote_client, mongo_uri, db_name):
+    """Change-stream pull path picks up docs via initial snapshot."""
+    mgr = SyncManager(
+        embedded_client,
+        mongo_uri,
+        sync_config={
+            "mode": "pull_only",
+            "use_change_stream_pull": True,
+            "batch_size": 100,
+        },
+    )
+    coll = embedded_client[db_name]["cs_snap"]
+    mgr.register_collection(db_name, "cs_snap", coll.get_local_collection())
+
+    remote_client[db_name]["cs_snap"].insert_one({"_id": "s1", "val": "snapshot"})
+
+    mgr._pull()
+
+    local_doc = coll.find_one({"_id": "s1"})
+    assert local_doc is not None
+    assert local_doc["val"] == "snapshot"
+    mgr.stop()
+
+
+def test_change_stream_pull_delete(embedded_client, remote_client, mongo_uri, db_name):
+    """Change-stream pull propagates remote deletes (polling cannot do this)."""
+    mgr = SyncManager(
+        embedded_client,
+        mongo_uri,
+        sync_config={
+            "mode": "pull_only",
+            "use_change_stream_pull": True,
+            "batch_size": 100,
+        },
+    )
+    coll = embedded_client[db_name]["cs_del"]
+    mgr.register_collection(db_name, "cs_del", coll.get_local_collection())
+
+    remote_client[db_name]["cs_del"].insert_one({"_id": "d1", "val": "delete-me"})
+    mgr._pull()
+    assert coll.find_one({"_id": "d1"}) is not None
+
+    remote_client[db_name]["cs_del"].delete_one({"_id": "d1"})
+
+    mgr._pull()
+
+    assert coll.find_one({"_id": "d1"}) is None
+    mgr.stop()

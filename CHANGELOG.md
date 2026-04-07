@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > **Note**: Entries below describe the state of the codebase at the time of each release. References to Python classes like `LocalCollection`, `StreamingCursor`, etc. in older entries reflect APIs that have since been replaced by their Rust equivalents (`RustLocalCollection`, `RustStreamingCursor`, etc.).
 
+## [0.9.3] - 2026-04-07
+
+### Added
+
+- **Dead-letter queue (Tier 2.3)**: Failed sync ops from `bulk_write` are now captured in `table:__sync_dlq` with error metadata. A background sweep retries entries with exponential backoff; after `max_dlq_retries` (default 5), entries are marked permanently failed. `status()` exposes `dlq_depth` and `dlq_permanent_failures`.
+- **Change stream integration tests**: Testcontainers fixture now runs MongoDB as a single-node replica set, enabling change stream pull in CI. Dedicated tests exercise snapshot pull and delete propagation via change streams.
+
+### Changed
+
+- **BSON oplog encoding (Tier 2.1)**: Oplog entries are now stored as raw BSON bytes (via the Rust encoder) instead of JSON strings. This cuts oplog storage roughly in half and eliminates Python JSON serialization from the hot path. Oplog table format migrated from `value_format=S` to `value_format=u`; existing tables are auto-migrated on first startup.
+- **Replica set everywhere**: `docker-compose.yml` and CI now run `mongo:7` as a single-node replica set with `--replSet rs0`, enabling change streams in all environments.
+- `_flush_bulk()` accepts optional `op_entries` for DLQ enqueue on partial failure.
+- `_push_namespace()` tracks oplog entries alongside PyMongo ops for DLQ wiring.
+- `_pull_via_change_stream()` now saves the initial resume token from the watch cursor even when no events arrive, preventing event loss between pull cycles.
+
+### Migration
+
+- **Oplog format**: Existing WiredTiger oplog tables are automatically migrated from string (`S`) to raw-bytes (`u`) format on first startup. Pending oplog entries in the old format are dropped (the oplog is transient and auto-compacted after push).
+
 ## [0.9.2] - 2026-04-07
 
 ### Added

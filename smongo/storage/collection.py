@@ -226,7 +226,12 @@ class LocalCollection:
         self.session: Any = conn.open_session()
 
         self.session.create(self.table_uri, "key_format=S,value_format=u")
-        self.session.create(self.oplog_uri, "key_format=S,value_format=S")
+        try:
+            self.session.create(self.oplog_uri, "key_format=S,value_format=u")
+        except _WTError:
+            log.info("Migrating oplog %s to BSON format", self.oplog_uri)
+            self.session.drop(self.oplog_uri, "force")
+            self.session.create(self.oplog_uri, "key_format=S,value_format=u")
 
         self._oplog_w = OplogWriter(self.session, self.oplog_uri, self.namespace, hub=oplog_hub)
         self._oplog_r = OplogReader(self.session, self.oplog_uri)
@@ -905,10 +910,11 @@ class LocalCollection:
             name = self.index_mgr.create_index(keys, **kwargs)
             self.index_mgr.rebuild_index(name, self._get_all_unlocked())
             if not _internal:
+                raw_keys = keys if isinstance(keys, list) else [(keys, 1)]
                 self._oplog_w.log(
                     "index_create",
                     name,
-                    {"keys": keys if isinstance(keys, list) else [(keys, 1)], **kwargs},
+                    {"keys": [list(k) for k in raw_keys], **kwargs},
                 )
             return name
 

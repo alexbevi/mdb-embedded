@@ -6,7 +6,6 @@ to prevent echo loops during bidirectional sync.  Supports truncation
 for bounded growth in long-running deployments.
 """
 
-import json
 import logging
 import threading
 import time
@@ -14,8 +13,8 @@ import uuid
 from typing import Any
 
 from smongo._smongo_core import doc_checksum as _doc_checksum
-from smongo._smongo_core import ejson_default as _ejson_default
-from smongo._smongo_core import ejson_object_hook as _ejson_object_hook
+from smongo._smongo_core import from_bson as _from_bson
+from smongo._smongo_core import to_bson as _to_bson
 
 from ._compat import WTError as _WTError
 from ._types import Document, Pipeline
@@ -112,7 +111,7 @@ class OplogWriter:
             log_entry["changed_fields"] = changed_fields
 
         cursor = self.session.open_cursor(self.oplog_uri, None, "overwrite=true")
-        cursor[oplog_key] = json.dumps(log_entry, default=_ejson_default)
+        cursor[oplog_key] = _to_bson(log_entry)
         cursor.close()
 
         self._notify_listeners(log_entry)
@@ -183,7 +182,7 @@ class OplogReader:
         cursor = self.session.open_cursor(self.oplog_uri, None, None)
         logs: list[Document] = []
         while cursor.next() == 0:
-            logs.append(json.loads(cursor.get_value(), object_hook=_ejson_object_hook))
+            logs.append(dict(_from_bson(cursor.get_value())))
         cursor.close()
         return logs
 
@@ -228,7 +227,7 @@ class OplogReader:
 
         while True:
             key: str = cursor.get_key()
-            entry: Document = json.loads(cursor.get_value(), object_hook=_ejson_object_hook)
+            entry: Document = dict(_from_bson(cursor.get_value()))
             if not (skip_internal and entry.get("internal")):
                 entries.append((key, entry))
             if cursor.next() != 0:

@@ -15,6 +15,7 @@ import json
 import logging
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from typing import Any, cast
 
@@ -77,9 +78,9 @@ class VectorClock:
         return self
 
     def dominates(self, other: "VectorClock") -> bool:
-        """True if every entry in *other* is <= our entry."""
+        """True if every entry in *other* is <= our entry, with at least one strictly greater."""
         if not other._clock:
-            return True
+            return bool(self._clock)
         for nid, ts in other._clock.items():
             if self._clock.get(nid, 0) < ts:
                 return False
@@ -458,6 +459,9 @@ class SyncManager:
         self._ts_uri = "table:__tombstones"
         self._ck_session.create(self._ts_uri, "key_format=S,value_format=S")
 
+        self._dlq_uri = "table:__sync_dlq"
+        self._ck_session.create(self._dlq_uri, "key_format=S,value_format=S")
+
         self._tracked: dict[str, tuple[Any, Any, Predicate | None]] = {}
         self._local_field_history: dict[tuple[str, Any], set[str]] = {}
         self._tombstones = TombstoneRegistry(
@@ -554,6 +558,8 @@ class SyncManager:
                 "conflicts": self._conflict_count,
                 "errors": self._error_count,
                 "collections": dict(self._ns_stats),
+                "dlq_depth": self._dlq_count(),
+                "dlq_permanent_failures": self._dlq_count(permanent_only=True),
                 "throughput_ops_sec": round(ops_per_sec, 2),
                 "last_cycle_duration_sec": round(self._last_cycle_duration, 4),
             }
@@ -661,6 +667,8 @@ class SyncManager:
     # -- push (local -> Atlas) -----------------------------------------
 
     def _push(self) -> None:
+        self._sweep_dlq()
+
         batch_size: int = self._config["batch_size"]
         concurrency = int(self._config.get("push_concurrency", 4))
 
@@ -706,6 +714,7 @@ class SyncManager:
             return
 
         ops: list[Any] = []
+        op_entries: list[Document] = []
         last_key: str | None = None
         safe_key: str | None = None
         batch_start_key: str | None = None
@@ -744,15 +753,18 @@ class SyncManager:
                 doc = _to_pymongo(dict(payload))
                 doc["_lastModified"] = entry["ts"]
                 ops.append(InsertOne(doc))
+                op_entries.append(entry)
             elif op == "update":
                 update_spec = _to_pymongo(dict(payload))
                 if "$set" not in update_spec:
                     update_spec["$set"] = {}
                 update_spec["$set"]["_lastModified"] = entry["ts"]
                 ops.append(UpdateOne({"_id": _to_pymongo(doc_id)}, update_spec, upsert=True))
+                op_entries.append(entry)
                 self._local_field_history[(ns, str(doc_id))] = set(changed_fields)
             elif op == "delete":
                 ops.append(DeleteOne({"_id": _to_pymongo(doc_id)}))
+                op_entries.append(entry)
             elif op == "index_create":
                 try:
                     idx_keys = payload.get("keys", [])
@@ -771,7 +783,9 @@ class SyncManager:
                 batch_start_key = key
 
             if len(ops) >= batch_size:
-                n_ok = self._flush_bulk(remote_coll, ops)
+                n_ok = self._flush_bulk(
+                    remote_coll, ops, ns=ns, op_entries=op_entries
+                )
                 if n_ok > 0:
                     safe_key = key
                     with self._lock:
@@ -780,10 +794,13 @@ class SyncManager:
                 if n_ok < len(ops):
                     log.warning("Batch failed for %s; entries retained in oplog for retry", ns)
                 ops = []
+                op_entries = []
                 batch_start_key = None
 
         if ops:
-            n_ok = self._flush_bulk(remote_coll, ops)
+            n_ok = self._flush_bulk(
+                remote_coll, ops, ns=ns, op_entries=op_entries
+            )
             if n_ok > 0:
                 safe_key = last_key
                 with self._lock:
@@ -840,11 +857,20 @@ class SyncManager:
                     pass
                 raise
 
-    def _flush_bulk(self, remote_coll: Any, ops: list[Any]) -> int:
+    def _flush_bulk(
+        self,
+        remote_coll: Any,
+        ops: list[Any],
+        *,
+        ns: str = "",
+        op_entries: list[Document] | None = None,
+    ) -> int:
         """Flush a batch of operations to remote.
 
         Returns the number of successfully written ops (``len(ops)`` on full
         success, 0..n on partial failure, ``-1`` on total failure).
+        Failed ops are enqueued into the dead-letter queue when *op_entries*
+        is provided.
         """
         try:
             remote_coll.bulk_write(ops, ordered=False)
@@ -855,14 +881,178 @@ class SyncManager:
             n_failed = len(write_errors)
             n_ok = len(ops) - n_failed
             for err in write_errors:
+                idx = err.get("index")
                 log.warning(
                     "Sync bulk_write error: op_index=%s code=%s msg=%s",
-                    err.get("index"),
+                    idx,
                     err.get("code"),
                     err.get("errmsg", ""),
                 )
+                if op_entries and idx is not None and idx < len(op_entries):
+                    self._dlq_enqueue(
+                        ns, op_entries[idx], err.get("code"), err.get("errmsg", "")
+                    )
             log.warning("Bulk write partial failure: %d/%d ops succeeded", n_ok, len(ops))
             return n_ok
+
+    # -- dead-letter queue ---------------------------------------------
+
+    def _dlq_enqueue(
+        self, ns: str, entry: Document, error_code: Any, error_msg: str
+    ) -> None:
+        """Add a failed op to the DLQ for later retry."""
+        backoff_base = float(self._config.get("dlq_backoff_base_sec", 30))
+        now = time.time()
+        key = f"{time.time_ns():020d}-{uuid.uuid4()}"
+        value = json.dumps(
+            {
+                "ns": ns,
+                "entry": entry,
+                "error_code": error_code,
+                "error_msg": error_msg,
+                "retry_count": 0,
+                "next_retry_ts": now + backoff_base,
+                "first_failed_ts": now,
+                "permanently_failed": False,
+            },
+            default=str,
+        )
+        with self._ck_lock:
+            cursor = self._ck_session.open_cursor(self._dlq_uri, None, "overwrite=true")
+            cursor[key] = value
+            cursor.close()
+
+    def _sweep_dlq(self) -> None:
+        """Retry eligible DLQ entries.  Called at the start of each push cycle."""
+        now = time.time()
+        max_retries = int(self._config.get("max_dlq_retries", 5))
+        backoff_base = float(self._config.get("dlq_backoff_base_sec", 30))
+        backoff_max = float(self._config.get("max_backoff_sec", 300))
+
+        eligible: list[tuple[str, dict[str, Any]]] = []
+        with self._ck_lock:
+            cursor = self._ck_session.open_cursor(self._dlq_uri, None, None)
+            while cursor.next() == 0:
+                k: str = cursor.get_key()
+                v: dict[str, Any] = json.loads(cursor.get_value())
+                if v.get("permanently_failed"):
+                    continue
+                if v["next_retry_ts"] <= now:
+                    eligible.append((k, v))
+            cursor.close()
+
+        if not eligible:
+            return
+
+        by_ns: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+        for k, v in eligible:
+            by_ns.setdefault(v["ns"], []).append((k, v))
+
+        for ns, items in by_ns.items():
+            tup = self._tracked.get(ns)
+            if not tup:
+                continue
+            _, remote_coll, _ = tup
+
+            ops: list[Any] = []
+            item_map: list[tuple[str, dict[str, Any]]] = []
+            for k, v in items:
+                op = self._entry_to_pymongo_op(v["entry"])
+                if op is not None:
+                    ops.append(op)
+                    item_map.append((k, v))
+
+            if not ops:
+                continue
+
+            try:
+                remote_coll.bulk_write(ops, ordered=False)
+                for k, _ in item_map:
+                    self._dlq_remove(k)
+            except BulkWriteError as bwe:
+                failed_idxs = {
+                    e.get("index") for e in (bwe.details or {}).get("writeErrors", [])
+                }
+                for i, (k, v) in enumerate(item_map):
+                    if i in failed_idxs:
+                        v["retry_count"] += 1
+                        if v["retry_count"] >= max_retries:
+                            v["permanently_failed"] = True
+                            log.error(
+                                "DLQ entry exhausted retries: ns=%s code=%s msg=%s",
+                                ns,
+                                v.get("error_code"),
+                                v.get("error_msg"),
+                            )
+                        else:
+                            delay = min(
+                                backoff_base * (2 ** v["retry_count"]), backoff_max
+                            )
+                            v["next_retry_ts"] = time.time() + delay
+                        self._dlq_update(k, v)
+                    else:
+                        self._dlq_remove(k)
+            except (PyMongoError, OSError) as exc:
+                log.warning("DLQ retry bulk_write failed for %s: %s", ns, exc)
+                for k, v in item_map:
+                    v["retry_count"] += 1
+                    if v["retry_count"] >= max_retries:
+                        v["permanently_failed"] = True
+                    else:
+                        delay = min(
+                            backoff_base * (2 ** v["retry_count"]), backoff_max
+                        )
+                        v["next_retry_ts"] = time.time() + delay
+                    self._dlq_update(k, v)
+
+    def _entry_to_pymongo_op(self, entry: Document) -> Any:
+        """Reconstruct a PyMongo write op from an oplog entry dict."""
+        op = entry.get("op")
+        doc_id = entry.get("doc_id")
+        payload = entry.get("payload")
+        if op == "insert" and payload:
+            doc = _to_pymongo(dict(payload))
+            doc["_lastModified"] = entry.get("ts", time.time())
+            return InsertOne(doc)
+        if op == "update" and payload:
+            spec = _to_pymongo(dict(payload))
+            if "$set" not in spec:
+                spec["$set"] = {}
+            spec["$set"]["_lastModified"] = entry.get("ts", time.time())
+            return UpdateOne({"_id": _to_pymongo(doc_id)}, spec, upsert=True)
+        if op == "delete":
+            return DeleteOne({"_id": _to_pymongo(doc_id)})
+        return None
+
+    def _dlq_remove(self, key: str) -> None:
+        with self._ck_lock:
+            cursor = self._ck_session.open_cursor(self._dlq_uri, None, "overwrite=true")
+            cursor.set_key(key)
+            try:
+                cursor.remove()
+            except Exception:
+                pass
+            cursor.close()
+
+    def _dlq_update(self, key: str, value: dict[str, Any]) -> None:
+        with self._ck_lock:
+            cursor = self._ck_session.open_cursor(self._dlq_uri, None, "overwrite=true")
+            cursor[key] = json.dumps(value, default=str)
+            cursor.close()
+
+    def _dlq_count(self, *, permanent_only: bool = False) -> int:
+        with self._ck_lock:
+            cursor = self._ck_session.open_cursor(self._dlq_uri, None, None)
+            n = 0
+            while cursor.next() == 0:
+                if permanent_only:
+                    v = json.loads(cursor.get_value())
+                    if v.get("permanently_failed"):
+                        n += 1
+                else:
+                    n += 1
+            cursor.close()
+            return n
 
     # -- pull (Atlas -> local) -----------------------------------------
 
@@ -1085,6 +1275,12 @@ class SyncManager:
                     if token is not None:
                         self._set_checkpoint(token_key, json.dumps(token, default=str))
                     processed += 1
+                if processed == 0:
+                    initial_token = getattr(stream, "resume_token", None)
+                    if initial_token is not None:
+                        self._set_checkpoint(
+                            token_key, json.dumps(initial_token, default=str)
+                        )
             return True
         except PyMongoError as exc:
             log.warning("Change-stream pull unavailable for %s, falling back: %s", ns, exc)
@@ -1115,6 +1311,8 @@ class SyncManager:
                         _internal=True,
                     )
                 except (DuplicateKeyError, ValueError, KeyError, RuntimeError) as exc:
+                    log.warning("Failed to create pulled index %s: %s", name, exc)
+                except Exception as exc:
                     log.warning("Failed to create pulled index %s: %s", name, exc)
 
     # -- collection discovery ------------------------------------------

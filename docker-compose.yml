@@ -1,11 +1,13 @@
 services:
-  # Stands in for MongoDB Atlas -- a real mongod the sync layer talks to
+  # Stands in for MongoDB Atlas -- a single-node replica set (enables change streams)
   mongo:
     image: mongo:7
+    command: mongod --replSet rs0 --bind_ip_all
     ports:
       - "27017:27017"
     healthcheck:
-      test: mongosh --eval "db.runCommand('ping').ok" --quiet
+      test: >-
+        mongosh --eval "try{rs.status().ok}catch(e){rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]}).ok}" --quiet
       interval: 3s
       timeout: 5s
       retries: 10

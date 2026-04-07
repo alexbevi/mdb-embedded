@@ -522,6 +522,24 @@ fn find_wt_swig_so() -> Result<PathBuf, String> {
         }
     }
 
+    // Strategy 4: Ask python3 directly (covers system installs, GHA setup-python, etc.)
+    if let Ok(output) = std::process::Command::new("python3")
+        .args([
+            "-c",
+            "import pathlib, wiredtiger; \
+             print(next(pathlib.Path(wiredtiger.__file__).parent.glob('_wiredtiger.*')))",
+        ])
+        .output()
+    {
+        if output.status.success() {
+            let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let path = PathBuf::from(&path_str);
+            if path.exists() {
+                return Ok(path);
+            }
+        }
+    }
+
     Err(
         "Could not find _wiredtiger SWIG extension. \
          Set WIREDTIGER_LIB to the .so path, or ensure \

@@ -6,6 +6,7 @@ import time
 import types
 
 from smongo.sync import (
+    BulkWriteError,
     PyMongoError,
     SyncManager,
     TombstoneRegistry,
@@ -123,6 +124,61 @@ def _make_wt_store():
     return store, Session()
 
 
+class _FakeDLQSession:
+    """Minimal WiredTiger session mock for DLQ / checkpoint tables."""
+
+    def __init__(self) -> None:
+        self._tables: dict[str, dict[str, str]] = {}
+
+    def _store(self, uri: str) -> dict[str, str]:
+        return self._tables.setdefault(uri, {})
+
+    def open_cursor(self, uri: str, _x: object, _y: object) -> "_FakeDLQCursor":
+        return _FakeDLQCursor(self._store(uri))
+
+
+class _FakeDLQCursor:
+    def __init__(self, store: dict[str, str]) -> None:
+        self._store = store
+        self.key: str | None = None
+        self._iter_keys: list[str] | None = None
+        self._pos = -1
+
+    def set_key(self, k: str) -> None:
+        self.key = k
+
+    def search(self) -> int:
+        return 0 if self.key in self._store else 1
+
+    def get_key(self) -> str:
+        assert self.key is not None
+        return self.key
+
+    def get_value(self) -> str:
+        assert self.key is not None
+        return self._store[self.key]
+
+    def next(self) -> int:
+        if self._iter_keys is None:
+            self._iter_keys = sorted(self._store.keys())
+            self._pos = -1
+        self._pos += 1
+        if self._pos < len(self._iter_keys):
+            self.key = self._iter_keys[self._pos]
+            return 0
+        return 1
+
+    def remove(self) -> None:
+        assert self.key is not None
+        self._store.pop(self.key, None)
+
+    def __setitem__(self, k: str, v: str) -> None:
+        self._store[k] = v
+
+    def close(self) -> None:
+        pass
+
+
 def _make_manager(**overrides):
     mgr = SyncManager.__new__(SyncManager)
     mgr._config = {
@@ -164,6 +220,8 @@ def _make_manager(**overrides):
     mgr._raw_collection_filters = {}
     mgr._active_sync_filter = None
     mgr._vector_clocks = {}
+    mgr._dlq_uri = "table:__sync_dlq"
+    mgr._ck_session = _FakeDLQSession()
     if mgr._raw_sync_rules:
         mgr._recompile_sync_filter()
     return mgr
@@ -597,6 +655,32 @@ def test_push_filter_update_blocks_non_matching_doc():
 
     mgr._push()
     assert len(pushed_ops) == 0
+
+
+# ------------------------------------------------------------------
+# VectorClock.dominates() semantics
+# ------------------------------------------------------------------
+
+
+def test_vector_clock_empty_vs_empty():
+    """Two empty clocks: neither dominates."""
+    from smongo.sync import VectorClock
+
+    assert VectorClock({}).dominates(VectorClock({})) is False
+
+
+def test_vector_clock_nonempty_dominates_empty():
+    """A non-empty clock dominates an empty one."""
+    from smongo.sync import VectorClock
+
+    assert VectorClock({"a": 1}).dominates(VectorClock({})) is True
+
+
+def test_vector_clock_empty_does_not_dominate_nonempty():
+    """An empty clock does not dominate a non-empty one."""
+    from smongo.sync import VectorClock
+
+    assert VectorClock({}).dominates(VectorClock({"a": 1})) is False
 
 
 # ------------------------------------------------------------------
@@ -1124,3 +1208,130 @@ def test_push_populates_ns_stats():
     assert "db.users" in mgr._ns_stats
     assert mgr._ns_stats["db.users"]["last_push_count"] == 1
     assert mgr._ns_stats["db.users"]["last_push_ts"] is not None
+
+
+# ── Dead-Letter Queue ────────────────────────────────────────────────
+
+
+def test_dlq_enqueue_on_partial_failure():
+    """Failed ops from _flush_bulk are enqueued into the DLQ."""
+    mgr = _make_manager()
+    entry_a = {"op": "insert", "doc_id": "a", "payload": {"_id": "a", "x": 1}, "ts": 1.0}
+    entry_b = {"op": "insert", "doc_id": "b", "payload": {"_id": "b", "x": 2}, "ts": 2.0}
+
+    class FailRemote:
+        def bulk_write(self, ops, ordered=False):
+            raise BulkWriteError(
+                {"writeErrors": [{"index": 1, "code": 11000, "errmsg": "dup"}]}
+            )
+
+    n_ok = mgr._flush_bulk(
+        FailRemote(), ["op_a", "op_b"], ns="db.users", op_entries=[entry_a, entry_b]
+    )
+    assert n_ok == 1
+    assert mgr._dlq_count() == 1
+
+
+def test_dlq_retry_success():
+    """Successful retry removes the entry from the DLQ."""
+    mgr = _make_manager()
+    mgr._dlq_enqueue("db.users", {
+        "op": "insert", "doc_id": "a",
+        "payload": {"_id": "a", "x": 1}, "ts": 1.0,
+    }, 11000, "dup")
+
+    assert mgr._dlq_count() == 1
+
+    class OkRemote:
+        def bulk_write(self, ops, ordered=False):
+            pass
+
+    mgr._tracked = {"db.users": (None, OkRemote(), None)}
+    # Set next_retry_ts to the past so sweep picks it up
+    dlq_store = mgr._ck_session._store(mgr._dlq_uri)
+    for k in list(dlq_store):
+        v = json.loads(dlq_store[k])
+        v["next_retry_ts"] = 0
+        dlq_store[k] = json.dumps(v, default=str)
+
+    mgr._sweep_dlq()
+    assert mgr._dlq_count() == 0
+
+
+def test_dlq_retry_exhaust():
+    """After max retries, the entry is marked permanently failed."""
+    mgr = _make_manager()
+    mgr._config["max_dlq_retries"] = 2
+    mgr._dlq_enqueue("db.users", {
+        "op": "insert", "doc_id": "a",
+        "payload": {"_id": "a", "x": 1}, "ts": 1.0,
+    }, 11000, "dup")
+
+    class FailRemote:
+        def bulk_write(self, ops, ordered=False):
+            raise BulkWriteError(
+                {"writeErrors": [{"index": 0, "code": 11000, "errmsg": "dup"}]}
+            )
+
+    mgr._tracked = {"db.users": (None, FailRemote(), None)}
+    dlq_store = mgr._ck_session._store(mgr._dlq_uri)
+
+    for _ in range(3):
+        for k in list(dlq_store):
+            v = json.loads(dlq_store[k])
+            v["next_retry_ts"] = 0
+            dlq_store[k] = json.dumps(v, default=str)
+        mgr._sweep_dlq()
+
+    assert mgr._dlq_count() == 1
+    assert mgr._dlq_count(permanent_only=True) == 1
+
+
+def test_dlq_status_reporting():
+    """status() includes dlq_depth and dlq_permanent_failures."""
+    mgr = _make_manager()
+    mgr._thread = None
+    mgr._dlq_enqueue("db.users", {
+        "op": "insert", "doc_id": "a",
+        "payload": {"_id": "a"}, "ts": 1.0,
+    }, 11000, "dup")
+    mgr._dlq_enqueue("db.users", {
+        "op": "insert", "doc_id": "b",
+        "payload": {"_id": "b"}, "ts": 2.0,
+    }, 11000, "dup")
+
+    # Mark one as permanently failed
+    dlq_store = mgr._ck_session._store(mgr._dlq_uri)
+    for k in list(dlq_store)[:1]:
+        v = json.loads(dlq_store[k])
+        v["permanently_failed"] = True
+        dlq_store[k] = json.dumps(v, default=str)
+
+    s = mgr.status()
+    assert s["dlq_depth"] == 2
+    assert s["dlq_permanent_failures"] == 1
+
+
+def test_dlq_entry_to_pymongo_op():
+    """_entry_to_pymongo_op reconstructs write ops from oplog entries."""
+    mgr = _make_manager()
+
+    insert_op = mgr._entry_to_pymongo_op({
+        "op": "insert", "doc_id": "a",
+        "payload": {"_id": "a", "x": 1}, "ts": 1.0,
+    })
+    assert insert_op is not None
+
+    update_op = mgr._entry_to_pymongo_op({
+        "op": "update", "doc_id": "a",
+        "payload": {"$set": {"x": 2}}, "ts": 2.0,
+    })
+    assert update_op is not None
+
+    delete_op = mgr._entry_to_pymongo_op({
+        "op": "delete", "doc_id": "a", "payload": None, "ts": 3.0,
+    })
+    assert delete_op is not None
+
+    none_op = mgr._entry_to_pymongo_op({"op": "index_create", "doc_id": "idx"})
+    assert none_op is None

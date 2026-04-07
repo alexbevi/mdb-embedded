@@ -92,6 +92,10 @@ After a successful push, if `oplog_auto_compact` is enabled (default), the sync 
 
 **Fixed.** `_atomic_checkpoint_and_compact()` now wraps both the checkpoint write and oplog truncation in a single WiredTiger transaction. A crash between the two triggers a rollback, preventing duplicate ops on restart. The new `_ck_lock` serializes all checkpoint-session access for thread safety under concurrent push.
 
+### 8b. Dead-letter queue for failed ops (Added in 0.9.3)
+
+When individual ops within a `bulk_write` fail, they are now captured in `table:__sync_dlq` instead of being logged and forgotten. Each DLQ entry stores the original oplog entry, error code, message, retry count, and next-retry timestamp. A sweep at the start of each push cycle retries eligible entries with exponential backoff. After `max_dlq_retries` (default 5), entries are marked `permanently_failed`. `status()` exposes `dlq_depth` and `dlq_permanent_failures` for monitoring.
+
 ---
 
 ## Conflict Resolution Subtleties
@@ -137,20 +141,9 @@ The `field_merge` conflict resolver uses `changed_fields` from the oplog to dete
 
 ## Change Streams vs. Timestamp Polling
 
-### 13. Change streams require a replica set
+### 13. ~~Change streams require a replica set~~ (FIXED in 0.9.3)
 
-MongoDB change streams require a replica set (or sharded cluster). A standalone `mongod` does not support them. The current `docker-compose.yml` uses standalone `mongo:7`, so the integration test fixture explicitly sets `use_change_stream_pull: False`.
-
-**Impact:** The preferred pull mechanism (change streams with resume tokens) is never exercised in CI. Only the timestamp polling fallback is tested.
-**Fix:** Initialize `mongo:7` as a single-node replica set in docker-compose:
-
-```yaml
-mongo:
-  image: mongo:7
-  command: mongod --replSet rs0 --bind_ip_all
-```
-
-With a healthcheck that calls `rs.initiate()` on first boot.
+**Fixed.** The testcontainers fixture now runs `mongo:7` as a single-node replica set (`--replSet rs0` + `rs.initiate()`). `docker-compose.yml` and CI are updated to match. Dedicated integration tests exercise the change stream pull path, including delete propagation. The `_pull_via_change_stream()` method now saves the initial resume token even when no events arrive, so events between pull cycles are not lost.
 
 ### 14. Timestamp polling misses remote deletes
 
@@ -183,11 +176,11 @@ The sync layer converts documents between smongo-native types and PyMongo types 
 
 **Impact:** Round-tripping exotic BSON types through sync may lose fidelity.
 
-### 17. Large documents near the 16MB BSON limit
+### 17. ~~Large documents near the 16MB BSON limit~~ (Improved in 0.9.3)
 
-The oplog stores the full document payload as a JSON string (not BSON). Documents near the 16MB BSON limit may exceed WiredTiger's default value size or cause JSON serialization overhead. The push path re-encodes via `_to_pymongo` and `bulk_write`, which has its own 48MB message size limit.
+**Improved.** The oplog now stores document payloads as raw BSON bytes (via the Rust encoder) instead of JSON strings. This roughly halves oplog storage and eliminates the JSON serialization overhead. The push path re-encodes via `_to_pymongo` and `bulk_write`, which has its own 48MB message size limit.
 
-**Impact:** Extremely large documents may fail to sync. Keep individual documents well under 16MB.
+**Impact:** Large documents are better handled, but individual documents should still stay well under 16MB.
 
 ---
 
@@ -251,8 +244,9 @@ LWW conflict resolution depends on timestamps. Docker containers share the host 
 | Conflict: custom callable | Not tested | Gap |
 | CRDT merge | Not tested | Gap |
 | Vector clocks | Unit + integration tested | Covered |
-| Change stream pull | Not tested (disabled in CI) | Major gap |
+| Change stream pull | Integration tested (0.9.3) | Covered |
 | Timestamp polling pull | Integration tested | Covered |
+| Remote delete via change stream | Integration tested (0.9.3) | Covered |
 | Remote delete via polling | Known non-functional | Documented |
 | MQL sync rules (global) | Unit + integration tested | Covered |
 | Device-scoped sync | Integration tested | Covered |
@@ -269,6 +263,8 @@ LWW conflict resolution depends on timestamps. Docker containers share the host 
 | Crash recovery / checkpoint | Unit tested (0.9.2, rollback path) | Partial |
 | Concurrent namespace push | Unit tested (0.9.2, barrier) | Covered |
 | Resumable initial snapshot | Unit tested (0.9.2) | Covered |
+| Dead-letter queue | Unit tested (0.9.3) | Covered |
+| BSON oplog encoding | Unit tested (0.9.3) | Covered |
 
 ---
 
@@ -382,10 +378,10 @@ See [`examples/patterns/edge_fleet_sync.py`](examples/patterns/edge_fleet_sync.p
 
 ## Recommendations
 
-1. **Enable replica set in docker-compose** to test the change stream pull path in CI.
+1. ~~**Enable replica set in docker-compose**~~ -- done in 0.9.3.
 2. **Implement pull-side index drop reconciliation** to prevent local index bloat.
 3. **Forward all index options on pull**, not just `unique` and `sparse`.
 4. ~~**Fix checkpoint advancement on partial failure**~~ -- done in 0.9.1.
-5. **Add integration tests for field_merge and change stream pull.**
+5. ~~**Add integration tests for field_merge and change stream pull.**~~ -- change stream pull done in 0.9.3; field_merge still unit-only.
 6. ~~**Persist tombstones to WiredTiger**~~ -- done in 0.9.2.
 7. **Document the `_lastModified` requirement** for remote documents participating in LWW.
