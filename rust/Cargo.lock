@@ -1482,7 +1482,7 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
 name = "smongo-c"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "bson",
  "cbindgen",
@@ -1491,7 +1491,7 @@ dependencies = [
 
 [[package]]
 name = "smongo-engine"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "bson",
  "chrono",
@@ -1514,7 +1514,7 @@ dependencies = [
 
 [[package]]
 name = "smongo-node"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "bson",
  "napi",
@@ -1526,7 +1526,7 @@ dependencies = [
 
 [[package]]
 name = "smongo-py"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "base64",
  "bson",

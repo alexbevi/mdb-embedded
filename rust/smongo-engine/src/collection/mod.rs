@@ -3636,10 +3636,16 @@ mod tests {
 
         let result = collection.create_index(
             doc! { "age": 1 },
-            Some(IndexOptions { name: Some("email_1".to_string()), ..Default::default() }),
+            Some(IndexOptions {
+                name: Some("email_1".to_string()),
+                ..Default::default()
+            }),
         );
         assert!(result.is_err());
-        assert!(matches!(result, Err(CollectionError::IndexAlreadyExists(_))));
+        assert!(matches!(
+            result,
+            Err(CollectionError::IndexAlreadyExists(_))
+        ));
     }
 
     #[test]
