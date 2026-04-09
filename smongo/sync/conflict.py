@@ -10,6 +10,20 @@ from typing import Any, cast
 from .._types import Document
 
 # ------------------------------------------------------------------
+# Exceptions
+# ------------------------------------------------------------------
+
+
+class SyncOverflowError(RuntimeError):
+    """Raised when the oplog has been truncated past the push checkpoint.
+
+    The client has been offline (or un-synced) long enough that the oplog no
+    longer contains the entries the checkpoint refers to.  Recovery requires a
+    full resync.
+    """
+
+
+# ------------------------------------------------------------------
 # Vector clocks
 # ------------------------------------------------------------------
 
@@ -245,8 +259,45 @@ def _apply_commutative_to_doc(base_doc: Document, update_spec: Document) -> Docu
 # ------------------------------------------------------------------
 
 
+def _deterministic_lww(local_doc: Document, remote_doc: Document) -> Document:
+    """Clock-skew-resilient tiebreaker for concurrent vector-clock conflicts.
+
+    When both documents carry ``_vclock`` and neither dominates, we need a
+    deterministic winner that every node will compute identically regardless of
+    wall-clock differences.  The rule: the document whose *latest writer*
+    (highest ``node_id`` in its vclock) is lexicographically greater wins.
+    If the latest writers are equal, fall back to ``_lastModified`` and finally
+    to ``_id`` comparison so there is always a total order.
+    """
+    local_vc = (local_doc or {}).get("_vclock") or {}
+    remote_vc = (remote_doc or {}).get("_vclock") or {}
+    local_max_node = max(local_vc.keys()) if local_vc else ""
+    remote_max_node = max(remote_vc.keys()) if remote_vc else ""
+    if local_max_node != remote_max_node:
+        return local_doc if local_max_node > remote_max_node else remote_doc
+    local_ts = (local_doc or {}).get("_lastModified", 0)
+    remote_ts = (remote_doc or {}).get("_lastModified", 0)
+    if remote_ts != local_ts:
+        return remote_doc if remote_ts > local_ts else local_doc
+    return (
+        remote_doc
+        if str((remote_doc or {}).get("_id", "")) >= str((local_doc or {}).get("_id", ""))
+        else local_doc
+    )
+
+
 def _lww(local_doc: Document, remote_doc: Document) -> Document:
-    """Last-write-wins: compare _lastModified timestamps."""
+    """Last-write-wins with clock-skew resilience.
+
+    When both documents carry ``_vclock``, uses :func:`_deterministic_lww`
+    (node-id-based tiebreak) so that a skewed wall clock cannot steal wins.
+    Falls back to ``_lastModified`` comparison for legacy documents that
+    lack vector clocks.
+    """
+    local_vc = (local_doc or {}).get("_vclock")
+    remote_vc = (remote_doc or {}).get("_vclock")
+    if local_vc and remote_vc:
+        return _deterministic_lww(local_doc, remote_doc)
     local_ts = (local_doc or {}).get("_lastModified", 0)
     remote_ts = (remote_doc or {}).get("_lastModified", 0)
     return remote_doc if remote_ts >= local_ts else local_doc

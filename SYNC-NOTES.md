@@ -100,20 +100,17 @@ When individual ops within a `bulk_write` fail, they are now captured in `table:
 
 ## Conflict Resolution Subtleties
 
-### 9. `_lastModified` must be present for LWW to work
+### 9. LWW is now clock-skew-resilient (Improved in 0.9.4)
 
-The default LWW resolver compares `_lastModified` timestamps:
+**Improved.** When both documents carry `_vclock` metadata, `_lww` now delegates to `_deterministic_lww` -- a tiebreaker that uses the lexicographically highest `node_id` in each document's vector clock instead of `_lastModified`. This means a client with a skewed wall clock cannot steal wins simply by having a future timestamp. The tiebreak cascade is:
 
-```python
-def _lww(local_doc, remote_doc):
-    local_ts = (local_doc or {}).get("_lastModified", 0)
-    remote_ts = (remote_doc or {}).get("_lastModified", 0)
-    return remote_doc if remote_ts >= local_ts else local_doc
-```
+1. **Highest `node_id`** in the vclock wins (deterministic, clock-independent).
+2. If highest node_ids are equal, fall back to **`_lastModified`** comparison.
+3. If timestamps are also equal, fall back to **`_id`** comparison for a total order.
 
-If documents are inserted without `_lastModified` (e.g., directly via the wire protocol or a PyMongo client), the timestamp defaults to `0` and the remote always wins (tie goes to remote). The push path injects `_lastModified` from the oplog's `ts`, so local→remote documents get it. But documents inserted directly on the remote side by other clients must include `_lastModified` for LWW to be meaningful.
+For **legacy documents without `_vclock`**, `_lww` falls back to pure `_lastModified` comparison (backward compatible). The push path injects `_lastModified` from the oplog's `ts`, so local→remote documents always get it. Remote documents inserted directly by other clients must include `_lastModified` for the legacy fallback to be meaningful.
 
-**Impact:** Remote documents without `_lastModified` will always lose to local documents that have it, or both default to `0` and remote wins by tie.
+**Impact:** Multi-device fleets with NTP skew now resolve conflicts deterministically. All nodes running the same algorithm on the same two versions will pick the same winner.
 
 ### 10. Field-merge requires oplog `changed_fields` tracking
 
@@ -218,9 +215,67 @@ If you change a selective sync filter (e.g., widen it to include documents that 
 
 The compose file may use a named volume for the **local redb database path**. Only one process should open a given path at a time; competing containers or hosts must use different paths. If a process exits uncleanly, rely on normal filesystem recovery; avoid running two smongo instances on the same file.
 
-### 23. Clock skew between containers
+### 23. ~~Clock skew between containers~~ (Mitigated in 0.9.4)
 
-LWW conflict resolution depends on timestamps. Docker containers share the host clock, so clock skew is not usually an issue. But if running across multiple hosts (e.g., in a multi-node conflict resolution demo), NTP synchronization matters. A few seconds of drift can cause unexpected conflict resolution outcomes.
+**Mitigated.** LWW conflict resolution now uses `_deterministic_lww` (node-id-based tiebreaker) when both documents carry `_vclock`, so wall-clock skew no longer determines the winner for concurrent edits. NTP synchronization is still recommended for accurate `_lastModified` ordering of non-concurrent changes, but a few seconds of drift will not cause incorrect conflict resolution outcomes.
+
+---
+
+## Schema Rejection Handling (Added in 0.9.4)
+
+### 24. Server-side schema validation failures are now handled
+
+When a push operation fails with MongoDB error code `121` (DocumentValidationFailure), the sync layer now reacts based on the `schema_rejection_strategy` config:
+
+| Strategy | Behavior |
+|---|---|
+| `"rollback"` (default) | Pull the server's version of the document and overwrite the local copy. If the server has no copy (rejected insert), delete the local document. |
+| `"quarantine"` | Leave the local document untouched. The failed op goes to the DLQ as `permanently_failed`. |
+| `"ignore"` | Legacy behavior: DLQ the op and move on. |
+
+Schema rejections are always marked `permanently_failed` in the DLQ (no retries -- the same invalid document will always fail). The `status()` dict includes a `schema_rejections` counter.
+
+```python
+sync_config = {
+    "schema_rejection_strategy": "rollback",  # or "quarantine" or "ignore"
+}
+```
+
+**Impact:** Documents that pass local validation but fail server-side validation are no longer silently stuck in the DLQ forever. The rollback strategy keeps client and server converged.
+
+---
+
+## Oplog Overflow and Full Resync (Added in 0.9.4)
+
+### 25. Oplog overflow is now detected
+
+If the push checkpoint references an oplog key that no longer exists (because auto-compact or manual `compact_oplog` removed it), the sync layer detects this by comparing the checkpoint against `OplogReader.oldest_key()`. When `checkpoint < oldest_key`, the oplog has been truncated past the checkpoint.
+
+Behavior is controlled by the `overflow_strategy` config:
+
+| Strategy | Behavior |
+|---|---|
+| `"server_wins"` (default) | Automatically trigger a full resync: reset all checkpoints, drop local data, re-pull everything from the server. |
+| `"error"` | Raise `SyncOverflowError` so the application can handle recovery. |
+
+```python
+sync_config = {
+    "overflow_strategy": "server_wins",  # or "error"
+}
+```
+
+### 26. `force_full_resync()` is available as a public API
+
+`SyncManager.force_full_resync(db_name, coll_name)` manually triggers a full resync for any registered collection. It:
+
+1. Resets all push/pull checkpoints for the namespace.
+2. Drops all local documents in that collection.
+3. Re-pulls everything from the remote.
+4. Returns `{"ns": ..., "winner": "server", "docs_synced": N}`.
+
+This is the escape hatch for any unrecoverable sync state: oplog corruption, checkpoint drift, or manual "nuke and re-pull" when data has diverged beyond repair.
+
+**Impact:** Oplog overflow no longer silently loses changes. The sync layer either auto-recovers or raises an explicit error, and there is always a manual recovery path.
 
 ---
 
@@ -233,12 +288,14 @@ LWW conflict resolution depends on timestamps. Docker containers share the host 
 | Index pull (create) | Integration tested | Covered |
 | Index pull (drop) | Not tested | Not implemented |
 | Conflict: LWW | Implicitly tested | Covered |
+| Conflict: LWW clock-skew resilience | Unit + integration tested (0.9.4) | Covered |
 | Conflict: local_wins | Integration tested | Covered |
 | Conflict: remote_wins | Integration tested | Covered |
 | Conflict: field_merge | Not integration tested | Unit only |
 | Conflict: custom callable | Not tested | Gap |
 | CRDT merge | Not tested | Gap |
 | Vector clocks | Unit + integration tested | Covered |
+| Multi-client convergence | Unit + integration tested (0.9.4) | Covered |
 | Change stream pull | Integration tested (0.9.3) | Covered |
 | Timestamp polling pull | Integration tested | Covered |
 | Remote delete via change stream | Integration tested (0.9.3) | Covered |
@@ -250,6 +307,9 @@ LWW conflict resolution depends on timestamps. Docker containers share the host 
 | Push filter for updates | Unit tested | Covered |
 | Node ID in oplog | Integration tested | Covered |
 | Per-collection sync_filter | Unit tested | Covered |
+| Schema rejection handling | Unit + integration tested (0.9.4) | Covered |
+| Oplog overflow detection | Unit + integration tested (0.9.4) | Covered |
+| Full resync (force_full_resync) | Unit + integration tested (0.9.4) | Covered |
 | Oplog auto-compact | Not directly tested | Exercised implicitly |
 | Exponential backoff | Not tested | Gap |
 | Tombstone expiry | Unit tested (0.9.2) | Covered |
@@ -379,4 +439,7 @@ See [`examples/patterns/edge_fleet_sync.py`](examples/patterns/edge_fleet_sync.p
 4. ~~**Fix checkpoint advancement on partial failure**~~ -- done in 0.9.1.
 5. ~~**Add integration tests for field_merge and change stream pull.**~~ -- change stream pull done in 0.9.3; field_merge still unit-only.
 6. ~~**Persist tombstones to durable storage**~~ -- done in 0.9.2.
-7. **Document the `_lastModified` requirement** for remote documents participating in LWW.
+7. ~~**Document the `_lastModified` requirement**~~ -- LWW is now clock-skew-resilient via `_deterministic_lww` (0.9.4).
+8. ~~**Handle server-side schema validation failures**~~ -- done in 0.9.4; rollback, quarantine, and ignore strategies.
+9. ~~**Detect and recover from oplog overflow**~~ -- done in 0.9.4; `force_full_resync()` + `overflow_strategy` config.
+10. ~~**Add multi-client convergence tests**~~ -- done in 0.9.4; unit and integration tests for 2+ clients.

@@ -140,6 +140,7 @@ def _make_manager(**overrides):
     mgr._conflict_count = 0
     mgr._error_count = 0
     mgr._consecutive_errors = 0
+    mgr._schema_rejection_count = 0
     mgr._state = "offline"
     mgr._pending_count = 0
     mgr._last_sync_ts = None
@@ -2079,3 +2080,559 @@ def test_compute_index_hash_excludes_id():
     h1 = SyncManager._compute_index_hash([{"name": "_id_"}])
     h2 = SyncManager._compute_index_hash([])
     assert h1 == h2
+
+
+# ==================================================================
+# Deterministic LWW (clock-skew resilience)
+# ==================================================================
+
+
+class TestDeterministicLWW:
+    def test_lww_clock_skew_resilient(self):
+        """A client with a far-future clock should lose to a higher node_id
+        when vector clocks are concurrent."""
+        from smongo.sync import _lww
+
+        local = {
+            "_id": "d1",
+            "x": "skewed",
+            "_lastModified": 999_999,
+            "_vclock": {"node-a": 1},
+        }
+        remote = {
+            "_id": "d1",
+            "x": "honest",
+            "_lastModified": 100,
+            "_vclock": {"node-z": 1},
+        }
+        winner = _lww(local, remote)
+        assert winner["x"] == "honest"
+
+    def test_lww_no_vclock_falls_back_to_timestamp(self):
+        """Legacy docs without _vclock still use _lastModified comparison."""
+        from smongo.sync import _lww
+
+        local = {"_id": "d1", "x": "local", "_lastModified": 20}
+        remote = {"_id": "d1", "x": "remote", "_lastModified": 10}
+        assert _lww(local, remote)["x"] == "local"
+
+    def test_lww_vclock_one_side_only_falls_back(self):
+        """If only one doc has _vclock, fall back to timestamp comparison."""
+        from smongo.sync import _lww
+
+        local = {"_id": "d1", "x": "local", "_lastModified": 5, "_vclock": {"a": 1}}
+        remote = {"_id": "d1", "x": "remote", "_lastModified": 10}
+        assert _lww(local, remote)["x"] == "remote"
+
+    def test_lww_equal_timestamps_tiebreaks_by_id(self):
+        """When vclocks are concurrent, timestamps equal, tiebreak by _id."""
+        from smongo.sync import _deterministic_lww
+
+        doc_a = {"_id": "aaa", "_lastModified": 10, "_vclock": {"n1": 1}}
+        doc_b = {"_id": "zzz", "_lastModified": 10, "_vclock": {"n1": 1}}
+        assert _deterministic_lww(doc_a, doc_b)["_id"] == "zzz"
+
+    def test_vclock_dominates_ignores_timestamps(self):
+        """When one vclock dominates, _lastModified is irrelevant -- the
+        dominating version wins at the pull layer before _lww is ever called."""
+        mgr = _make_manager()
+
+        class Local:
+            def __init__(self):
+                self.updated = None
+
+            def get_by_id(self, doc_id):
+                return {
+                    "_id": "1",
+                    "x": "old",
+                    "_lastModified": 999_999,
+                    "_vclock": {"node-a": 1},
+                }
+
+            def update(self, query, update_spec, multi=False, _internal=False):
+                self.updated = update_spec
+
+        local = Local()
+        mgr._resolver_name = "lww"
+        mgr._resolve = _lww
+        remote_doc = {
+            "_id": "1",
+            "x": "new",
+            "_lastModified": 1,
+            "_vclock": {"node-a": 2},
+        }
+        mgr._upsert_remote_doc("db.users", local, remote_doc)
+        assert local.updated is not None
+        assert local.updated["$set"]["x"] == "new"
+
+
+# ==================================================================
+# Schema rejection handling
+# ==================================================================
+
+
+class TestSchemaRejection:
+    def _make_push_manager(self, strategy="rollback"):
+        mgr = _make_manager()
+        mgr._config["schema_rejection_strategy"] = strategy
+        mgr._config["oplog_auto_compact"] = False
+        mgr._schema_rejection_count = 0
+        return mgr
+
+    def test_schema_rejection_rollback_overwrites_local(self):
+        """Code 121 error triggers rollback: local doc replaced with server version."""
+        mgr = self._make_push_manager("rollback")
+
+        local_store = {"d1": {"_id": "d1", "x": "invalid-local"}}
+
+        class FakeOplogReader:
+            def read_from(self, checkpoint, skip_internal=True):
+                return [
+                    (
+                        "k1",
+                        {
+                            "op": "insert",
+                            "doc_id": "d1",
+                            "ts": 1.0,
+                            "payload": {"_id": "d1", "x": "invalid-local"},
+                            "changed_fields": [],
+                        },
+                    ),
+                ]
+
+            def oldest_key(self):
+                return "k1"
+
+        class FakeLocal:
+            def get_oplog_reader(self):
+                return FakeOplogReader()
+
+            _oplog_w = types.SimpleNamespace(
+                truncate_before=lambda k: 0, oplog_uri="table:oplog", node_id=None
+            )
+
+            def get_by_id(self, doc_id):
+                return local_store.get(doc_id)
+
+            def update(self, query, update_spec, multi=False, _internal=False):
+                doc_id = query["_id"]
+                if "$set" in update_spec:
+                    local_store[doc_id] = {"_id": doc_id, **update_spec["$set"]}
+
+            def delete(self, query, multi=False, _internal=False):
+                local_store.pop(query["_id"], None)
+
+            def list_indexes(self):
+                return []
+
+        class FakeRemote:
+            def bulk_write(self, ops, ordered=False):
+                raise BulkWriteError(
+                    {"writeErrors": [{"index": 0, "code": 121, "errmsg": "Document validation"}]}
+                )
+
+            def find_one(self, query):
+                return {"_id": "d1", "x": "valid-server"}
+
+            def list_indexes(self):
+                return []
+
+        local = FakeLocal()
+        remote = FakeRemote()
+        mgr._tracked = {"db.users": (local, remote, None)}
+        mgr._get_checkpoint = lambda k: None
+        mgr._set_checkpoint = lambda k, v: None
+
+        mgr._push()
+        assert local_store["d1"]["x"] == "valid-server"
+        assert mgr._schema_rejection_count == 1
+
+    def test_schema_rejection_quarantine_preserves_local(self):
+        """With quarantine strategy, local doc is left untouched."""
+        mgr = self._make_push_manager("quarantine")
+
+        local_store = {"d1": {"_id": "d1", "x": "invalid-local"}}
+
+        class FakeOplogReader:
+            def read_from(self, checkpoint, skip_internal=True):
+                return [
+                    (
+                        "k1",
+                        {
+                            "op": "insert",
+                            "doc_id": "d1",
+                            "ts": 1.0,
+                            "payload": {"_id": "d1", "x": "invalid-local"},
+                            "changed_fields": [],
+                        },
+                    ),
+                ]
+
+            def oldest_key(self):
+                return "k1"
+
+        class FakeLocal:
+            def get_oplog_reader(self):
+                return FakeOplogReader()
+
+            _oplog_w = types.SimpleNamespace(
+                truncate_before=lambda k: 0, oplog_uri="table:oplog", node_id=None
+            )
+
+            def get_by_id(self, doc_id):
+                return local_store.get(doc_id)
+
+            def list_indexes(self):
+                return []
+
+        class FakeRemote:
+            def bulk_write(self, ops, ordered=False):
+                raise BulkWriteError(
+                    {"writeErrors": [{"index": 0, "code": 121, "errmsg": "Document validation"}]}
+                )
+
+            def list_indexes(self):
+                return []
+
+        mgr._tracked = {"db.users": (FakeLocal(), FakeRemote(), None)}
+        mgr._get_checkpoint = lambda k: None
+        mgr._set_checkpoint = lambda k, v: None
+
+        mgr._push()
+        assert local_store["d1"]["x"] == "invalid-local"
+        assert mgr._schema_rejection_count == 1
+
+    def test_schema_rejection_insert_deletes_local(self):
+        """If server has no copy of the rejected doc, rollback deletes locally."""
+        mgr = self._make_push_manager("rollback")
+
+        local_store = {"d1": {"_id": "d1", "x": "orphan"}}
+
+        class FakeOplogReader:
+            def read_from(self, checkpoint, skip_internal=True):
+                return [
+                    (
+                        "k1",
+                        {
+                            "op": "insert",
+                            "doc_id": "d1",
+                            "ts": 1.0,
+                            "payload": {"_id": "d1", "x": "orphan"},
+                            "changed_fields": [],
+                        },
+                    ),
+                ]
+
+            def oldest_key(self):
+                return "k1"
+
+        class FakeLocal:
+            def get_oplog_reader(self):
+                return FakeOplogReader()
+
+            _oplog_w = types.SimpleNamespace(
+                truncate_before=lambda k: 0, oplog_uri="table:oplog", node_id=None
+            )
+
+            def get_by_id(self, doc_id):
+                return local_store.get(doc_id)
+
+            def delete(self, query, multi=False, _internal=False):
+                local_store.pop(query["_id"], None)
+
+            def list_indexes(self):
+                return []
+
+        class FakeRemote:
+            def bulk_write(self, ops, ordered=False):
+                raise BulkWriteError(
+                    {"writeErrors": [{"index": 0, "code": 121, "errmsg": "Validation failed"}]}
+                )
+
+            def find_one(self, query):
+                return None
+
+            def list_indexes(self):
+                return []
+
+        mgr._tracked = {"db.users": (FakeLocal(), FakeRemote(), None)}
+        mgr._get_checkpoint = lambda k: None
+        mgr._set_checkpoint = lambda k, v: None
+
+        mgr._push()
+        assert "d1" not in local_store
+
+
+# ==================================================================
+# Oplog overflow detection and full resync
+# ==================================================================
+
+
+class TestOplogOverflow:
+    def test_overflow_detection_triggers_resync(self):
+        """When checkpoint < oldest_key, overflow is detected and resync called."""
+        mgr = _make_manager()
+        mgr._config["oplog_auto_compact"] = False
+        mgr._config["overflow_strategy"] = "server_wins"
+        mgr._schema_rejection_count = 0
+
+        resync_calls: list[str] = []
+        orig = mgr._force_full_resync
+
+        def fake_resync(ns, local_coll, remote_coll, winner="server"):
+            resync_calls.append(ns)
+            return {"ns": ns, "winner": winner, "docs_synced": 0}
+
+        mgr._force_full_resync = fake_resync
+
+        class FakeOplogReader:
+            def read_from(self, checkpoint, skip_internal=True):
+                return []
+
+            def oldest_key(self):
+                return "00000000000000050000-uuid"
+
+        class FakeLocal:
+            def get_oplog_reader(self):
+                return FakeOplogReader()
+
+            _oplog_w = types.SimpleNamespace(
+                truncate_before=lambda k: 0, oplog_uri="table:oplog", node_id=None
+            )
+
+            def list_indexes(self):
+                return []
+
+        class FakeRemote:
+            def list_indexes(self):
+                return []
+
+        local = FakeLocal()
+        remote = FakeRemote()
+        mgr._tracked = {"db.users": (local, remote, None)}
+        mgr._get_checkpoint = lambda k: "00000000000000010000-uuid"
+        mgr._set_checkpoint = lambda k, v: None
+
+        mgr._push_namespace("db.users", local, remote, None, 100)
+        assert resync_calls == ["db.users"]
+
+    def test_overflow_error_strategy_raises(self):
+        """With overflow_strategy='error', SyncOverflowError is raised."""
+        from smongo.sync import SyncOverflowError
+
+        mgr = _make_manager()
+        mgr._config["oplog_auto_compact"] = False
+        mgr._config["overflow_strategy"] = "error"
+        mgr._schema_rejection_count = 0
+
+        class FakeOplogReader:
+            def oldest_key(self):
+                return "00000000000000050000-uuid"
+
+        class FakeLocal:
+            def get_oplog_reader(self):
+                return FakeOplogReader()
+
+            _oplog_w = types.SimpleNamespace(
+                truncate_before=lambda k: 0, oplog_uri="table:oplog", node_id=None
+            )
+
+        mgr._get_checkpoint = lambda k: "00000000000000010000-uuid"
+
+        with pytest.raises(SyncOverflowError):
+            mgr._push_namespace("db.users", FakeLocal(), object(), None, 100)
+
+    def test_force_full_resync_server_wins(self):
+        """Full resync clears local data and re-pulls from remote."""
+        mgr = _make_manager()
+        mgr._schema_rejection_count = 0
+
+        local_store: dict[str, dict] = {"d1": {"_id": "d1", "x": "stale"}}
+
+        class FakeLocal:
+            def find(self, q, projection=None):
+                return [{"_id": k} for k in list(local_store)]
+
+            def delete(self, query, multi=False, _internal=False):
+                local_store.pop(query["_id"], None)
+
+            def insert_one(self, doc, _internal=False):
+                local_store[doc["_id"]] = dict(doc)
+
+        class FakeRemote:
+            def find(self, q):
+                return [{"_id": "d1", "x": "fresh"}, {"_id": "d2", "x": "new"}]
+
+        checkpoints_removed: list[str] = []
+        orig_remove = mgr._rust.sync_kv_remove
+
+        def tracking_remove(uri, key):
+            checkpoints_removed.append(key)
+
+        mgr._rust.sync_kv_remove = tracking_remove
+
+        result = mgr._force_full_resync("db.users", FakeLocal(), FakeRemote(), winner="server")
+        assert result["docs_synced"] == 2
+        assert result["winner"] == "server"
+        assert local_store["d1"]["x"] == "fresh"
+        assert "d2" in local_store
+        assert "push:db.users" in checkpoints_removed
+
+    def test_no_overflow_when_checkpoint_none(self):
+        """Fresh namespace (no checkpoint) should not trigger overflow."""
+        mgr = _make_manager()
+        mgr._config["oplog_auto_compact"] = False
+        mgr._schema_rejection_count = 0
+
+        pushed_ops: list = []
+
+        class FakeOplogReader:
+            def read_from(self, checkpoint, skip_internal=True):
+                return [
+                    (
+                        "k1",
+                        {
+                            "op": "insert",
+                            "doc_id": "d1",
+                            "ts": 1.0,
+                            "payload": {"_id": "d1", "v": 1},
+                            "changed_fields": [],
+                        },
+                    ),
+                ]
+
+            def oldest_key(self):
+                return "k1"
+
+        class FakeLocal:
+            def get_oplog_reader(self):
+                return FakeOplogReader()
+
+            _oplog_w = types.SimpleNamespace(
+                truncate_before=lambda k: 0, oplog_uri="table:oplog", node_id=None
+            )
+
+            def get_by_id(self, doc_id):
+                return None
+
+            def list_indexes(self):
+                return []
+
+        class FakeRemote:
+            def bulk_write(self, ops, ordered=False):
+                pushed_ops.extend(ops)
+
+            def list_indexes(self):
+                return []
+
+        mgr._tracked = {"db.users": (FakeLocal(), FakeRemote(), None)}
+        mgr._get_checkpoint = lambda k: None
+        mgr._set_checkpoint = lambda k, v: None
+
+        mgr._push_namespace("db.users", FakeLocal(), FakeRemote(), None, 100)
+        assert len(pushed_ops) == 1
+
+
+# ==================================================================
+# Multi-client convergence (unit-level simulation)
+# ==================================================================
+
+
+class TestMultiClientConvergence:
+    def test_two_clients_concurrent_edits_converge(self):
+        """Two managers with different node_ids resolve the same conflict identically."""
+        from smongo.sync import _lww
+
+        mgr_a = _make_manager(node_id="node-alpha")
+        mgr_a._resolver_name = "lww"
+        mgr_a._resolve = _lww
+        mgr_a._schema_rejection_count = 0
+
+        mgr_b = _make_manager(node_id="node-beta")
+        mgr_b._resolver_name = "lww"
+        mgr_b._resolve = _lww
+        mgr_b._schema_rejection_count = 0
+
+        store_a: dict[str, dict] = {}
+        store_b: dict[str, dict] = {}
+
+        class LocalForStore:
+            def __init__(self, store, initial_doc=None):
+                self._store = store
+                if initial_doc:
+                    self._store[initial_doc["_id"]] = dict(initial_doc)
+
+            def get_by_id(self, doc_id):
+                return self._store.get(str(doc_id))
+
+            def update(self, query, update_spec, multi=False, _internal=False):
+                doc_id = str(query["_id"])
+                if doc_id in self._store and "$set" in update_spec:
+                    self._store[doc_id].update(update_spec["$set"])
+
+            def insert_one(self, doc, _internal=False):
+                self._store[str(doc["_id"])] = dict(doc)
+
+        base = {"_id": "shared", "x": "original", "_lastModified": 1, "_vclock": {}}
+
+        local_a = LocalForStore(store_a, {**base, "x": "from-alpha", "_vclock": {"node-alpha": 1}})
+        local_b = LocalForStore(store_b, {**base, "x": "from-beta", "_vclock": {"node-beta": 1}})
+
+        remote_doc = {
+            "_id": "shared",
+            "x": "from-beta",
+            "_lastModified": 5,
+            "_vclock": {"node-beta": 1},
+        }
+
+        mgr_a._upsert_remote_doc("db.users", local_a, dict(remote_doc))
+        mgr_b._upsert_remote_doc(
+            "db.users",
+            local_b,
+            {
+                "_id": "shared",
+                "x": "from-alpha",
+                "_lastModified": 3,
+                "_vclock": {"node-alpha": 1},
+            },
+        )
+
+        assert store_a["shared"]["x"] == store_b["shared"]["x"]
+
+    def test_three_clients_transitive_ordering(self):
+        """Deterministic LWW is transitive: if C>B and B>A then C>A, yielding
+        a single global winner that beats all others."""
+        from smongo.sync import _deterministic_lww
+
+        docs = [
+            {"_id": "d1", "x": "a", "_lastModified": 10, "_vclock": {"node-a": 1}},
+            {"_id": "d1", "x": "b", "_lastModified": 10, "_vclock": {"node-b": 1}},
+            {"_id": "d1", "x": "c", "_lastModified": 10, "_vclock": {"node-c": 1}},
+        ]
+
+        def beats_all(candidate, others):
+            return all(_deterministic_lww(candidate, o)["x"] == candidate["x"] for o in others)
+
+        global_winners = [d for d in docs if beats_all(d, [o for o in docs if o is not d])]
+        assert len(global_winners) == 1
+        assert global_winners[0]["x"] == "c"
+
+        w_ab = _deterministic_lww(docs[0], docs[1])
+        w_bc = _deterministic_lww(docs[1], docs[2])
+        w_ac = _deterministic_lww(docs[0], docs[2])
+        assert w_bc["x"] == "c"
+        assert w_ac["x"] == "c"
+        assert _deterministic_lww(w_ab, docs[2])["x"] == "c"
+
+
+# ==================================================================
+# Status includes schema_rejections
+# ==================================================================
+
+
+def test_status_includes_schema_rejections():
+    mgr = _make_manager()
+    mgr._thread = None
+    mgr._schema_rejection_count = 3
+    s = mgr.status()
+    assert s["schema_rejections"] == 3

@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from .._types import Document, Predicate
-from .conflict import _is_commutative_op
+from .conflict import SyncOverflowError, _is_commutative_op
 
 try:
     from pymongo import DeleteOne, InsertOne, UpdateOne
@@ -73,6 +73,22 @@ class _PushMixin:
         """Push pending oplog entries for a single namespace to the remote."""
         checkpoint = self._get_checkpoint(f"push:{ns}")
         reader = local_coll.get_oplog_reader()
+
+        if checkpoint is not None:
+            try:
+                oldest = reader.oldest_key()
+            except Exception:
+                oldest = None
+            if oldest is not None and checkpoint < oldest:
+                log.error(
+                    "Oplog overflow for %s: checkpoint %s is older than oldest key %s",
+                    ns,
+                    checkpoint,
+                    oldest,
+                )
+                self._handle_oplog_overflow(ns, local_coll, remote_coll)
+                return
+
         entries = reader.read_from(checkpoint, skip_internal=True)
 
         if not entries:
@@ -156,7 +172,9 @@ class _PushMixin:
                 batch_start_key = key
 
             if len(ops) >= batch_size:
-                n_ok = self._flush_bulk(remote_coll, ops, ns=ns, op_entries=op_entries)
+                n_ok = self._flush_bulk(
+                    remote_coll, ops, ns=ns, op_entries=op_entries, local_coll=local_coll
+                )
                 if n_ok > 0:
                     safe_key = key
                     with self._lock:
@@ -169,7 +187,9 @@ class _PushMixin:
                 batch_start_key = None
 
         if ops:
-            n_ok = self._flush_bulk(remote_coll, ops, ns=ns, op_entries=op_entries)
+            n_ok = self._flush_bulk(
+                remote_coll, ops, ns=ns, op_entries=op_entries, local_coll=local_coll
+            )
             if n_ok > 0:
                 safe_key = last_key
                 with self._lock:
@@ -279,6 +299,8 @@ class _PushMixin:
                 safe_key,
             )
 
+    _SCHEMA_VALIDATION_ERROR_CODE = 121
+
     def _flush_bulk(
         self,
         remote_coll: Any,
@@ -286,13 +308,15 @@ class _PushMixin:
         *,
         ns: str = "",
         op_entries: list[Document] | None = None,
+        local_coll: Any = None,
     ) -> int:
         """Flush a batch of operations to remote.
 
         Returns the number of successfully written ops (``len(ops)`` on full
         success, 0..n on partial failure, ``-1`` on total failure).
         Failed ops are enqueued into the dead-letter queue when *op_entries*
-        is provided.
+        is provided.  Schema validation failures (code 121) are marked as
+        permanently failed and optionally rolled back locally.
         """
         try:
             remote_coll.bulk_write(ops, ordered=False)
@@ -304,13 +328,96 @@ class _PushMixin:
             n_ok = len(ops) - n_failed
             for err in write_errors:
                 idx = err.get("index")
+                code = err.get("code")
+                errmsg = err.get("errmsg", "")
                 log.warning(
                     "Sync bulk_write error: op_index=%s code=%s msg=%s",
                     idx,
-                    err.get("code"),
-                    err.get("errmsg", ""),
+                    code,
+                    errmsg,
                 )
                 if op_entries and idx is not None and idx < len(op_entries):
-                    self._dlq_enqueue(ns, op_entries[idx], err.get("code"), err.get("errmsg", ""))
+                    is_schema = code == self._SCHEMA_VALIDATION_ERROR_CODE
+                    self._dlq_enqueue(
+                        ns,
+                        op_entries[idx],
+                        code,
+                        errmsg,
+                        permanently_failed=is_schema,
+                    )
+                    if is_schema:
+                        self._handle_schema_rejection(
+                            ns, op_entries[idx], remote_coll, local_coll, errmsg
+                        )
             log.warning("Bulk write partial failure: %d/%d ops succeeded", n_ok, len(ops))
             return n_ok
+
+    def _handle_schema_rejection(
+        self,
+        ns: str,
+        entry: Document,
+        remote_coll: Any,
+        local_coll: Any,
+        errmsg: str,
+    ) -> None:
+        """React to a server-side schema validation failure (error code 121).
+
+        Depending on ``schema_rejection_strategy`` config:
+        - ``"rollback"``: overwrite the local doc with the server version (or
+          delete if the server has no copy).
+        - ``"quarantine"``: leave the local doc untouched (DLQ-only).
+        - ``"ignore"``: legacy behaviour, DLQ and move on.
+        """
+        strategy = self._config.get("schema_rejection_strategy", "rollback")
+        doc_id = entry.get("doc_id")
+
+        with self._lock:
+            self._schema_rejection_count += 1
+
+        if strategy in ("quarantine", "ignore"):
+            log.warning(
+                "Schema rejection (%s) for %s _id=%s: %s",
+                strategy,
+                ns,
+                doc_id,
+                errmsg,
+            )
+            return
+
+        if local_coll is None or doc_id is None:
+            return
+
+        try:
+            from smongo._smongo_core import from_pymongo as _from_pymongo
+
+            remote_doc = remote_coll.find_one({"_id": _to_pymongo(doc_id)})
+            if remote_doc is not None:
+                remote_doc = _from_pymongo(remote_doc)
+                update_fields = {k: v for k, v in remote_doc.items() if k != "_id"}
+                local_coll.update(
+                    {"_id": doc_id}, {"$set": update_fields}, multi=False, _internal=True
+                )
+                log.warning(
+                    "Schema rejection rollback: overwrote local %s _id=%s with server version",
+                    ns,
+                    doc_id,
+                )
+            else:
+                local_coll.delete({"_id": doc_id}, multi=False, _internal=True)
+                log.warning(
+                    "Schema rejection rollback: deleted local %s _id=%s (no server version)",
+                    ns,
+                    doc_id,
+                )
+        except Exception as exc:
+            log.warning("Schema rejection rollback failed for %s _id=%s: %s", ns, doc_id, exc)
+
+    def _handle_oplog_overflow(self, ns: str, local_coll: Any, remote_coll: Any) -> None:
+        """Handle the case where the oplog has been truncated past the push checkpoint."""
+        strategy = self._config.get("overflow_strategy", "server_wins")
+        if strategy == "error":
+            raise SyncOverflowError(
+                f"Oplog overflow for {ns}: checkpoint references truncated entries. "
+                "Set overflow_strategy='server_wins' to auto-recover."
+            )
+        self._force_full_resync(ns, local_coll, remote_coll, winner="server")

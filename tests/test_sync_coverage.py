@@ -1,6 +1,12 @@
 """Coverage tests for smongo.sync primitives (VectorClock, TombstoneRegistry, etc.)."""
 
-from smongo.sync import DEFAULT_TOMBSTONE_TTL_SEC, TombstoneRegistry, VectorClock
+from smongo.sync import (
+    DEFAULT_TOMBSTONE_TTL_SEC,
+    SyncOverflowError,
+    TombstoneRegistry,
+    VectorClock,
+    _deterministic_lww,
+)
 
 
 class TestVectorClock:
@@ -116,3 +122,36 @@ class TestTombstoneRegistry:
         """TombstoneRegistry uses default TTL."""
         reg = TombstoneRegistry()
         assert reg._ttl == DEFAULT_TOMBSTONE_TTL_SEC
+
+
+class TestDeterministicLWWTiebreaker:
+    def test_stable_across_invocations(self):
+        """Same inputs always produce the same winner."""
+        doc_a = {"_id": "d1", "x": "a", "_lastModified": 10, "_vclock": {"n1": 1}}
+        doc_b = {"_id": "d1", "x": "b", "_lastModified": 10, "_vclock": {"n2": 1}}
+        results = {_deterministic_lww(doc_a, doc_b)["x"] for _ in range(20)}
+        assert len(results) == 1
+
+    def test_symmetric(self):
+        """Swapping local/remote produces a consistent winner."""
+        doc_a = {"_id": "d1", "x": "a", "_lastModified": 10, "_vclock": {"n1": 1}}
+        doc_b = {"_id": "d1", "x": "b", "_lastModified": 10, "_vclock": {"n2": 1}}
+        w1 = _deterministic_lww(doc_a, doc_b)["x"]
+        w2 = _deterministic_lww(doc_b, doc_a)["x"]
+        assert w1 == w2
+
+    def test_higher_node_wins(self):
+        """With concurrent clocks and equal timestamps, higher node_id wins."""
+        doc_lo = {"_id": "d1", "x": "lo", "_lastModified": 5, "_vclock": {"aaa": 1}}
+        doc_hi = {"_id": "d1", "x": "hi", "_lastModified": 5, "_vclock": {"zzz": 1}}
+        assert _deterministic_lww(doc_lo, doc_hi)["x"] == "hi"
+        assert _deterministic_lww(doc_hi, doc_lo)["x"] == "hi"
+
+
+class TestSyncOverflowError:
+    def test_is_runtime_error(self):
+        assert issubclass(SyncOverflowError, RuntimeError)
+
+    def test_message(self):
+        err = SyncOverflowError("oplog overflow")
+        assert "oplog overflow" in str(err)

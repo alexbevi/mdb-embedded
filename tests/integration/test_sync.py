@@ -4,6 +4,7 @@ import time
 
 import pytest
 
+from smongo import MongoClient as EmbeddedClient
 from smongo import SyncManager
 
 pytestmark = pytest.mark.integration
@@ -225,4 +226,208 @@ def test_change_stream_pull_delete(embedded_client, remote_client, mongo_uri, db
     mgr._pull()
 
     assert coll.find_one({"_id": "d1"}) is None
+    mgr.stop()
+
+
+# ── Edge Case: Multi-Client Conflict Convergence ─────────────────────
+
+
+def test_multi_client_conflict_convergence(tmp_path, remote_client, mongo_uri, db_name):
+    """Two embedded clients with different node_ids making conflicting edits
+    converge to the same document after syncing."""
+    client_a = EmbeddedClient(f"local://{tmp_path}/node_a")
+    client_b = EmbeddedClient(f"local://{tmp_path}/node_b")
+
+    mgr_a = SyncManager(
+        client_a,
+        mongo_uri,
+        sync_config={
+            "mode": "bidirectional",
+            "conflict_resolution": "lww",
+            "use_change_stream_pull": False,
+            "node_id": "node-alpha",
+            "oplog_auto_compact": False,
+        },
+    )
+    mgr_b = SyncManager(
+        client_b,
+        mongo_uri,
+        sync_config={
+            "mode": "bidirectional",
+            "conflict_resolution": "lww",
+            "use_change_stream_pull": False,
+            "node_id": "node-beta",
+            "oplog_auto_compact": False,
+        },
+    )
+
+    coll_a = client_a[db_name]["conv"]
+    coll_b = client_b[db_name]["conv"]
+    mgr_a.register_collection(db_name, "conv", coll_a.get_local_collection())
+    mgr_b.register_collection(db_name, "conv", coll_b.get_local_collection())
+
+    coll_a.insert_one({"_id": "shared", "value": "original"})
+    mgr_a.push()
+    mgr_b.pull()
+
+    coll_a.update_one({"_id": "shared"}, {"$set": {"value": "from-alpha"}})
+    coll_b.update_one({"_id": "shared"}, {"$set": {"value": "from-beta"}})
+
+    mgr_a.push()
+    mgr_b.push()
+
+    mgr_a.pull()
+    mgr_b.pull()
+
+    doc_a = coll_a.find_one({"_id": "shared"})
+    doc_b = coll_b.find_one({"_id": "shared"})
+    remote_doc = remote_client[db_name]["conv"].find_one({"_id": "shared"})
+
+    assert (
+        doc_a["value"] == doc_b["value"]
+    ), f"Clients diverged: A={doc_a['value']}, B={doc_b['value']}"
+
+    mgr_a.stop()
+    mgr_b.stop()
+
+
+# ── Edge Case: Clock Skew LWW Deterministic ──────────────────────────
+
+
+def test_clock_skew_lww_deterministic(embedded_client, remote_client, mongo_uri, db_name):
+    """A document with a far-future _lastModified should not automatically win
+    when vector clocks indicate concurrency."""
+    mgr = SyncManager(
+        embedded_client,
+        mongo_uri,
+        sync_config={
+            "mode": "bidirectional",
+            "conflict_resolution": "lww",
+            "use_change_stream_pull": False,
+            "node_id": "node-aaa",
+            "oplog_auto_compact": False,
+        },
+    )
+    coll = embedded_client[db_name]["skew"]
+    mgr.register_collection(db_name, "skew", coll.get_local_collection())
+
+    coll.insert_one({"_id": "sk1", "name": "base"})
+    mgr.push()
+
+    coll.update_one({"_id": "sk1"}, {"$set": {"name": "skewed-client"}})
+
+    remote_client[db_name]["skew"].update_one(
+        {"_id": "sk1"},
+        {
+            "$set": {
+                "name": "honest-remote",
+                "_lastModified": time.time() - 1000,
+                "_vclock": {"node-zzz": 1},
+            }
+        },
+    )
+
+    mgr.pull()
+
+    doc = coll.find_one({"_id": "sk1"})
+    assert doc is not None
+    assert doc["name"] == "honest-remote", (
+        "Higher node_id (node-zzz) should win over lower (node-aaa) "
+        "when vector clocks are concurrent, regardless of timestamps"
+    )
+    mgr.stop()
+
+
+# ── Edge Case: Schema Rejection Rollback ─────────────────────────────
+
+
+def test_schema_rejection_rollback_integration(embedded_client, remote_client, mongo_uri, db_name):
+    """A document that fails server-side schema validation is rolled back locally."""
+    remote_coll_name = "validated"
+
+    remote_client[db_name].create_collection(
+        remote_coll_name,
+        validator={
+            "$jsonSchema": {
+                "bsonType": "object",
+                "required": ["status"],
+                "properties": {
+                    "status": {"bsonType": "string", "enum": ["active", "inactive"]},
+                },
+            }
+        },
+    )
+    remote_client[db_name][remote_coll_name].insert_one(
+        {"_id": "v1", "status": "active", "_lastModified": time.time()}
+    )
+
+    mgr = SyncManager(
+        embedded_client,
+        mongo_uri,
+        sync_config={
+            "mode": "bidirectional",
+            "conflict_resolution": "lww",
+            "use_change_stream_pull": False,
+            "schema_rejection_strategy": "rollback",
+            "oplog_auto_compact": False,
+        },
+    )
+    coll = embedded_client[db_name][remote_coll_name]
+    mgr.register_collection(db_name, remote_coll_name, coll.get_local_collection())
+
+    mgr.pull()
+    assert coll.find_one({"_id": "v1"})["status"] == "active"
+
+    coll.update_one({"_id": "v1"}, {"$set": {"status": "INVALID_VALUE"}})
+    assert coll.find_one({"_id": "v1"})["status"] == "INVALID_VALUE"
+
+    mgr.push()
+
+    local_doc = coll.find_one({"_id": "v1"})
+    assert (
+        local_doc["status"] == "active"
+    ), "After schema rejection rollback, local doc should revert to server version"
+    assert mgr.status()["schema_rejections"] >= 1
+    mgr.stop()
+
+
+# ── Edge Case: Oplog Overflow Triggers Full Resync ───────────────────
+
+
+def test_oplog_overflow_triggers_full_resync(embedded_client, remote_client, mongo_uri, db_name):
+    """When the oplog is compacted past the push checkpoint, a full resync
+    should recover by re-pulling from the server."""
+    mgr = SyncManager(
+        embedded_client,
+        mongo_uri,
+        sync_config={
+            "mode": "bidirectional",
+            "conflict_resolution": "lww",
+            "use_change_stream_pull": False,
+            "oplog_auto_compact": False,
+            "overflow_strategy": "server_wins",
+        },
+    )
+    coll = embedded_client[db_name]["overflow"]
+    mgr.register_collection(db_name, "overflow", coll.get_local_collection())
+
+    for i in range(5):
+        coll.insert_one({"_id": f"o{i}", "val": i})
+    mgr.push()
+
+    remote_client[db_name]["overflow"].insert_one(
+        {"_id": "server_only", "val": 999, "_lastModified": time.time()}
+    )
+
+    for i in range(5, 10):
+        coll.insert_one({"_id": f"o{i}", "val": i})
+
+    local_coll = coll.get_local_collection()
+    local_coll.compact_oplog(keep=0)
+
+    mgr.sync_now()
+
+    local_doc = coll.find_one({"_id": "server_only"})
+    assert local_doc is not None, "Full resync should pull server_only doc after overflow"
+    assert local_doc["val"] == 999
     mgr.stop()

@@ -63,6 +63,8 @@ class SyncManager(_PushMixin, _PullMixin, _MetricsMixin, _DLQMixin):
         "delete_detection_enabled": True,
         "max_conflict_log_entries": 10_000,
         "validate_on_pull": False,
+        "schema_rejection_strategy": "rollback",
+        "overflow_strategy": "server_wins",
     }
 
     def __init__(
@@ -102,6 +104,7 @@ class SyncManager(_PushMixin, _PullMixin, _MetricsMixin, _DLQMixin):
         self._conflict_count = 0
         self._error_count = 0
         self._consecutive_errors = 0
+        self._schema_rejection_count = 0
         self._state = "offline"
         self._last_cycle_pushed = 0
         self._last_cycle_pulled = 0
@@ -233,6 +236,7 @@ class SyncManager(_PushMixin, _PullMixin, _MetricsMixin, _DLQMixin):
                 "collections": dict(self._ns_stats),
                 "dlq_depth": self._dlq_count(),
                 "dlq_permanent_failures": self._dlq_count(permanent_only=True),
+                "schema_rejections": self._schema_rejection_count,
                 "throughput_ops_sec": round(ops_per_sec, 2),
                 "last_cycle_duration_sec": round(self._last_cycle_duration, 4),
                 "tombstone_count": len(self._tombstones.to_dict()),
@@ -422,6 +426,71 @@ class SyncManager(_PushMixin, _PullMixin, _MetricsMixin, _DLQMixin):
                 local_coll._oplog_w.node_id = self._node_id
         except (AttributeError, TypeError):
             pass
+
+    # -- full resync ---------------------------------------------------
+
+    def force_full_resync(self, db_name: str, coll_name: str) -> dict[str, Any]:
+        """Manually trigger a full resync for a collection (server always wins).
+
+        Resets all sync checkpoints for the namespace, drops local data,
+        and re-pulls everything from the remote.
+        """
+        ns = f"{db_name}.{coll_name}"
+        tup = self._tracked.get(ns)
+        if not tup:
+            self._discover_collections()
+            tup = self._tracked.get(ns)
+        if not tup:
+            raise ValueError(f"Namespace {ns} is not registered for sync")
+        local_coll, remote_coll, _ = tup
+        return self._force_full_resync(ns, local_coll, remote_coll, winner="server")
+
+    def _force_full_resync(
+        self,
+        ns: str,
+        local_coll: Any,
+        remote_coll: Any,
+        winner: str = "server",
+    ) -> dict[str, Any]:
+        """Reset sync state for *ns* and re-pull from the winning side."""
+        log.warning("Full resync triggered for %s (winner=%s)", ns, winner)
+
+        for suffix in (
+            f"push:{ns}",
+            f"pull_ts:{ns}",
+            f"pull_cs_init:{ns}",
+            f"pull_cs_page:{ns}",
+            f"pull_cs_token:{ns}",
+        ):
+            with self._ck_lock:
+                try:
+                    self._rust.sync_kv_remove(self._ck_uri, suffix)
+                except Exception:
+                    pass
+
+        docs_synced = 0
+        if winner == "server":
+            try:
+                all_local = list(local_coll.find({}, projection={"_id": 1}))
+                for doc in all_local:
+                    local_coll.delete({"_id": doc["_id"]}, multi=False, _internal=True)
+            except Exception as exc:
+                log.warning("Full resync: error clearing local data for %s: %s", ns, exc)
+
+            try:
+                from smongo._smongo_core import from_pymongo as _from_pymongo
+
+                for rdoc in remote_coll.find({}):
+                    rdoc = _from_pymongo(rdoc)
+                    local_coll.insert_one(rdoc, _internal=True)
+                    docs_synced += 1
+            except Exception as exc:
+                log.warning("Full resync: error pulling remote data for %s: %s", ns, exc)
+
+        with self._lock:
+            self._pulled_count += docs_synced
+
+        return {"ns": ns, "winner": winner, "docs_synced": docs_synced}
 
     # -- checkpoint persistence ----------------------------------------
 

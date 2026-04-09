@@ -31,8 +31,16 @@ log = logging.getLogger("smongo.sync")
 class _DLQMixin:
     """Mixin providing dead-letter queue operations for the SyncManager."""
 
-    def _dlq_enqueue(self, ns: str, entry: Document, error_code: Any, error_msg: str) -> None:
-        """Add a failed op to the DLQ for later retry."""
+    def _dlq_enqueue(
+        self,
+        ns: str,
+        entry: Document,
+        error_code: Any,
+        error_msg: str,
+        *,
+        permanently_failed: bool = False,
+    ) -> None:
+        """Add a failed op to the DLQ for later retry (or permanent quarantine)."""
         backoff_base = float(self._config.get("dlq_backoff_base_sec", 30))
         now = time.time()
         key = f"{time.time_ns():020d}-{uuid.uuid4()}"
@@ -45,7 +53,7 @@ class _DLQMixin:
                 "retry_count": 0,
                 "next_retry_ts": now + backoff_base,
                 "first_failed_ts": now,
-                "permanently_failed": False,
+                "permanently_failed": permanently_failed,
             },
             default=str,
         )

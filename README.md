@@ -56,6 +56,24 @@ results = users.aggregate([
 
 ---
 
+## Who Is This For?
+
+The key distinction is **in-process / embedded**. If you can run MongoDB Community or Atlas in your environment, you probably should -- smongo is not a MongoDB replacement at scale. It fills a different niche entirely:
+
+| Audience | Why smongo makes sense |
+|---|---|
+| **Offline-first app developers** | You want a MongoDB-compatible query API without running a server process. Reads and writes hit a local file; the oplog accumulates while disconnected and syncs when connectivity returns. |
+| **Prototypers** | Drop-in PyMongo-style API over a local file (redb) means zero infrastructure to start. Build with `MongoClient("local://data")`, then flip the URI to `MongoClient("mongodb+srv://...")` when you're ready for Atlas. Same code, same queries, different backend. |
+| **Embedded / edge deployments** | IoT dashboards, kiosk apps, or Electron apps that need a document database bundled into the binary (Python, Node, C, or WASM) without requiring `mongod`. Each device runs its own smongo engine and syncs to a central Atlas cluster. |
+| **Browser-first app developers** | The WASM build with OPFS persistence gives a real query engine (indexes, aggregation pipeline, `$lookup`) running entirely in the browser tab. Useful for local-first SaaS, collaborative tools, or privacy-sensitive apps where data shouldn't leave the device by default. |
+| **Dev/test without Docker** | Unit and integration tests run against the embedded engine with no containers, no network, no cleanup. Same MQL you'll use in production. |
+
+### Who would *not* use it
+
+Anyone needing production multi-node MongoDB, replica sets, sharding, or full wire protocol compatibility. smongo is an embedded engine that speaks a subset of the MongoDB API -- it's SQLite for the document world, not a MongoDB replacement at scale. If you can `apt install mongod` or spin up Atlas, and you don't need offline/embedded/browser, use the real thing.
+
+---
+
 ## AI & LLM Integration
 
 smongo speaks the real MongoDB wire protocol. That means **LangChain, CrewAI, mongosh, Compass, and any MongoDB driver** connect to the embedded engine over TCP and work unchanged -- they don't know it's not Atlas.
@@ -318,6 +336,40 @@ for device in fleet:
 ```
 
 See [`examples/patterns/edge_fleet_sync.py`](examples/patterns/edge_fleet_sync.py) for a complete working example.
+
+### Sync Edge Cases We Handle
+
+Bidirectional sync is easy on the happy path. The hard part is what happens when things go wrong. smongo's sync layer has been hardened against the following real-world edge cases, with unit and integration tests for each:
+
+**Multiple conflicting changes on both server and multiple clients, then bring everything back online.**
+Each document carries a `_vclock` (vector clock) with per-node counters. When a client reconnects and pulls, the sync layer compares clocks: if one version causally dominates, it wins automatically. If the edits are truly concurrent (neither clock dominates), the configured conflict resolver decides -- LWW, local-wins, remote-wins, field-level merge, CRDT merge, or a custom callable. After resolution, the merged clock is ticked and stamped on the winning document so all replicas converge to the same state.
+
+**Clock skew breaking Last-Write-Wins.**
+The LWW resolver no longer trusts wall-clock timestamps blindly. When both documents carry `_vclock`, the tiebreaker uses the lexicographically highest `node_id` in each vector clock -- deterministic and clock-independent. A client with a skewed system clock cannot steal wins. The `_lastModified` timestamp is only consulted as a secondary signal for legacy documents that lack vector clocks.
+
+**A change that succeeds locally but fails server-side schema validation.**
+When a push fails with MongoDB error code `121` (DocumentValidationFailure), the sync layer reacts based on `schema_rejection_strategy`:
+- `"rollback"` (default): pull the server's version of the document and overwrite the local copy (or delete it if the server has no copy).
+- `"quarantine"`: leave the local document untouched; the failed op is permanently quarantined in the dead-letter queue.
+- `"ignore"`: legacy behavior.
+
+```python
+sync_config = {"schema_rejection_strategy": "rollback"}
+```
+
+**Oplog overflow -- too much data written without syncing.**
+If the client writes so much data that oplog auto-compaction (or manual `compact_oplog`) removes entries the push checkpoint refers to, the sync layer detects this by comparing the checkpoint against the oldest oplog key. When overflow is detected, it triggers a full resync based on `overflow_strategy`:
+- `"server_wins"` (default): reset all checkpoints, drop local data, re-pull everything from the server.
+- `"error"`: raise `SyncOverflowError` so the application can handle recovery.
+
+A manual escape hatch is always available:
+
+```python
+sync.force_full_resync("mydb", "mycollection")
+# → {"ns": "mydb.mycollection", "winner": "server", "docs_synced": 1234}
+```
+
+The general correctness property: **all clients and server(s) end up with the same data after a sync completes**, either not losing changes or losing them in a predictable, documented way. When sync *can't* complete (oplog overflow, permanent DLQ failures), one winning side is picked deterministically so replicas converge rather than silently diverge. See [SYNC-NOTES.md](SYNC-NOTES.md) for the full engineering notes.
 
 ### Wire Protocol Server
 smongo speaks the real MongoDB binary protocol (OP_MSG, OP_COMPRESSED, OP_QUERY). Point `mongosh`, PyMongo, Compass, or any MongoDB driver at `localhost:27018` and they'll talk to the embedded engine as if it were a real `mongod`. The Docker Compose setup exposes the wire server on port 27018 alongside the web dashboard -- `docker compose up` and connect Compass immediately. Small database, real protocol.
