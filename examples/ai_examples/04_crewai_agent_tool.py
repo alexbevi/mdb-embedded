@@ -108,12 +108,11 @@ def main() -> None:
     print(
         f"   {employees.count_documents({})} employees, {projects.count_documents({})} projects seeded."
     )
-    native.close()
 
     # ── 2. Start wire server ───────────────────────────────────
     print(f"\n2. Starting wire protocol server on port {PORT}...")
 
-    with WireServer(db_path, port=PORT) as _srv:
+    with WireServer(db_path, port=PORT, local_client=native.get_local_client()) as _srv:
         time.sleep(0.3)
 
         # ── 3. Connect with STANDARD PyMongo ───────────────────
@@ -231,6 +230,7 @@ def main() -> None:
 
         client.close()
 
+    native.close()
     shutil.rmtree(db_path, ignore_errors=True)
     sys.stdout.flush()
     os._exit(0)

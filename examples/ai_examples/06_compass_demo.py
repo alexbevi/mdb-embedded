@@ -56,8 +56,8 @@ PORT = 27017
 DB_PATH = os.path.join(tempfile.gettempdir(), "smongo_compass_demo")
 
 
-def seed_data(db_path: str) -> None:
-    """Seed a rich dataset for Compass exploration."""
+def seed_data(db_path: str) -> SmongoClient:
+    """Seed a rich dataset for Compass exploration. Returns the open client."""
     native = SmongoClient(f"local://{db_path}")
     db = native["company"]
 
@@ -232,7 +232,7 @@ def seed_data(db_path: str) -> None:
     )
     print(f"   knowledge_base: {knowledge.count_documents({})} docs with 32-dim embeddings")
 
-    native.close()
+    return native
 
 
 def main() -> None:
@@ -244,12 +244,12 @@ def main() -> None:
     # ── 1. Seed data ───────────────────────────────────────────
     print("1. Seeding dataset...")
     os.makedirs(DB_PATH, exist_ok=True)
-    seed_data(DB_PATH)
+    native = seed_data(DB_PATH)
 
     # ── 2. Start the wire server ───────────────────────────────
     print(f"\n2. Starting wire protocol server on port {PORT}...\n")
 
-    server = WireServer(DB_PATH, port=PORT)
+    server = WireServer(DB_PATH, port=PORT, local_client=native.get_local_client())
     server.start()
     time.sleep(0.3)
 
@@ -306,6 +306,7 @@ def main() -> None:
     def handle_shutdown(sig, frame):
         print("\n\nShutting down...")
         server.stop()
+        native.close()
         print("Server stopped. Data preserved at:", DB_PATH)
         print("Restart anytime:  python examples/ai_examples/06_compass_demo.py\n")
         sys.exit(0)

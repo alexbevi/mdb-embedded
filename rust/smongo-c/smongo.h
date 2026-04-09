@@ -69,6 +69,47 @@ int32_t smongo_open(const char *path, struct SmongoDb **out);
 void smongo_close(struct SmongoDb *db);
 
 /**
+ * Drop the entire database, removing all data files.
+ *
+ * This consumes the database handle — it must not be used after this call.
+ * Pass null for a no-op.
+ *
+ * # Safety
+ * `db` must be a handle previously returned by `smongo_open`, or null.
+ */
+int32_t smongo_drop(struct SmongoDb *db);
+
+/**
+ * List all collection names in the database.
+ *
+ * On success, writes a BSON document containing a `names` array of strings
+ * into `*result` / `*result_len`. Free the result with `smongo_free`.
+ *
+ * # Safety
+ * `db`, `result`, and `result_len` must be valid pointers.
+ */
+int32_t smongo_list_collection_names(struct SmongoDb *db, uint8_t **result, uintptr_t *result_len);
+
+/**
+ * Drop a collection by name.
+ *
+ * # Safety
+ * `db` must be a valid `SmongoDb` handle. `name` must be a valid C string.
+ */
+int32_t smongo_drop_collection(struct SmongoDb *db, const char *name);
+
+/**
+ * Get database statistics.
+ *
+ * On success, writes a BSON document containing `collectionCount` and
+ * `sizeBytes` into `*result` / `*result_len`.
+ *
+ * # Safety
+ * All pointer arguments must be valid.
+ */
+int32_t smongo_stats(struct SmongoDb *db, uint8_t **result, uintptr_t *result_len);
+
+/**
  * Obtain a collection handle from an open database.
  *
  * On success, writes a heap-allocated `SmongoCollection` into `*out`.
@@ -104,6 +145,25 @@ int32_t smongo_insert_one(struct SmongoCollection *col,
                           uintptr_t doc_len,
                           uint8_t **result,
                           uintptr_t *result_len);
+
+/**
+ * Insert multiple BSON documents into the collection.
+ *
+ * `docs` must be a BSON document whose keys are stringified array indices
+ * ("0", "1", ...), each mapping to a document — the standard BSON
+ * array-as-document representation.
+ *
+ * On success, writes a BSON result document containing `insertedIds` (an
+ * array of the generated IDs) into `*result` / `*result_len`.
+ *
+ * # Safety
+ * All pointer arguments must be valid.
+ */
+int32_t smongo_insert_many(struct SmongoCollection *col,
+                           const uint8_t *docs,
+                           uintptr_t docs_len,
+                           uint8_t **result,
+                           uintptr_t *result_len);
 
 /**
  * Find all documents matching the BSON filter, returning a cursor.
@@ -219,6 +279,38 @@ int32_t smongo_delete_one(struct SmongoCollection *col,
                           uintptr_t *result_len);
 
 /**
+ * Update all documents matching the filter.
+ *
+ * On success, writes a BSON result document containing `matchedCount` and
+ * `modifiedCount` into `*result` / `*result_len`.
+ *
+ * # Safety
+ * All pointer arguments must be valid.
+ */
+int32_t smongo_update_many(struct SmongoCollection *col,
+                           const uint8_t *filter,
+                           uintptr_t filter_len,
+                           const uint8_t *update,
+                           uintptr_t update_len,
+                           uint8_t **result,
+                           uintptr_t *result_len);
+
+/**
+ * Delete all documents matching the filter.
+ *
+ * On success, writes a BSON result document containing `deletedCount`
+ * into `*result` / `*result_len`.
+ *
+ * # Safety
+ * All pointer arguments must be valid.
+ */
+int32_t smongo_delete_many(struct SmongoCollection *col,
+                           const uint8_t *filter,
+                           uintptr_t filter_len,
+                           uint8_t **result,
+                           uintptr_t *result_len);
+
+/**
  * Count documents matching the BSON filter.
  *
  * Pass null for `filter` / 0 for `filter_len` to count all documents.
@@ -273,6 +365,64 @@ int32_t smongo_create_index(struct SmongoCollection *col,
                             int32_t unique,
                             uint8_t **result,
                             uintptr_t *result_len);
+
+/**
+ * Drop an index by name.
+ *
+ * # Safety
+ * `col` must be a valid collection handle. `name` must be a valid C string.
+ */
+int32_t smongo_drop_index(struct SmongoCollection *col, const char *name);
+
+/**
+ * List all indexes on the collection.
+ *
+ * On success, writes a BSON document containing an `indexes` array into
+ * `*result` / `*result_len`. Each element is a document with `name`, `keys`,
+ * and `options` fields.
+ *
+ * # Safety
+ * All pointer arguments must be valid.
+ */
+int32_t smongo_list_indexes(struct SmongoCollection *col, uint8_t **result, uintptr_t *result_len);
+
+/**
+ * Rebuild all indexes on the collection.
+ *
+ * On success, writes the number of index entries rebuilt into `*count_out`.
+ *
+ * # Safety
+ * `col` and `count_out` must be valid pointers.
+ */
+int32_t smongo_rebuild_all_indexes(struct SmongoCollection *col, int64_t *count_out);
+
+/**
+ * Explain the execution plan for a find query.
+ *
+ * On success, writes a BSON explain document into `*result` / `*result_len`.
+ *
+ * # Safety
+ * All pointer arguments must be valid.
+ */
+int32_t smongo_explain_find(struct SmongoCollection *col,
+                            const uint8_t *filter,
+                            uintptr_t filter_len,
+                            uint8_t **result,
+                            uintptr_t *result_len);
+
+/**
+ * Explain the execution plan for a find-one query.
+ *
+ * On success, writes a BSON explain document into `*result` / `*result_len`.
+ *
+ * # Safety
+ * All pointer arguments must be valid.
+ */
+int32_t smongo_explain_find_one(struct SmongoCollection *col,
+                                const uint8_t *filter,
+                                uintptr_t filter_len,
+                                uint8_t **result,
+                                uintptr_t *result_len);
 
 /**
  * Execute an aggregation pipeline.
@@ -395,6 +545,81 @@ int32_t smongo_session_delete_one(struct SmongoSession *session,
                                   uintptr_t filter_len,
                                   uint8_t **result,
                                   uintptr_t *result_len);
+
+/**
+ * Update a single document in a collection within this session's transaction.
+ *
+ * On success, writes a BSON result document containing `matchedCount` and
+ * `modifiedCount` into `*result` / `*result_len`.
+ *
+ * # Safety
+ * All pointer arguments must be valid.
+ */
+int32_t smongo_session_update_one(struct SmongoSession *session,
+                                  const char *coll_name,
+                                  const uint8_t *filter,
+                                  uintptr_t filter_len,
+                                  const uint8_t *update,
+                                  uintptr_t update_len,
+                                  uint8_t **result,
+                                  uintptr_t *result_len);
+
+/**
+ * Update all documents matching the filter within this session's transaction.
+ *
+ * # Safety
+ * All pointer arguments must be valid.
+ */
+int32_t smongo_session_update_many(struct SmongoSession *session,
+                                   const char *coll_name,
+                                   const uint8_t *filter,
+                                   uintptr_t filter_len,
+                                   const uint8_t *update,
+                                   uintptr_t update_len,
+                                   uint8_t **result,
+                                   uintptr_t *result_len);
+
+/**
+ * Delete all documents matching the filter within this session's transaction.
+ *
+ * # Safety
+ * All pointer arguments must be valid.
+ */
+int32_t smongo_session_delete_many(struct SmongoSession *session,
+                                   const char *coll_name,
+                                   const uint8_t *filter,
+                                   uintptr_t filter_len,
+                                   uint8_t **result,
+                                   uintptr_t *result_len);
+
+/**
+ * Run an aggregation pipeline within this session's transaction.
+ *
+ * Pipeline format is the same as `smongo_aggregate` — a BSON document with
+ * keys "0", "1", ... mapping to stage documents.
+ *
+ * # Safety
+ * All pointer arguments must be valid.
+ */
+int32_t smongo_session_aggregate(struct SmongoSession *session,
+                                 const char *coll_name,
+                                 const uint8_t *pipeline,
+                                 uintptr_t pipeline_len,
+                                 struct SmongoCursor **cursor_out);
+
+/**
+ * Count documents in a collection within this session's transaction.
+ *
+ * Pass null for `filter` / 0 for `filter_len` to count all documents.
+ *
+ * # Safety
+ * All pointer arguments must be valid.
+ */
+int32_t smongo_session_count(struct SmongoSession *session,
+                             const char *coll_name,
+                             const uint8_t *filter,
+                             uintptr_t filter_len,
+                             int64_t *count_out);
 
 /**
  * Free a session handle.

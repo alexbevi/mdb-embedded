@@ -8,6 +8,11 @@
  * session_insert_one, session_find, session_find_one, session_delete_one),
  * TTL indexes (create_index_with_ttl, reap_ttl), close.
  *
+ * Also: insert_many, update_many, delete_many, list_collection_names,
+ * drop_collection, stats, drop_index, list_indexes, rebuild_all_indexes,
+ * explain_find, explain_find_one, session_update_one / _update_many /
+ * _delete_many / _count / _aggregate, smongo_drop.
+ *
  * BSON documents are built manually using the wire format:
  *   int32 (total size LE) | e_list | 0x00
  *   e_list = element*
@@ -609,15 +614,494 @@ int main(void) {
     printf("    OK — reaped %lld documents (expected 0).\n\n", (long long)reap_count);
     assert(reap_count == 0);
 
-    /* Free session */
+    /* ================================================================ */
+    /* Additional C ABI (bulk ops, admin, indexes, explain, session)    */
+    /* ================================================================ */
+
+    /* 21. insert_many — array document {"0": doc, "1": doc} → insertedIds */
+    printf("21. insert_many (array-as-document) ...\n");
+    BsonBuf im0, im1, im_docs;
+    bb_init(&im0);
+    bb_string(&im0, "imTag", "alpha");
+    bb_finish(&im0);
+    bb_init(&im1);
+    bb_string(&im1, "imTag", "beta");
+    bb_finish(&im1);
+    bb_init(&im_docs);
+    bb_subdoc(&im_docs, "0", im0.buf, im0.len);
+    bb_subdoc(&im_docs, "1", im1.buf, im1.len);
+    bb_finish(&im_docs);
+    rc = smongo_insert_many(col, im_docs.buf, im_docs.len, &insert_result, &insert_result_len);
+    CHECK(rc, "smongo_insert_many");
+    assert(insert_result != NULL && insert_result_len > 0);
+    smongo_free(insert_result, insert_result_len);
+    BsonBuf im_chk;
+    bb_init(&im_chk);
+    bb_string(&im_chk, "imTag", "alpha");
+    bb_finish(&im_chk);
+    count = 0;
+    rc = smongo_count(col, im_chk.buf, im_chk.len, &count);
+    CHECK(rc, "smongo_count after insert_many");
+    assert(count == 1);
+    bb_free(&im_chk);
+    bb_free(&im0);
+    bb_free(&im1);
+    bb_free(&im_docs);
+    printf("    OK — insert_many returned BSON result; documents visible.\n\n");
+
+    /* 22. update_many */
+    printf("22. update_many ...\n");
+    BsonBuf um0, um1, um_arr;
+    bb_init(&um0);
+    bb_string(&um0, "umark", "pair");
+    bb_int32(&um0, "uval", 1);
+    bb_finish(&um0);
+    bb_init(&um1);
+    bb_string(&um1, "umark", "pair");
+    bb_int32(&um1, "uval", 2);
+    bb_finish(&um1);
+    bb_init(&um_arr);
+    bb_subdoc(&um_arr, "0", um0.buf, um0.len);
+    bb_subdoc(&um_arr, "1", um1.buf, um1.len);
+    bb_finish(&um_arr);
+    rc = smongo_insert_many(col, um_arr.buf, um_arr.len, &insert_result, &insert_result_len);
+    CHECK(rc, "smongo_insert_many (update_many setup)");
+    smongo_free(insert_result, insert_result_len);
+
+    BsonBuf um_fil;
+    bb_init(&um_fil);
+    bb_string(&um_fil, "umark", "pair");
+    bb_finish(&um_fil);
+    BsonBuf um_set_inner;
+    bb_init(&um_set_inner);
+    bb_int32(&um_set_inner, "uval", 100);
+    bb_finish(&um_set_inner);
+    BsonBuf um_upd;
+    bb_init(&um_upd);
+    bb_subdoc(&um_upd, "$set", um_set_inner.buf, um_set_inner.len);
+    bb_finish(&um_upd);
+    rc = smongo_update_many(col, um_fil.buf, um_fil.len, um_upd.buf, um_upd.len,
+                            &update_result, &update_result_len);
+    CHECK(rc, "smongo_update_many");
+    smongo_free(update_result, update_result_len);
+    BsonBuf um_count_f;
+    bb_init(&um_count_f);
+    bb_int32(&um_count_f, "uval", 100);
+    bb_finish(&um_count_f);
+    count = 0;
+    rc = smongo_count(col, um_count_f.buf, um_count_f.len, &count);
+    CHECK(rc, "smongo_count after update_many");
+    assert(count == 2);
+    bb_free(&um0);
+    bb_free(&um1);
+    bb_free(&um_arr);
+    bb_free(&um_fil);
+    bb_free(&um_set_inner);
+    bb_free(&um_upd);
+    bb_free(&um_count_f);
+    printf("    OK — both matching documents updated.\n\n");
+
+    /* 23. delete_many */
+    printf("23. delete_many ...\n");
+    BsonBuf dm0, dm1, dm_arr;
+    bb_init(&dm0);
+    bb_string(&dm0, "dmTag", "rm");
+    bb_finish(&dm0);
+    bb_init(&dm1);
+    bb_string(&dm1, "dmTag", "rm");
+    bb_finish(&dm1);
+    bb_init(&dm_arr);
+    bb_subdoc(&dm_arr, "0", dm0.buf, dm0.len);
+    bb_subdoc(&dm_arr, "1", dm1.buf, dm1.len);
+    bb_finish(&dm_arr);
+    rc = smongo_insert_many(col, dm_arr.buf, dm_arr.len, &insert_result, &insert_result_len);
+    CHECK(rc, "smongo_insert_many (delete_many setup)");
+    smongo_free(insert_result, insert_result_len);
+
+    BsonBuf dm_fil;
+    bb_init(&dm_fil);
+    bb_string(&dm_fil, "dmTag", "rm");
+    bb_finish(&dm_fil);
+    rc = smongo_delete_many(col, dm_fil.buf, dm_fil.len, &delete_result, &delete_result_len);
+    CHECK(rc, "smongo_delete_many");
+    smongo_free(delete_result, delete_result_len);
+    count = 0;
+    rc = smongo_count(col, dm_fil.buf, dm_fil.len, &count);
+    CHECK(rc, "smongo_count after delete_many");
+    assert(count == 0);
+    bb_free(&dm0);
+    bb_free(&dm1);
+    bb_free(&dm_arr);
+    bb_free(&dm_fil);
+    printf("    OK — all matches removed.\n\n");
+
+    /* 24. list_collection_names → BSON with names array */
+    printf("24. list_collection_names ...\n");
+    uint8_t *names_bson = NULL;
+    size_t names_bson_len = 0;
+    rc = smongo_list_collection_names(db, &names_bson, &names_bson_len);
+    CHECK(rc, "smongo_list_collection_names");
+    assert(names_bson != NULL && names_bson_len > 0);
+    smongo_free(names_bson, names_bson_len);
+    printf("    OK — received names BSON document.\n\n");
+
+    /* 25. drop_collection */
+    printf("25. drop_collection ...\n");
+    SmongoCollection *drop_col = NULL;
+    rc = smongo_collection(db, "coll_drop_abi", &drop_col);
+    CHECK(rc, "smongo_collection (coll_drop_abi)");
+    BsonBuf drop_doc;
+    bb_init(&drop_doc);
+    bb_string(&drop_doc, "dropProbe", "x");
+    bb_finish(&drop_doc);
+    rc = smongo_insert_one(drop_col, drop_doc.buf, drop_doc.len,
+                           &insert_result, &insert_result_len);
+    CHECK(rc, "smongo_insert_one (coll_drop_abi)");
+    smongo_free(insert_result, insert_result_len);
+    bb_free(&drop_doc);
+    smongo_collection_free(drop_col);
+    drop_col = NULL;
+    rc = smongo_drop_collection(db, "coll_drop_abi");
+    CHECK(rc, "smongo_drop_collection");
+    rc = smongo_collection(db, "coll_drop_abi", &drop_col);
+    CHECK(rc, "smongo_collection (coll_drop_abi after drop)");
+    count = 0;
+    rc = smongo_count(drop_col, NULL, 0, &count);
+    CHECK(rc, "smongo_count empty dropped collection");
+    assert(count == 0);
+    smongo_collection_free(drop_col);
+    printf("    OK — collection dropped and is empty when re-opened.\n\n");
+
+    /* 26. stats → collectionCount, sizeBytes */
+    printf("26. smongo_stats ...\n");
+    uint8_t *stats_bson = NULL;
+    size_t stats_bson_len = 0;
+    rc = smongo_stats(db, &stats_bson, &stats_bson_len);
+    CHECK(rc, "smongo_stats");
+    assert(stats_bson != NULL && stats_bson_len > 0);
+    smongo_free(stats_bson, stats_bson_len);
+    printf("    OK — received stats BSON document.\n\n");
+
+    /* 27. drop_index (named index) */
+    printf("27. smongo_drop_index ...\n");
+    BsonBuf named_idx_keys;
+    bb_init(&named_idx_keys);
+    bb_int32(&named_idx_keys, "abiNamedIdx", 1);
+    bb_finish(&named_idx_keys);
+    rc = smongo_create_index(col, named_idx_keys.buf, named_idx_keys.len,
+                             "abi_named_idx_drop", 0, &idx_result, &idx_result_len);
+    CHECK(rc, "smongo_create_index (named for drop_index)");
+    smongo_free(idx_result, idx_result_len);
+    bb_free(&named_idx_keys);
+    rc = smongo_drop_index(col, "abi_named_idx_drop");
+    CHECK(rc, "smongo_drop_index");
+    printf("    OK — named index dropped.\n\n");
+
+    /* 28. list_indexes → indexes array */
+    printf("28. smongo_list_indexes ...\n");
+    uint8_t *list_ix = NULL;
+    size_t list_ix_len = 0;
+    rc = smongo_list_indexes(col, &list_ix, &list_ix_len);
+    CHECK(rc, "smongo_list_indexes");
+    assert(list_ix != NULL && list_ix_len > 0);
+    smongo_free(list_ix, list_ix_len);
+    printf("    OK — received indexes BSON document.\n\n");
+
+    /* 29. rebuild_all_indexes */
+    printf("29. smongo_rebuild_all_indexes ...\n");
+    int64_t rebuilt = 0;
+    rc = smongo_rebuild_all_indexes(col, &rebuilt);
+    CHECK(rc, "smongo_rebuild_all_indexes");
+    assert(rebuilt >= 0);
+    printf("    OK — rebuilt %lld index entries.\n\n", (long long)rebuilt);
+
+    /* 30. explain_find */
+    printf("30. smongo_explain_find ...\n");
+    BsonBuf ex_empty;
+    build_empty_doc(&ex_empty);
+    uint8_t *explain_out = NULL;
+    size_t explain_len = 0;
+    rc = smongo_explain_find(col, ex_empty.buf, ex_empty.len, &explain_out, &explain_len);
+    CHECK(rc, "smongo_explain_find");
+    assert(explain_out != NULL && explain_len > 0);
+    smongo_free(explain_out, explain_len);
+    bb_free(&ex_empty);
+    printf("    OK — explain BSON for find.\n\n");
+
+    /* 31. explain_find_one */
+    printf("31. smongo_explain_find_one ...\n");
+    BsonBuf ex_one_f;
+    bb_init(&ex_one_f);
+    bb_string(&ex_one_f, "name", "Alice");
+    bb_finish(&ex_one_f);
+    explain_out = NULL;
+    explain_len = 0;
+    rc = smongo_explain_find_one(col, ex_one_f.buf, ex_one_f.len, &explain_out, &explain_len);
+    CHECK(rc, "smongo_explain_find_one");
+    assert(explain_out != NULL && explain_len > 0);
+    smongo_free(explain_out, explain_len);
+    bb_free(&ex_one_f);
+    printf("    OK — explain BSON for find_one.\n\n");
+
+    /* 32. session_update_one */
+    printf("32. smongo_session_update_one ...\n");
+    rc = smongo_session_begin_transaction(session);
+    CHECK(rc, "smongo_session_begin_transaction (session_update_one)");
+    BsonBuf su_ins;
+    bb_init(&su_ins);
+    bb_string(&su_ins, "suKey", "one");
+    bb_int32(&su_ins, "suN", 1);
+    bb_finish(&su_ins);
+    rc = smongo_session_insert_one(session, "sess_abi", su_ins.buf, su_ins.len,
+                                   &txn_result, &txn_result_len);
+    CHECK(rc, "smongo_session_insert_one (sess_abi update_one)");
+    smongo_free(txn_result, txn_result_len);
+    bb_free(&su_ins);
+    BsonBuf su_f;
+    bb_init(&su_f);
+    bb_string(&su_f, "suKey", "one");
+    bb_finish(&su_f);
+    BsonBuf su_set_inner;
+    bb_init(&su_set_inner);
+    bb_int32(&su_set_inner, "suN", 42);
+    bb_finish(&su_set_inner);
+    BsonBuf su_upd;
+    bb_init(&su_upd);
+    bb_subdoc(&su_upd, "$set", su_set_inner.buf, su_set_inner.len);
+    bb_finish(&su_upd);
+    rc = smongo_session_update_one(session, "sess_abi", su_f.buf, su_f.len,
+                                   su_upd.buf, su_upd.len, &txn_result, &txn_result_len);
+    CHECK(rc, "smongo_session_update_one");
+    smongo_free(txn_result, txn_result_len);
+    rc = smongo_session_commit_transaction(session);
+    CHECK(rc, "smongo_session_commit_transaction (session_update_one)");
+    SmongoCollection *abi_col = NULL;
+    rc = smongo_collection(db, "sess_abi", &abi_col);
+    CHECK(rc, "smongo_collection (sess_abi)");
+    BsonBuf su_verify_f;
+    bb_init(&su_verify_f);
+    bb_int32(&su_verify_f, "suN", 42);
+    bb_finish(&su_verify_f);
+    count = 0;
+    rc = smongo_count(abi_col, su_verify_f.buf, su_verify_f.len, &count);
+    CHECK(rc, "smongo_count sess_abi after session_update_one");
+    assert(count == 1);
+    smongo_collection_free(abi_col);
+    bb_free(&su_f);
+    bb_free(&su_set_inner);
+    bb_free(&su_upd);
+    bb_free(&su_verify_f);
+    printf("    OK — session_update_one committed.\n\n");
+
+    /* 33. session_update_many */
+    printf("33. smongo_session_update_many ...\n");
+    rc = smongo_session_begin_transaction(session);
+    CHECK(rc, "smongo_session_begin_transaction (session_update_many)");
+    BsonBuf sum0, sum1;
+    bb_init(&sum0);
+    bb_string(&sum0, "sumTag", "t");
+    bb_int32(&sum0, "sumV", 1);
+    bb_finish(&sum0);
+    rc = smongo_session_insert_one(session, "sess_um", sum0.buf, sum0.len,
+                                   &txn_result, &txn_result_len);
+    CHECK(rc, "smongo_session_insert_one (sess_um a)");
+    smongo_free(txn_result, txn_result_len);
+    bb_free(&sum0);
+    bb_init(&sum1);
+    bb_string(&sum1, "sumTag", "t");
+    bb_int32(&sum1, "sumV", 2);
+    bb_finish(&sum1);
+    rc = smongo_session_insert_one(session, "sess_um", sum1.buf, sum1.len,
+                                   &txn_result, &txn_result_len);
+    CHECK(rc, "smongo_session_insert_one (sess_um b)");
+    smongo_free(txn_result, txn_result_len);
+    bb_free(&sum1);
+    BsonBuf sum_f;
+    bb_init(&sum_f);
+    bb_string(&sum_f, "sumTag", "t");
+    bb_finish(&sum_f);
+    BsonBuf sum_set_in;
+    bb_init(&sum_set_in);
+    bb_int32(&sum_set_in, "sumV", 7);
+    bb_finish(&sum_set_in);
+    BsonBuf sum_upd;
+    bb_init(&sum_upd);
+    bb_subdoc(&sum_upd, "$set", sum_set_in.buf, sum_set_in.len);
+    bb_finish(&sum_upd);
+    rc = smongo_session_update_many(session, "sess_um", sum_f.buf, sum_f.len,
+                                    sum_upd.buf, sum_upd.len, &txn_result, &txn_result_len);
+    CHECK(rc, "smongo_session_update_many");
+    smongo_free(txn_result, txn_result_len);
+    rc = smongo_session_commit_transaction(session);
+    CHECK(rc, "smongo_session_commit_transaction (session_update_many)");
+    SmongoCollection *um_col = NULL;
+    rc = smongo_collection(db, "sess_um", &um_col);
+    CHECK(rc, "smongo_collection (sess_um)");
+    BsonBuf sum_chk;
+    bb_init(&sum_chk);
+    bb_int32(&sum_chk, "sumV", 7);
+    bb_finish(&sum_chk);
+    count = 0;
+    rc = smongo_count(um_col, sum_chk.buf, sum_chk.len, &count);
+    CHECK(rc, "smongo_count sess_um after session_update_many");
+    assert(count == 2);
+    smongo_collection_free(um_col);
+    bb_free(&sum_f);
+    bb_free(&sum_set_in);
+    bb_free(&sum_upd);
+    bb_free(&sum_chk);
+    printf("    OK — session_update_many committed.\n\n");
+
+    /* 34. session_delete_many */
+    printf("34. smongo_session_delete_many ...\n");
+    rc = smongo_session_begin_transaction(session);
+    CHECK(rc, "smongo_session_begin_transaction (session_delete_many)");
+    BsonBuf sdm0, sdm1;
+    bb_init(&sdm0);
+    bb_string(&sdm0, "sdm", "z");
+    bb_finish(&sdm0);
+    rc = smongo_session_insert_one(session, "sess_dm", sdm0.buf, sdm0.len,
+                                   &txn_result, &txn_result_len);
+    CHECK(rc, "smongo_session_insert_one (sess_dm a)");
+    smongo_free(txn_result, txn_result_len);
+    bb_free(&sdm0);
+    bb_init(&sdm1);
+    bb_string(&sdm1, "sdm", "z");
+    bb_finish(&sdm1);
+    rc = smongo_session_insert_one(session, "sess_dm", sdm1.buf, sdm1.len,
+                                   &txn_result, &txn_result_len);
+    CHECK(rc, "smongo_session_insert_one (sess_dm b)");
+    smongo_free(txn_result, txn_result_len);
+    bb_free(&sdm1);
+    BsonBuf sdm_f;
+    bb_init(&sdm_f);
+    bb_string(&sdm_f, "sdm", "z");
+    bb_finish(&sdm_f);
+    rc = smongo_session_delete_many(session, "sess_dm", sdm_f.buf, sdm_f.len,
+                                    &txn_result, &txn_result_len);
+    CHECK(rc, "smongo_session_delete_many");
+    smongo_free(txn_result, txn_result_len);
+    rc = smongo_session_commit_transaction(session);
+    CHECK(rc, "smongo_session_commit_transaction (session_delete_many)");
+    SmongoCollection *dm_sess_col = NULL;
+    rc = smongo_collection(db, "sess_dm", &dm_sess_col);
+    CHECK(rc, "smongo_collection (sess_dm)");
+    count = 0;
+    rc = smongo_count(dm_sess_col, NULL, 0, &count);
+    CHECK(rc, "smongo_count sess_dm after session_delete_many");
+    assert(count == 0);
+    smongo_collection_free(dm_sess_col);
+    bb_free(&sdm_f);
+    printf("    OK — session_delete_many committed.\n\n");
+
+    /* 35. session_count */
+    printf("35. smongo_session_count ...\n");
+    rc = smongo_session_begin_transaction(session);
+    CHECK(rc, "smongo_session_begin_transaction (session_count)");
+    BsonBuf sc_doc;
+    bb_init(&sc_doc);
+    bb_string(&sc_doc, "scTag", "c");
+    bb_finish(&sc_doc);
+    rc = smongo_session_insert_one(session, "sess_cnt", sc_doc.buf, sc_doc.len,
+                                   &txn_result, &txn_result_len);
+    CHECK(rc, "smongo_session_insert_one (sess_cnt)");
+    smongo_free(txn_result, txn_result_len);
+    bb_free(&sc_doc);
+    BsonBuf sc_empty;
+    build_empty_doc(&sc_empty);
+    count = 0;
+    rc = smongo_session_count(session, "sess_cnt", sc_empty.buf, sc_empty.len, &count);
+    CHECK(rc, "smongo_session_count");
+    assert(count == 1);
+    bb_free(&sc_empty);
+    rc = smongo_session_commit_transaction(session);
+    CHECK(rc, "smongo_session_commit_transaction (session_count)");
+    printf("    OK — session_count within transaction.\n\n");
+
+    /* 36. session_aggregate */
+    printf("36. smongo_session_aggregate ...\n");
+    rc = smongo_session_begin_transaction(session);
+    CHECK(rc, "smongo_session_begin_transaction (session_aggregate)");
+    BsonBuf sa0, sa1;
+    bb_init(&sa0);
+    bb_string(&sa0, "saName", "a");
+    bb_int32(&sa0, "saAge", 20);
+    bb_finish(&sa0);
+    rc = smongo_session_insert_one(session, "sess_agg", sa0.buf, sa0.len,
+                                   &txn_result, &txn_result_len);
+    CHECK(rc, "smongo_session_insert_one (sess_agg a)");
+    smongo_free(txn_result, txn_result_len);
+    bb_free(&sa0);
+    bb_init(&sa1);
+    bb_string(&sa1, "saName", "b");
+    bb_int32(&sa1, "saAge", 40);
+    bb_finish(&sa1);
+    rc = smongo_session_insert_one(session, "sess_agg", sa1.buf, sa1.len,
+                                   &txn_result, &txn_result_len);
+    CHECK(rc, "smongo_session_insert_one (sess_agg b)");
+    smongo_free(txn_result, txn_result_len);
+    bb_free(&sa1);
+
+    BsonBuf sa_gte;
+    bb_init(&sa_gte);
+    bb_int32(&sa_gte, "$gte", 25);
+    bb_finish(&sa_gte);
+    BsonBuf sa_match_f;
+    bb_init(&sa_match_f);
+    bb_subdoc(&sa_match_f, "saAge", sa_gte.buf, sa_gte.len);
+    bb_finish(&sa_match_f);
+    BsonBuf sa_st0;
+    bb_init(&sa_st0);
+    bb_subdoc(&sa_st0, "$match", sa_match_f.buf, sa_match_f.len);
+    bb_finish(&sa_st0);
+    BsonBuf sa_sort_spec;
+    bb_init(&sa_sort_spec);
+    bb_int32(&sa_sort_spec, "saAge", 1);
+    bb_finish(&sa_sort_spec);
+    BsonBuf sa_st1;
+    bb_init(&sa_st1);
+    bb_subdoc(&sa_st1, "$sort", sa_sort_spec.buf, sa_sort_spec.len);
+    bb_finish(&sa_st1);
+    BsonBuf sa_pipe;
+    bb_init(&sa_pipe);
+    bb_subdoc(&sa_pipe, "0", sa_st0.buf, sa_st0.len);
+    bb_subdoc(&sa_pipe, "1", sa_st1.buf, sa_st1.len);
+    bb_finish(&sa_pipe);
+
+    SmongoCursor *sa_cur = NULL;
+    rc = smongo_session_aggregate(session, "sess_agg", sa_pipe.buf, sa_pipe.len, &sa_cur);
+    CHECK(rc, "smongo_session_aggregate");
+    int sa_n = 0;
+    const uint8_t *sa_doc = NULL;
+    size_t sa_doc_len = 0;
+    while (smongo_cursor_next(sa_cur, &sa_doc, &sa_doc_len) == SMONGO_OK) {
+        sa_n++;
+    }
+    smongo_cursor_free(sa_cur);
+    assert(sa_n == 1);
+    bb_free(&sa_gte);
+    bb_free(&sa_match_f);
+    bb_free(&sa_st0);
+    bb_free(&sa_sort_spec);
+    bb_free(&sa_st1);
+    bb_free(&sa_pipe);
+    rc = smongo_session_commit_transaction(session);
+    CHECK(rc, "smongo_session_commit_transaction (session_aggregate)");
+    printf("    OK — session_aggregate returned one matching document.\n\n");
+
     smongo_session_free(session);
 
-    /* Cleanup */
-    printf("21. Cleaning up ...\n");
+    /* 37. smongo_drop — consumes database handle */
+    printf("37. smongo_drop (entire database) ...\n");
     smongo_collection_free(col);
-    smongo_close(db);
+    rc = smongo_drop(db);
+    CHECK(rc, "smongo_drop");
+    printf("    OK — database dropped.\n\n");
+
+    /* 38. Remove test directory (files may already be gone after drop) */
+    printf("38. Cleaning up ...\n");
     cleanup_test_dir();
-    printf("    OK — database closed and test directory removed.\n\n");
+    printf("    OK — test directory removed.\n\n");
 
     printf("=== ALL TESTS PASSED ===\n");
     return 0;

@@ -1,5 +1,6 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -445,5 +446,225 @@ describe('Database — reapTtl', () => {
     col.createIndex({ ts: 1 }, { expireAfterSeconds: 7200 });
     const removed = db.reapTtl();
     assert.equal(removed, 0);
+  });
+});
+
+function assertExplainShape(ex) {
+  assert.ok(ex && typeof ex === 'object');
+  assert.ok('executionPlan' in ex);
+  assert.ok('indexUsed' in ex);
+  assert.ok('planReason' in ex);
+  assert.ok(ex.executionStats && typeof ex.executionStats === 'object');
+  assert.equal(typeof ex.executionStats.documentsExamined, 'number');
+  assert.equal(typeof ex.executionStats.documentsReturned, 'number');
+  assert.equal(typeof ex.executionStats.indexEntriesExamined, 'number');
+  assert.ok('efficiency' in ex);
+  assert.ok('summary' in ex);
+}
+
+describe('Collection — explainFind / explainFindOne', () => {
+  let dir, db, col;
+
+  before(async () => {
+    ({ dir, db } = await freshDb());
+    col = db.collection('explain_me');
+    col.insertOne({ sku: 'A', qty: 1 });
+    col.insertOne({ sku: 'B', qty: 2 });
+    col.createIndex({ sku: 1 });
+  });
+
+  after(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('explainFind returns the expected shape', () => {
+    const ex = col.explainFind({ sku: 'A' });
+    assertExplainShape(ex);
+    assert.ok(['COLLSCAN', 'IXSCAN', 'IXSEEK', 'IXSCAN_COVERING', 'IXSCAN_SORTED'].includes(ex.executionPlan));
+  });
+
+  it('explainFindOne returns the same shape as explainFind', () => {
+    const exFind = col.explainFind({ qty: { $gte: 0 } });
+    const exOne = col.explainFindOne({ qty: { $gte: 0 } });
+    assertExplainShape(exFind);
+    assertExplainShape(exOne);
+    assert.equal(exFind.executionPlan, exOne.executionPlan);
+  });
+});
+
+describe('Collection — rebuildAllIndexes', () => {
+  let dir, db, col;
+
+  before(async () => {
+    ({ dir, db } = await freshDb());
+    col = db.collection('rebuild_idx');
+    col.insertOne({ x: 1 });
+    col.insertOne({ x: 2 });
+    col.createIndex({ x: 1 });
+  });
+
+  after(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('rebuildAllIndexes returns a non-negative count', () => {
+    const n = col.rebuildAllIndexes();
+    assert.equal(typeof n, 'number');
+    assert.ok(n >= 0);
+  });
+});
+
+describe('Database — drop', () => {
+  let dir, db;
+
+  before(async () => {
+    ({ dir, db } = await freshDb());
+  });
+
+  after(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('drop removes data files and the original path can be reopened empty', () => {
+    const dbDir = join(dir, 'testdb');
+    const col = db.collection('pre_drop');
+    col.insertOne({ z: 1 });
+    col.close();
+    assert.ok(existsSync(join(dbDir, 'data.redb')));
+    db.drop();
+    assert.ok(!existsSync(dbDir));
+    const db2 = Database.open(dbDir);
+    assert.equal(db2.collection('pre_drop').countDocuments(), 0);
+  });
+});
+
+describe('Collection — createIndex advanced options', () => {
+  let dir, db, col;
+
+  before(async () => {
+    ({ dir, db } = await freshDb());
+    col = db.collection('partial_unique');
+  });
+
+  after(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('partialFilterExpression with unique allows duplicates outside the filter', () => {
+    col.insertOne({ email: 'same@example.com', active: false });
+    col.insertOne({ email: 'same@example.com', active: false });
+    col.createIndex(
+      { email: 1 },
+      { unique: true, partialFilterExpression: { active: true } },
+    );
+    assert.doesNotThrow(() =>
+      col.insertOne({ email: 'same@example.com', active: false }),
+    );
+    col.insertOne({ email: 'dup@example.com', active: true });
+    assert.throws(
+      () => col.insertOne({ email: 'dup@example.com', active: true }),
+      /[Uu]nique/,
+    );
+  });
+
+  it('createIndex accepts explicit name and sparse', () => {
+    const col2 = db.collection('named_sparse');
+    col2.insertOne({ tag: 't1' });
+    col2.insertOne({ other: 1 });
+    const name = col2.createIndex(
+      { tag: 1 },
+      { name: 'my_tag_idx', sparse: true },
+    );
+    assert.equal(name, 'my_tag_idx');
+    const indexes = col2.listIndexes();
+    const idx = indexes.find((i) => i.name === 'my_tag_idx');
+    assert.ok(idx);
+    assert.equal(idx.options.sparse, true);
+    col2.close();
+  });
+});
+
+describe('ClientSession — find / findOne / updateOne options', () => {
+  let dir, db;
+
+  before(async () => {
+    ({ dir, db } = await freshDb());
+  });
+
+  after(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('findOne accepts options.sort', () => {
+    const session = db.startSession();
+    session.startTransaction();
+    session.insertOne('sort_one', { k: 1, n: 'a' });
+    session.insertOne('sort_one', { k: 2, n: 'b' });
+    session.insertOne('sort_one', { k: 3, n: 'c' });
+    const doc = session.findOne('sort_one', {}, { sort: { k: -1 } });
+    assert.ok(doc);
+    assert.equal(doc.n, 'c');
+    session.commitTransaction();
+  });
+
+  it('find accepts sort, limit, and skip', () => {
+    const session = db.startSession();
+    session.startTransaction();
+    session.insertOne('sort_many', { order: 10 });
+    session.insertOne('sort_many', { order: 20 });
+    session.insertOne('sort_many', { order: 30 });
+    const docs = session.find(
+      'sort_many',
+      {},
+      { sort: { order: 1 }, skip: 1, limit: 1 },
+    );
+    assert.equal(docs.length, 1);
+    assert.equal(docs[0].order, 20);
+    session.commitTransaction();
+  });
+
+  it('updateOne accepts a fourth options argument', () => {
+    const session = db.startSession();
+    session.startTransaction();
+    session.insertOne('upd_opts', { id: 1, v: 0 });
+    const res = session.updateOne(
+      'upd_opts',
+      { id: 1 },
+      { $set: { v: 42 } },
+      {},
+    );
+    assert.equal(res.matchedCount, 1);
+    assert.equal(res.modifiedCount, 1);
+    session.commitTransaction();
+    const col = db.collection('upd_opts');
+    assert.equal(col.findOne({ id: 1 }).v, 42);
+  });
+});
+
+describe('ClientSession — aggregate in transaction', () => {
+  let dir, db;
+
+  before(async () => {
+    ({ dir, db } = await freshDb());
+  });
+
+  after(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('aggregate runs within a committed transaction', () => {
+    const session = db.startSession();
+    session.startTransaction();
+    session.insertOne('agg_txn', { region: 'east', amount: 5 });
+    session.insertOne('agg_txn', { region: 'east', amount: 15 });
+    session.insertOne('agg_txn', { region: 'west', amount: 7 });
+    const results = session.aggregate('agg_txn', [
+      { $match: { region: 'east' } },
+      { $group: { _id: '$region', total: { $sum: '$amount' } } },
+    ]);
+    assert.equal(results.length, 1);
+    assert.equal(results[0]._id, 'east');
+    assert.equal(results[0].total, 20);
+    session.commitTransaction();
   });
 });

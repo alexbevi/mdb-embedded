@@ -3217,6 +3217,22 @@ impl<'a, S: StorageSession> CollectionView<'a, S> {
         }
         Ok(count)
     }
+
+    /// Run an aggregation pipeline over the view's snapshot.
+    ///
+    /// Loads all documents from the underlying table, then pipes them through
+    /// the engine's in-memory aggregation framework.
+    pub fn aggregate(&self, pipeline: Vec<Document>) -> CollectionResult<Vec<Document>> {
+        let mut docs = Vec::new();
+        let mut cursor = self.cursor()?;
+        while cursor.next().is_ok() {
+            let doc_bytes = cursor.get_value_raw()?;
+            let doc = deserialize_document(&doc_bytes)?;
+            docs.push(doc);
+        }
+        crate::aggregation::aggregate(docs, &pipeline)
+            .map_err(|e| CollectionError::Other(e.to_string()))
+    }
 }
 
 #[cfg(test)]

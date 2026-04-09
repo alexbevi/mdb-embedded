@@ -15,7 +15,11 @@ use smongo_engine::collection::{
 };
 use smongo_engine::database::Database as EngineDatabase;
 use smongo_engine::database::TransactionSession as EngineTransactionSession;
-use smongo_engine::index::IndexOptions as EngineIndexOptions;
+use smongo_engine::index::{
+    IndexOptions as EngineIndexOptions, IndexType as EngineIndexType,
+    PrefixOptions as EnginePrefixOptions, TextIndexOptions as EngineTextIndexOptions,
+    VectorIndexOptions as EngineVectorIndexOptions,
+};
 
 // ============================================================
 // JSON <-> BSON CONVERSION
@@ -120,6 +124,171 @@ fn parse_update_options(options: &Option<serde_json::Value>) -> EngineUpdateOpti
     }
 }
 
+fn apply_find_options_in_memory(docs: &mut Vec<Document>, opts: &serde_json::Value) {
+    if let Some(sort) = opts.get("sort") {
+        if let Bson::Document(sort_doc) = json_to_bson(sort) {
+            docs.sort_by(|a, b| {
+                for (key, dir) in sort_doc.iter() {
+                    let dir_val = match dir {
+                        Bson::Int32(n) => *n as i64,
+                        Bson::Int64(n) => *n,
+                        _ => 1,
+                    };
+                    let av = a.get(key);
+                    let bv = b.get(key);
+                    let cmp = compare_bson_values(av, bv);
+                    let cmp = if dir_val < 0 { cmp.reverse() } else { cmp };
+                    if cmp != std::cmp::Ordering::Equal {
+                        return cmp;
+                    }
+                }
+                std::cmp::Ordering::Equal
+            });
+        }
+    }
+    if let Some(skip) = opts.get("skip").and_then(|v| v.as_u64()) {
+        let skip = skip as usize;
+        if skip >= docs.len() {
+            docs.clear();
+        } else {
+            docs.drain(..skip);
+        }
+    }
+    if let Some(limit) = opts.get("limit").and_then(|v| v.as_u64()) {
+        docs.truncate(limit as usize);
+    }
+    if let Some(proj) = opts.get("projection") {
+        if let Bson::Document(proj_doc) = json_to_bson(proj) {
+            let include_fields: Vec<String> = proj_doc
+                .iter()
+                .filter(|(_, v)| matches!(v, Bson::Int32(1) | Bson::Int64(1) | Bson::Boolean(true)))
+                .map(|(k, _)| k.clone())
+                .collect();
+            if !include_fields.is_empty() {
+                for doc in docs.iter_mut() {
+                    let mut projected = Document::new();
+                    if let Some(id) = doc.get("_id") {
+                        projected.insert("_id", id.clone());
+                    }
+                    for field in &include_fields {
+                        if let Some(val) = doc.get(field) {
+                            projected.insert(field, val.clone());
+                        }
+                    }
+                    *doc = projected;
+                }
+            }
+        }
+    }
+}
+
+fn compare_bson_values(a: Option<&Bson>, b: Option<&Bson>) -> std::cmp::Ordering {
+    match (a, b) {
+        (None, None) => std::cmp::Ordering::Equal,
+        (None, Some(_)) => std::cmp::Ordering::Less,
+        (Some(_), None) => std::cmp::Ordering::Greater,
+        (Some(av), Some(bv)) => {
+            let fa = bson_sort_key(av);
+            let fb = bson_sort_key(bv);
+            fa.partial_cmp(&fb).unwrap_or(std::cmp::Ordering::Equal)
+        }
+    }
+}
+
+fn bson_sort_key(v: &Bson) -> f64 {
+    match v {
+        Bson::Int32(n) => *n as f64,
+        Bson::Int64(n) => *n as f64,
+        Bson::Double(f) => *f,
+        Bson::Boolean(b) => if *b { 1.0 } else { 0.0 },
+        Bson::Null => f64::NEG_INFINITY,
+        _ => 0.0,
+    }
+}
+
+fn explain_to_json(explain: &smongo_engine::explain::ExplainResult) -> serde_json::Value {
+    serde_json::json!({
+        "executionPlan": match &explain.execution_plan {
+            smongo_engine::explain::ExecutionPlanExplain::CollectionScan => "COLLSCAN",
+            smongo_engine::explain::ExecutionPlanExplain::IndexScan { .. } => "IXSCAN",
+            smongo_engine::explain::ExecutionPlanExplain::IndexSeek { .. } => "IXSEEK",
+            smongo_engine::explain::ExecutionPlanExplain::Geo { .. } => "GEO",
+            smongo_engine::explain::ExecutionPlanExplain::OrUnion => "OR_UNION",
+            smongo_engine::explain::ExecutionPlanExplain::CoveringIndexScan { .. } => "IXSCAN_COVERING",
+            smongo_engine::explain::ExecutionPlanExplain::SortedIndexScan { .. } => "IXSCAN_SORTED",
+            smongo_engine::explain::ExecutionPlanExplain::VectorIndexSearch { .. } => "VECTOR_SEARCH",
+            smongo_engine::explain::ExecutionPlanExplain::BitmapScan { .. } => "BITMAP_SCAN",
+            smongo_engine::explain::ExecutionPlanExplain::TextIndexScan { .. } => "TEXT_SCAN",
+            smongo_engine::explain::ExecutionPlanExplain::PrefixIndexScan { .. } => "PREFIX_SCAN",
+        },
+        "indexUsed": explain.index_used,
+        "planReason": explain.plan_reason,
+        "executionStats": {
+            "documentsExamined": explain.execution_stats.documents_examined,
+            "documentsReturned": explain.execution_stats.documents_returned,
+            "indexEntriesExamined": explain.execution_stats.index_entries_examined,
+        },
+        "efficiency": explain.efficiency(),
+        "summary": explain.summary(),
+    })
+}
+
+fn parse_index_options(o: &serde_json::Value) -> EngineIndexOptions {
+    let index_type = o.get("indexType").and_then(|v| v.as_str()).and_then(|s| match s {
+        "btree" | "BTree" => Some(EngineIndexType::BTree),
+        "2dsphere" | "TwoDSphere" => Some(EngineIndexType::TwoDSphere),
+        "text" | "Text" => Some(EngineIndexType::Text),
+        "vectorSearch" | "VectorSearch" => Some(EngineIndexType::VectorSearch),
+        "bitmap" | "Bitmap" => Some(EngineIndexType::Bitmap),
+        "prefix" | "Prefix" => Some(EngineIndexType::Prefix),
+        _ => None,
+    });
+
+    let vector_options = o.get("vectorOptions").and_then(|v| {
+        let dimensions = v.get("dimensions")?.as_u64()? as usize;
+        let metric = v.get("metric").and_then(|m| m.as_str()).unwrap_or("cosine").to_string();
+        let ef_construction = v.get("efConstruction").and_then(|n| n.as_u64()).map(|n| n as usize);
+        let m = v.get("m").and_then(|n| n.as_u64()).map(|n| n as usize);
+        Some(EngineVectorIndexOptions { dimensions, metric, ef_construction, m })
+    });
+
+    let text_options = o.get("textOptions").and_then(|v| {
+        Some(EngineTextIndexOptions {
+            default_language: v.get("defaultLanguage").and_then(|s| s.as_str()).map(|s| s.to_string()),
+            weights: v.get("weights").and_then(|w| {
+                if let Bson::Document(d) = json_to_bson(w) { Some(d) } else { None }
+            }),
+        })
+    });
+
+    let prefix_options = o.get("prefixOptions").and_then(|v| {
+        let prefix_length = v.get("prefixLength").and_then(|n| n.as_u64()).unwrap_or(16) as usize;
+        Some(EnginePrefixOptions { prefix_length })
+    });
+
+    let partial_filter_expression = o.get("partialFilterExpression").and_then(|v| {
+        if let bson::Bson::Document(d) = json_to_bson(v) { Some(d) } else { None }
+    });
+
+    let collation = o.get("collation").and_then(|v| {
+        if let bson::Bson::Document(d) = json_to_bson(v) { Some(d) } else { None }
+    });
+
+    EngineIndexOptions {
+        name: o.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        unique: o.get("unique").and_then(|v| v.as_bool()).unwrap_or(false),
+        sparse: o.get("sparse").and_then(|v| v.as_bool()).unwrap_or(false),
+        background: o.get("background").and_then(|v| v.as_bool()).unwrap_or(false),
+        expire_after_seconds: o.get("expireAfterSeconds").and_then(|v| v.as_u64()),
+        partial_filter_expression,
+        collation,
+        index_type,
+        vector_options,
+        text_options,
+        prefix_options,
+    }
+}
+
 // ============================================================
 // MongoClient — top-level entry point (MongoDB driver-like API)
 // ============================================================
@@ -191,7 +360,7 @@ impl Database {
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(Collection {
             inner: Some(col),
-            _db_ref: Arc::clone(&self.inner),
+            db_ref: Some(Arc::clone(&self.inner)),
         })
     }
 
@@ -243,6 +412,31 @@ impl Database {
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(count as i64)
     }
+
+    /// Drop the entire database, removing all data files.
+    ///
+    /// After this call, the database handle is consumed and must not be used.
+    #[napi]
+    pub fn drop(&mut self) -> napi::Result<()> {
+        let dummy_dir = std::env::temp_dir().join(format!(
+            "smongo_node_drop_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dummy_dir).map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        let dummy_db = EngineDatabase::open(&dummy_dir)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        let old_inner = std::mem::replace(&mut self.inner, Arc::new(dummy_db));
+        let db = Arc::try_unwrap(old_inner).map_err(|_| {
+            napi::Error::from_reason(
+                "Cannot drop database: other references still exist (close all collections first)",
+            )
+        })?;
+        db.drop().map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
 }
 
 // ============================================================
@@ -252,7 +446,7 @@ impl Database {
 #[napi]
 pub struct Collection {
     inner: Option<EngineCollection>,
-    _db_ref: Arc<EngineDatabase>,
+    db_ref: Option<Arc<EngineDatabase>>,
 }
 
 impl Collection {
@@ -273,6 +467,7 @@ impl Collection {
     #[napi]
     pub fn close(&mut self) {
         self.inner.take();
+        self.db_ref.take();
     }
 
     // ---- INSERT ----
@@ -433,30 +628,31 @@ impl Collection {
         let stages = json_vec_to_docs(pipeline)?;
         let explain = self.engine()?.explain_aggregate(stages)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        Ok(serde_json::json!({
-            "executionPlan": match &explain.execution_plan {
-                smongo_engine::explain::ExecutionPlanExplain::CollectionScan => "COLLSCAN",
-                smongo_engine::explain::ExecutionPlanExplain::IndexScan { .. } => "IXSCAN",
-                smongo_engine::explain::ExecutionPlanExplain::IndexSeek { .. } => "IXSEEK",
-                smongo_engine::explain::ExecutionPlanExplain::Geo { .. } => "GEO",
-                smongo_engine::explain::ExecutionPlanExplain::OrUnion => "OR_UNION",
-                smongo_engine::explain::ExecutionPlanExplain::CoveringIndexScan { .. } => "IXSCAN_COVERING",
-                smongo_engine::explain::ExecutionPlanExplain::SortedIndexScan { .. } => "IXSCAN_SORTED",
-                smongo_engine::explain::ExecutionPlanExplain::VectorIndexSearch { .. } => "VECTOR_SEARCH",
-                smongo_engine::explain::ExecutionPlanExplain::BitmapScan { .. } => "BITMAP_SCAN",
-                smongo_engine::explain::ExecutionPlanExplain::TextIndexScan { .. } => "TEXT_SCAN",
-                smongo_engine::explain::ExecutionPlanExplain::PrefixIndexScan { .. } => "PREFIX_SCAN",
-            },
-            "indexUsed": explain.index_used,
-            "planReason": explain.plan_reason,
-            "executionStats": {
-                "documentsExamined": explain.execution_stats.documents_examined,
-                "documentsReturned": explain.execution_stats.documents_returned,
-                "indexEntriesExamined": explain.execution_stats.index_entries_examined,
-            },
-            "efficiency": explain.efficiency(),
-            "summary": explain.summary(),
-        }))
+        Ok(explain_to_json(&explain))
+    }
+
+    // ---- EXPLAIN ----
+
+    #[napi(js_name = "explainFind")]
+    pub fn explain_find(
+        &self,
+        filter: serde_json::Value,
+    ) -> napi::Result<serde_json::Value> {
+        let filter_doc = json_to_doc(filter)?;
+        let explain = self.engine()?.explain_find(filter_doc)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        Ok(explain_to_json(&explain))
+    }
+
+    #[napi(js_name = "explainFindOne")]
+    pub fn explain_find_one(
+        &self,
+        filter: serde_json::Value,
+    ) -> napi::Result<serde_json::Value> {
+        let filter_doc = json_to_doc(filter)?;
+        let explain = self.engine()?.explain_find_one(filter_doc)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        Ok(explain_to_json(&explain))
     }
 
     // ---- INDEXES ----
@@ -468,27 +664,7 @@ impl Collection {
         options: Option<serde_json::Value>,
     ) -> napi::Result<String> {
         let keys_doc = json_to_doc(keys)?;
-        let opts = options.map(|o| EngineIndexOptions {
-            name: o
-                .get("name")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            unique: o.get("unique").and_then(|v| v.as_bool()).unwrap_or(false),
-            sparse: o.get("sparse").and_then(|v| v.as_bool()).unwrap_or(false),
-            background: o
-                .get("background")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false),
-            expire_after_seconds: o
-                .get("expireAfterSeconds")
-                .and_then(|v| v.as_u64()),
-            partial_filter_expression: None,
-            collation: None,
-            index_type: None,
-            vector_options: None,
-            text_options: None,
-            prefix_options: None,
-        });
+        let opts = options.as_ref().map(parse_index_options);
         self.engine()?
             .create_index(keys_doc, opts)
             .map_err(|e| napi::Error::from_reason(e.to_string()))
@@ -532,6 +708,13 @@ impl Collection {
             })
             .collect();
         Ok(serde_json::Value::Array(arr))
+    }
+
+    #[napi(js_name = "rebuildAllIndexes")]
+    pub fn rebuild_all_indexes(&self) -> napi::Result<i64> {
+        self.engine()?
+            .rebuild_all_indexes()
+            .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 }
 
@@ -595,13 +778,18 @@ impl ClientSession {
         &self,
         collection_name: String,
         filter: serde_json::Value,
+        options: Option<serde_json::Value>,
     ) -> napi::Result<Option<serde_json::Value>> {
         let col = self.inner.collection(&collection_name)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         let filter_doc = json_to_doc(filter)?;
-        let result = col.find_one(filter_doc)
+        // CollectionView only supports basic find; apply sort/projection in-memory
+        let mut docs = col.find(filter_doc)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        Ok(result.map(|d| doc_to_json(&d)))
+        if let Some(ref opts) = options {
+            apply_find_options_in_memory(&mut docs, opts);
+        }
+        Ok(docs.into_iter().next().map(|d| doc_to_json(&d)))
     }
 
     /// Find all documents matching the filter within this transaction.
@@ -610,12 +798,16 @@ impl ClientSession {
         &self,
         collection_name: String,
         filter: serde_json::Value,
+        options: Option<serde_json::Value>,
     ) -> napi::Result<serde_json::Value> {
         let col = self.inner.collection(&collection_name)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         let filter_doc = json_to_doc(filter)?;
-        let docs = col.find(filter_doc)
+        let mut docs = col.find(filter_doc)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        if let Some(ref opts) = options {
+            apply_find_options_in_memory(&mut docs, opts);
+        }
         Ok(docs_to_json_array(&docs))
     }
 
@@ -628,6 +820,7 @@ impl ClientSession {
         collection_name: String,
         filter: serde_json::Value,
         update: serde_json::Value,
+        _options: Option<serde_json::Value>,
     ) -> napi::Result<serde_json::Value> {
         let col = self.inner.collection(&collection_name)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
@@ -635,10 +828,14 @@ impl ClientSession {
         let update_doc = json_to_doc(update)?;
         let result = col.update_one(filter_doc, update_doc)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        Ok(serde_json::json!({
+        let mut res = serde_json::json!({
             "matchedCount": result.matched_count,
             "modifiedCount": result.modified_count,
-        }))
+        });
+        if let Some(id) = &result.upserted_id {
+            res["upsertedId"] = bson_to_json(id);
+        }
+        Ok(res)
     }
 
     /// Update all documents matching the filter within this transaction.
@@ -650,6 +847,7 @@ impl ClientSession {
         collection_name: String,
         filter: serde_json::Value,
         update: serde_json::Value,
+        _options: Option<serde_json::Value>,
     ) -> napi::Result<serde_json::Value> {
         let col = self.inner.collection(&collection_name)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
@@ -657,10 +855,14 @@ impl ClientSession {
         let update_doc = json_to_doc(update)?;
         let result = col.update_many(filter_doc, update_doc)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        Ok(serde_json::json!({
+        let mut res = serde_json::json!({
             "matchedCount": result.matched_count,
             "modifiedCount": result.modified_count,
-        }))
+        });
+        if let Some(id) = &result.upserted_id {
+            res["upsertedId"] = bson_to_json(id);
+        }
+        Ok(res)
     }
 
     /// Delete a single document within this transaction.
@@ -710,5 +912,20 @@ impl ClientSession {
         let count = col.count_documents(filter_doc)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(count as i64)
+    }
+
+    /// Run an aggregation pipeline within this transaction.
+    #[napi]
+    pub fn aggregate(
+        &self,
+        collection_name: String,
+        pipeline: serde_json::Value,
+    ) -> napi::Result<serde_json::Value> {
+        let col = self.inner.collection(&collection_name)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        let stages = json_vec_to_docs(pipeline)?;
+        let results = col.aggregate(stages)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        Ok(docs_to_json_array(&results))
     }
 }

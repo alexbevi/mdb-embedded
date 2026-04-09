@@ -86,12 +86,11 @@ def main() -> None:
     print(
         f"   Stored {coll.count_documents({})} documents with {LocalEmbeddings.DIM}-dim embeddings."
     )
-    native.close()
 
     # ── 2. Start the wire server ───────────────────────────────
     print(f"\n2. Starting wire protocol server on port {PORT}...")
 
-    with WireServer(db_path, port=PORT) as _srv:
+    with WireServer(db_path, port=PORT, local_client=native.get_local_client()) as _srv:
         time.sleep(0.3)
 
         # ── 3. Connect with STANDARD PyMongo ───────────────────
@@ -127,7 +126,8 @@ def main() -> None:
             print(f'   Query: "{query}"')
             results = vectorstore.similarity_search_with_score(query, k=2)
             for doc, score in results:
-                print(f"     [{score:.4f}] {doc.page_content[:70]}...")
+                score_str = f"{score:.4f}" if score is not None else "n/a"
+                print(f"     [{score_str}] {doc.page_content[:70]}...")
             print()
 
         # ── 6. Use as a LangChain retriever ────────────────────
@@ -167,6 +167,7 @@ def main() -> None:
 
         client.close()
 
+    native.close()
     shutil.rmtree(db_path, ignore_errors=True)
     sys.stdout.flush()
     os._exit(0)

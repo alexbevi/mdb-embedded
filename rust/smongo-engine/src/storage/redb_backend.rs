@@ -259,6 +259,27 @@ impl RedbCursor {
             let (k, v) = item.map_err(|e| StorageError::Other(e.to_string()))?;
             rows.push((k.value().to_vec(), v.value().to_vec()));
         }
+
+        // During an explicit transaction, mutations are buffered in `pending_writes`
+        // and are not yet visible to redb read transactions. Merge them so scans
+        // (find / aggregate / etc.) see the same session's uncommitted writes.
+        if self.in_transaction.load(Ordering::SeqCst) {
+            let pending = lock_map(&self.pending_writes)?;
+            for op in pending.iter() {
+                match op {
+                    PendingWrite::Insert { table, key, value } if table == &self.table_name => {
+                        rows.retain(|(k, _)| k != key);
+                        rows.push((key.clone(), value.clone()));
+                    }
+                    PendingWrite::Remove { table, key } if table == &self.table_name => {
+                        rows.retain(|(k, _)| k != key);
+                    }
+                    _ => {}
+                }
+            }
+            rows.sort_by(|a, b| a.0.cmp(&b.0));
+        }
+
         self.entries = Some(rows);
         self.position = None;
         Ok(())

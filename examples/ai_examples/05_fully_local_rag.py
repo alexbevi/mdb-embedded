@@ -78,12 +78,11 @@ def main() -> None:
     coll.insert_many(embedded_docs)
     embed_time = time.time() - t0
     print(f"   Stored {len(KNOWLEDGE)} chunks in {embed_time:.1f}s\n")
-    native.close()
 
     # ── 3. Start wire server ───────────────────────────────────
     print(f"3. Starting wire protocol server on port {PORT}...")
 
-    with WireServer(db_path, port=PORT) as _srv:
+    with WireServer(db_path, port=PORT, local_client=native.get_local_client()) as _srv:
         time.sleep(0.3)
 
         from pymongo import MongoClient as PyMongoClient
@@ -155,6 +154,7 @@ def main() -> None:
 
         client.close()
 
+    native.close()
     shutil.rmtree(db_path, ignore_errors=True)
     sys.stdout.flush()
     os._exit(0)

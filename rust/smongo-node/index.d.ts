@@ -14,21 +14,21 @@ export declare class ClientSession {
    */
   insertOne(collectionName: string, document: any): any
   /** Find a single document within this transaction. */
-  findOne(collectionName: string, filter: any): any | null
+  findOne(collectionName: string, filter: any, options?: any | undefined | null): any | null
   /** Find all documents matching the filter within this transaction. */
-  find(collectionName: string, filter: any): any
+  find(collectionName: string, filter: any, options?: any | undefined | null): any
   /**
    * Update a single document within this transaction.
    *
    * Returns `{ matchedCount, modifiedCount }`.
    */
-  updateOne(collectionName: string, filter: any, update: any): any
+  updateOne(collectionName: string, filter: any, update: any, options?: any | undefined | null): any
   /**
    * Update all documents matching the filter within this transaction.
    *
    * Returns `{ matchedCount, modifiedCount }`.
    */
-  updateMany(collectionName: string, filter: any, update: any): any
+  updateMany(collectionName: string, filter: any, update: any, options?: any | undefined | null): any
   /**
    * Delete a single document within this transaction.
    *
@@ -43,6 +43,8 @@ export declare class ClientSession {
   deleteMany(collectionName: string, filter: any): any
   /** Count documents matching the filter within this transaction. */
   countDocuments(collectionName: string, filter?: any | undefined | null): number
+  /** Run an aggregation pipeline within this transaction. */
+  aggregate(collectionName: string, pipeline: any): any
 }
 
 export declare class Collection {
@@ -50,9 +52,8 @@ export declare class Collection {
    * Release the underlying engine collection handle.
    *
    * Must be called before `db.dropCollection()` when a JS-side handle
-   * was previously obtained for the same collection name, because
-   * The engine may refuse to drop tables while handles hold cached
-   * cursors on them.
+   * was previously obtained for the same collection name, so the engine
+   * can drop tables without conflicting open handles.
    */
   close(): void
   insertOne(document: any): any
@@ -66,10 +67,13 @@ export declare class Collection {
   countDocuments(filter?: any | undefined | null): number
   aggregate(pipeline: any): any
   explainAggregate(pipeline: any): any
+  explainFind(filter: any): any
+  explainFindOne(filter: any): any
   createIndex(keys: any, options?: any | undefined | null): string
   reapExpired(): number
   dropIndex(name: string): void
   listIndexes(): any
+  rebuildAllIndexes(): number
 }
 
 export declare class Database {
@@ -101,6 +105,12 @@ export declare class Database {
    * Returns the total number of documents removed.
    */
   reapTtl(): number
+  /**
+   * Drop the entire database, removing all data files.
+   *
+   * After this call, the database handle is consumed and must not be used.
+   */
+  drop(): void
 }
 
 export declare class MongoClient {
