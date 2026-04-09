@@ -63,7 +63,7 @@ smongo inverts this. Your data lives **with you** -- on disk, in the embedded **
    │  Change streams  │                    │  Checkpointing  │
    └─────────────────┘                    └─────────────────┘
          ▲                                         ▲
-         │ TCP :27017                               │ pymongo
+         │ TCP :27018                               │ pymongo
          │                                         │
    ┌─────┴──────┐                          ┌───────┴───────┐
    │ Local      │                          │ MongoDB Atlas │
@@ -102,20 +102,20 @@ This is where it gets wild. smongo doesn't just have an API that looks like Mong
 
 ```bash
 # Start smongo's wire protocol server
-python -m smongo.wire --port 27017
+python -m smongo.wire --port 27018
 ```
 
 Now any of these work against your local embedded engine:
 
 ```bash
 # mongosh
-mongosh mongodb://localhost:27017/mydb
+mongosh mongodb://localhost:27018/mydb
 
 # PyMongo
-python -c "from pymongo import MongoClient; print(MongoClient('mongodb://localhost:27017').mydb.users.find_one())"
+python -c "from pymongo import MongoClient; print(MongoClient('mongodb://localhost:27018').mydb.users.find_one())"
 
 # MongoDB Compass
-# Just point it at mongodb://localhost:27017
+# Just point it at mongodb://localhost:27018
 
 # Any MongoDB driver -- Node.js, Go, Java, C#, Ruby...
 ```
@@ -124,7 +124,7 @@ This means **every tool in the MongoDB ecosystem** is a potential local-first cl
 
 ### What about LangChain?
 
-LangChain's MongoDB integrations (`MongoDBChatMessageHistory`, `MongoDBAtlasVectorSearch`, etc.) use pymongo under the hood. Point them at `mongodb://localhost:27017` instead of an Atlas URI, and they'll read and write against your local engine. Your chat history, your vector embeddings, your document stores -- all local-first, all syncing to Atlas in the background.
+LangChain's MongoDB integrations (`MongoDBChatMessageHistory`, `MongoDBAtlasVectorSearch`, etc.) use pymongo under the hood. Point them at `mongodb://localhost:27018` instead of an Atlas URI, and they'll read and write against your local engine. Your chat history, your vector embeddings, your document stores -- all local-first, all syncing to Atlas in the background.
 
 The same applies to **any** framework that uses a standard MongoDB driver: Beanie, Motor, Mongoose, mongoid, the Go driver. If it speaks MongoDB wire protocol, it works.
 
@@ -352,7 +352,7 @@ The app works fully offline. Users create, read, update, delete. When WiFi or ce
 ┌────────────────────────────────┐         ┌──────────────┐
 │       Edge Gateway             │  sync   │              │
 │                                │────────►│  Atlas       │
-│  smongo wire server :27017     │         │              │
+│  smongo wire server :27018     │         │              │
 │  Sensors connect via pymongo   │         │  Central     │
 │  Local aggregation & alerting  │         │  analytics   │
 │  push_only to cloud            │         │              │
@@ -385,11 +385,11 @@ from smongo.wire import WireServer
 
 # Start the embedded engine + wire server
 client = MongoClient("local://ai_data", sync="mongodb+srv://...")
-server = WireServer("./ai_data", port=27017)
+server = WireServer("./ai_data", port=27018)
 server.start()
 
 # Now LangChain, LlamaIndex, or any AI framework connects via pymongo
-# to mongodb://localhost:27017 -- reads are local, writes sync to Atlas
+# to mongodb://localhost:27018 -- reads are local, writes sync to Atlas
 ```
 
 Vector embeddings, chat histories, document stores, RAG retrieval -- all running against the **local embedded engine** with `$vectorSearch` support (NumPy / USearch). No network latency on the inference hot path. Training data syncs from Atlas. Generated artifacts sync back.
@@ -522,10 +522,10 @@ from smongo.wire import WireServer
 client = MongoClient("local://my_data", sync="mongodb+srv://...")
 
 # Wire server so other tools can connect
-server = WireServer("./my_data", port=27017)
+server = WireServer("./my_data", port=27018)
 server.start()
 
-# Now: mongosh, Compass, pymongo, LangChain, any driver → localhost:27017
+# Now: mongosh, Compass, pymongo, LangChain, any driver → localhost:27018
 # All reads are local. All writes sync to Atlas in the background.
 ```
 

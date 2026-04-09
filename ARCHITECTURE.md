@@ -15,7 +15,7 @@ The result is not a mock. It is not SQLite pretending to be Mongo. It is **ACID 
 │                        Application Layer                             │
 │   MongoClient("local://...")  ·  PyMongo driver  ·  mongosh         │
 └──────────────┬────────────────────────────┬──────────────────────────┘
-               │ Python API                 │ TCP :27017
+               │ Python API                 │ TCP :27018
                ▼                            ▼
 ┌──────────────────────┐    ┌──────────────────────────────────────────┐
 │   smongo.client│    │          Wire Protocol Server            │
@@ -214,8 +214,8 @@ db.articles.aggregate([{
 The wire protocol server transforms `smongo` from a Python library into something far more powerful: **a drop-in replacement for `mongod` that any MongoDB driver in any language can connect to**. `mongosh`, Compass, PyMongo, the Node.js driver, the Go driver — they all speak OP_MSG over TCP. So does this server.
 
 ```
-$ python -m smongo.wire --port 27017
-$ mongosh mongodb://localhost:27017
+$ python -m smongo.wire --port 27018
+$ mongosh mongodb://localhost:27018
 ```
 
 ### Message Format

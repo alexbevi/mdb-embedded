@@ -63,9 +63,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Install dependencies
-        run: pip install maturin && pip install -e ".[dev,all]"
-      - name: Rebuild native extension
-        run: make build-debug
+        run: pip install -e ".[dev,all]"
       - name: Verify native extension
         run: make ensure-extension
       - name: Run Rust tests

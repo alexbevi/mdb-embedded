@@ -67,7 +67,7 @@ class WireServer:
         self,
         db_path: str = "local_data",
         host: str = "127.0.0.1",
-        port: int = 27017,
+        port: int = 27018,
         sync: str | SyncManager | None = None,
         max_connections: int = MAX_CONNECTIONS,
         local_client: RedbClient | None = None,

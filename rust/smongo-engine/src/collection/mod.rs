@@ -2346,7 +2346,10 @@ impl<S: StorageSession> Collection<S> {
         let index_table_name = format!("{}.idx_{}", self.collection_name, index_name);
 
         let existing = self.list_indexes()?;
-        if existing.iter().any(|s| s.name == index_name) {
+        if let Some(spec) = existing.iter().find(|s| s.name == index_name) {
+            if spec.keys == keys {
+                return Ok(index_name);
+            }
             return Err(CollectionError::IndexAlreadyExists(index_name));
         }
 
@@ -3614,19 +3617,29 @@ mod tests {
     }
 
     #[test]
-    fn test_create_index_duplicate_fails() {
+    fn test_create_index_duplicate_is_idempotent() {
         let (_temp_dir, collection) = setup_collection();
 
-        // Create index
+        let name1 = collection.create_index(doc! { "email": 1 }, None).unwrap();
+        let name2 = collection.create_index(doc! { "email": 1 }, None).unwrap();
+        assert_eq!(name1, name2);
+
+        let indexes = collection.list_indexes().unwrap();
+        assert_eq!(indexes.len(), 1);
+    }
+
+    #[test]
+    fn test_create_index_different_keys_same_name_fails() {
+        let (_temp_dir, collection) = setup_collection();
+
         collection.create_index(doc! { "email": 1 }, None).unwrap();
 
-        // Try to create same index again - should fail
-        let result = collection.create_index(doc! { "email": 1 }, None);
+        let result = collection.create_index(
+            doc! { "age": 1 },
+            Some(IndexOptions { name: Some("email_1".to_string()), ..Default::default() }),
+        );
         assert!(result.is_err());
-        assert!(matches!(
-            result,
-            Err(CollectionError::IndexAlreadyExists(_))
-        ));
+        assert!(matches!(result, Err(CollectionError::IndexAlreadyExists(_))));
     }
 
     #[test]

@@ -160,8 +160,8 @@ demo: ## Run the standalone CLI demo
 web: ## Start the web dashboard (localhost:5000)
 	cd $(ROOT) && $(PYTHON) web_app.py
 
-wire: ## Start the wire protocol server (localhost:27017)
-	cd $(ROOT) && $(PYTHON) -m smongo.wire --port 27017
+wire: ## Start the wire protocol server (localhost:27018)
+	cd $(ROOT) && $(PYTHON) -m smongo.wire --port 27018
 
 # ---------------------------------------------------------------------------
 # Clean

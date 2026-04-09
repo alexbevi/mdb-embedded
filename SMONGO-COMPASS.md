@@ -120,19 +120,19 @@ If it's missing, check that `WIRE_PORT` is set in the `environment` block.
 ### Start the wire server
 
 ```bash
-python -m smongo.wire --port 27017
+python -m smongo.wire --port 27018
 ```
 
 Output:
 
 ```
-smongo wire server on 127.0.0.1:27017  (db path: e.g. `./local_data`)  -- small but mighty
+smongo wire server on 127.0.0.1:27018  (db path: e.g. `./local_data`)  -- small but mighty
 ```
 
 ### Connect from Compass
 
 ```
-mongodb://localhost:27017
+mongodb://localhost:27018
 ```
 
 No auth. No TLS. No replica set config. (The Rust `RustWireServer` supports SCRAM-SHA-256 and TLS if needed.)
@@ -141,7 +141,7 @@ No auth. No TLS. No replica set config. (The Rust `RustWireServer` supports SCRA
 
 | Flag | Default | Description |
 |---|---|---|
-| `--port` | `27017` | TCP port to listen on |
+| `--port` | `27018` | TCP port to listen on |
 | `--host` | `127.0.0.1` | Bind address (`0.0.0.0` for external access) |
 | `--db-path` | `local_data` | Directory / file path for the embedded redb database |
 | `-v` / `--verbose` | off | Debug-level logging |
@@ -150,7 +150,7 @@ No auth. No TLS. No replica set config. (The Rust `RustWireServer` supports SCRA
 
 ```bash
 pip install -e .
-smongo-wire --port 27017
+smongo-wire --port 27018
 ```
 
 ### Alternative: Python API
@@ -158,7 +158,7 @@ smongo-wire --port 27017
 ```python
 from smongo.wire import WireServer
 
-with WireServer("./my_data", port=27017) as srv:
+with WireServer("./my_data", port=27018) as srv:
     input("Press Enter to stop...")
 ```
 
@@ -169,7 +169,7 @@ from smongo.wire import WireServer
 
 with WireServer(
     db_path="./my_data",
-    port=27017,
+    port=27018,
     sync="mongodb+srv://user:pass@cluster.mongodb.net",
 ) as srv:
     input("Wire + sync running. Enter to stop...")
@@ -239,10 +239,10 @@ Every major Compass feature maps to wire protocol commands that smongo handles:
 ### Connection Strings
 
 ```
-mongodb://localhost:27017                         # standalone wire server
-mongodb://localhost:27018                         # Docker Compose (default)
-mongodb://localhost:27017/myapp                   # with default database
-mongodb://localhost:27017/?directConnection=true  # explicit direct mode
+mongodb://localhost:27018                         # standalone wire server (default)
+mongodb://localhost:27018                         # Docker Compose
+mongodb://localhost:27018/myapp                   # with default database
+mongodb://localhost:27018/?directConnection=true  # explicit direct mode
 ```
 
 ### Compass GUI Settings
@@ -279,7 +279,7 @@ The default Python `WireServer` returns error code 18 (`AuthenticationFailed`) w
 | Check | Verify | Fix |
 |---|---|---|
 | Server not running | No startup message in terminal | Start the wire server |
-| Port conflict | `lsof -i :27017` shows another process | Use `--port 27018` or stop the other process |
+| Port conflict | `lsof -i :27018` shows another process | Use a different `--port` or stop the other process |
 | Bind address | Server says `127.0.0.1`, connecting from another machine | Use `--host 0.0.0.0` |
 | Firewall | macOS "accept incoming connections" dialog | Allow the connection |
 
@@ -300,7 +300,7 @@ brew services stop mongodb-community
 docker stop <container_id>
 
 # Or find and kill
-lsof -i :27017
+lsof -i :27018
 kill <PID>
 ```
 
@@ -314,7 +314,7 @@ kill <PID>
 
 ```bash
 # Match the path your app uses:
-python -m smongo.wire --db-path ./my_data --port 27017
+python -m smongo.wire --db-path ./my_data --port 27018
 ```
 
 ---
@@ -326,7 +326,7 @@ python -m smongo.wire --db-path ./my_data --port 27017
 **Fix**: Add `directConnection=true`:
 
 ```
-mongodb://localhost:27017/?directConnection=true
+mongodb://localhost:27018/?directConnection=true
 ```
 
 ---
@@ -342,7 +342,7 @@ The wire server closes sockets after 300 seconds of inactivity. Compass automati
 smongo limits to 1,024 concurrent connections. Compass opens 2–5 per window. Configurable via the Python API:
 
 ```python
-server = WireServer(db_path="./data", port=27017, max_connections=2048)
+server = WireServer(db_path="./data", port=27018, max_connections=2048)
 ```
 
 ---
@@ -397,7 +397,7 @@ Route everything through one wire server:
       └────────────────┼───────────────┘
                        │
           ┌────────────┴───────────┐
-          │  Wire Server :27017    │
+          │  Wire Server :27018    │
           │  Up to 1,024 clients   │
           └────────────┬───────────┘
                        │
@@ -412,7 +412,7 @@ Your app connects over TCP with standard PyMongo:
 
 ```python
 from pymongo import MongoClient
-client = MongoClient("mongodb://localhost:27017")
+client = MongoClient("mongodb://localhost:27018")
 ```
 
 Avoid a **second process** also opening `local://my_data` while the wire server holds that path:
@@ -432,7 +432,7 @@ from smongo.wire import WireServer
 
 mc = MongoClient("local://my_data")
 server = WireServer(
-    port=27017,
+    port=27018,
     local_client=mc.get_local_client(),
 )
 server.start()
@@ -465,7 +465,7 @@ This is what the architecture enables end-to-end:
     │   └──────────────────────┬──────────────────────────────┘  │
     │                          │                                  │
     │                    Wire protocol                            │
-    │                    (:27017 or :27018)                       │
+    │                    (:27018)                       │
     │                          │                                  │
     │   ┌──────────┐    ┌─────┴──────┐    ┌──────────┐          │
     │   │ Compass  │    │  Your app  │    │ mongosh  │          │

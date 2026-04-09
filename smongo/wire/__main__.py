@@ -16,7 +16,7 @@ def main() -> None:
         help="Path to embedded redb data directory (default: local_redb_data)",
     )
     parser.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1)")
-    parser.add_argument("--port", type=int, default=27017, help="Listen port (default: 27017)")
+    parser.add_argument("--port", type=int, default=27018, help="Listen port (default: 27018)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable debug logging")
     args = parser.parse_args()
 

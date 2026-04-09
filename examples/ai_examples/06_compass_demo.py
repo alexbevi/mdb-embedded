@@ -15,28 +15,28 @@ Run:
 Then connect from any of these:
 
     # MongoDB Compass (GUI)
-    #   Connection string: mongodb://localhost:27017
+    #   Connection string: mongodb://localhost:27018
     #   Click "Connect" -- browse databases, collections, run aggregations.
 
     # mongosh (shell)
-    mongosh mongodb://localhost:27017
+    mongosh mongodb://localhost:27018
 
     # PyMongo (Python)
     from pymongo import MongoClient
-    client = MongoClient("mongodb://localhost:27017", directConnection=True)
+    client = MongoClient("mongodb://localhost:27018", directConnection=True)
 
     # Node.js driver
     const { MongoClient } = require("mongodb");
-    const client = new MongoClient("mongodb://localhost:27017", { directConnection: true });
+    const client = new MongoClient("mongodb://localhost:27018", { directConnection: true });
 
     # Rust driver
-    let client = Client::with_uri_str("mongodb://localhost:27017").await?;
+    let client = Client::with_uri_str("mongodb://localhost:27018").await?;
 
     # Go driver
-    client, _ := mongo.Connect(ctx, options.Client().ApplyURI("mongodb://localhost:27017"))
+    client, _ := mongo.Connect(ctx, options.Client().ApplyURI("mongodb://localhost:27018"))
 
     # Java driver
-    MongoClient client = MongoClients.create("mongodb://localhost:27017");
+    MongoClient client = MongoClients.create("mongodb://localhost:27018");
 
     # Any tool that speaks the MongoDB wire protocol will work.
 """
@@ -52,7 +52,7 @@ import numpy as np
 from smongo import MongoClient as SmongoClient
 from smongo import WireServer
 
-PORT = 27017
+PORT = 27018
 DB_PATH = os.path.join(tempfile.gettempdir(), "smongo_compass_demo")
 
 

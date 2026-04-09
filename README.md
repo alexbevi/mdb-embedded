@@ -63,11 +63,11 @@ smongo speaks the real MongoDB wire protocol. That means **LangChain, CrewAI, mo
 ```python
 from smongo import WireServer
 
-with WireServer(db_path, port=27017) as srv:
+with WireServer(db_path, port=27018) as srv:
     # Any MongoDB client connects here -- LangChain, pymongo, mongosh, Compass
     from pymongo import MongoClient as PyMongoClient
 
-    client = PyMongoClient("mongodb://localhost:27017", directConnection=True)
+    client = PyMongoClient("mongodb://localhost:27018", directConnection=True)
     coll = client["langchain_db"]["vectors"]
 
     # Official LangChain class -- zero custom code, zero wrappers
@@ -94,8 +94,8 @@ with WireServer(db_path, port=27017) as srv:
 | **LangChain** `MongoDBAtlasVectorSearch` | Standard PyMongo collection | `$vectorSearch` over the wire -- RAG retrieval, similarity search |
 | **LangChain** `MongoDBChatMessageHistory` | Standard PyMongo collection | Persistent chat memory for agents and chains |
 | **CrewAI** agent tools | PyMongo-based `@tool` functions | Agents query the embedded database with `find()`, `aggregate()` |
-| **mongosh** | `mongodb://localhost:27017` | Interactive shell, ad-hoc queries |
-| **MongoDB Compass** | `mongodb://localhost:27017` | Visual document browser, aggregation builder |
+| **mongosh** | `mongodb://localhost:27018` | Interactive shell, ad-hoc queries |
+| **MongoDB Compass** | `mongodb://localhost:27018` | Visual document browser, aggregation builder |
 | **Any PyMongo code** | `MongoClient("mongodb://localhost:...")` | Existing MongoDB code works as-is |
 
 **Why this matters for AI:**
@@ -320,7 +320,7 @@ for device in fleet:
 See [`examples/patterns/edge_fleet_sync.py`](examples/patterns/edge_fleet_sync.py) for a complete working example.
 
 ### Wire Protocol Server
-smongo speaks the real MongoDB binary protocol (OP_MSG, OP_COMPRESSED, OP_QUERY). Point `mongosh`, PyMongo, Compass, or any MongoDB driver at `localhost:27017` and they'll talk to the embedded engine as if it were a real `mongod`. The Docker Compose setup exposes the wire server on port 27018 alongside the web dashboard -- `docker compose up` and connect Compass immediately. Small database, real protocol.
+smongo speaks the real MongoDB binary protocol (OP_MSG, OP_COMPRESSED, OP_QUERY). Point `mongosh`, PyMongo, Compass, or any MongoDB driver at `localhost:27018` and they'll talk to the embedded engine as if it were a real `mongod`. The Docker Compose setup exposes the wire server on port 27018 alongside the web dashboard -- `docker compose up` and connect Compass immediately. Small database, real protocol.
 
 ### Interactive Web Dashboard
 A full-featured GUI at `localhost:5000` with:
@@ -370,18 +370,18 @@ smongo includes a wire protocol server so that **real drivers** can connect to t
 
 ```bash
 # Start the server on the default port
-python -m smongo.wire --port 27017
+python -m smongo.wire --port 27018
 ```
 
 Then connect with any standard MongoDB client:
 
 ```bash
-mongosh mongodb://localhost:27017/mydb
+mongosh mongodb://localhost:27018/mydb
 ```
 
 ```python
 from pymongo import MongoClient
-client = MongoClient("mongodb://localhost:27017")
+client = MongoClient("mongodb://localhost:27018")
 db = client["mydb"]
 db["things"].insert_one({"hello": "wire protocol"})
 ```
@@ -391,7 +391,7 @@ Or use the `WireServer` API directly in Python:
 ```python
 from smongo.wire import WireServer
 
-with WireServer("./data", port=27017) as srv:
+with WireServer("./data", port=27018) as srv:
     input("Press Enter to stop...")
 ```
 

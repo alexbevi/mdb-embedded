@@ -45,8 +45,8 @@ Same API. Same operators. Same aggregation pipeline. Same index semantics.
 The wire protocol server isn't a toy. It speaks OP_MSG (opcode 2013) — the binary protocol MongoDB drivers use. Start the server and connect `mongosh`:
 
 ```bash
-$ python -m smongo.wire --port 27017
-$ mongosh mongodb://localhost:27017
+$ python -m smongo.wire --port 27018
+$ mongosh mongodb://localhost:27018
 ```
 
 Or connect PyMongo, Node, Go, Compass, etc.

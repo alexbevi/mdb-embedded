@@ -9,8 +9,8 @@
 Without a wire protocol, smongo is a Python library. With one, it becomes a **drop-in replacement for `mongod`**.
 
 ```bash
-$ python -m smongo.wire --port 27017
-$ mongosh mongodb://localhost:27017
+$ python -m smongo.wire --port 27018
+$ mongosh mongodb://localhost:27018
 ```
 
 `mongosh` connects. PyMongo connects. The Node.js driver connects. The Go driver connects. Compass connects. Every MongoDB tool in the ecosystem speaks the same binary protocol over TCP, and this server speaks it back.
