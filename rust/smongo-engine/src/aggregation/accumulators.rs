@@ -302,21 +302,30 @@ mod tests {
     fn test_sum_int() {
         let docs = make_docs(&[10, 20, 30]);
         let acc = doc! { "$sum": "$x" };
-        assert_eq!(evaluate_accumulator(&docs, &Bson::Document(acc)).unwrap(), Bson::Int64(60));
+        assert_eq!(
+            evaluate_accumulator(&docs, &Bson::Document(acc)).unwrap(),
+            Bson::Int64(60)
+        );
     }
 
     #[test]
     fn test_sum_double() {
         let docs = vec![doc! { "x": 1.5 }, doc! { "x": 2.5 }];
         let acc = doc! { "$sum": "$x" };
-        assert_eq!(evaluate_accumulator(&docs, &Bson::Document(acc)).unwrap(), Bson::Double(4.0));
+        assert_eq!(
+            evaluate_accumulator(&docs, &Bson::Document(acc)).unwrap(),
+            Bson::Double(4.0)
+        );
     }
 
     #[test]
     fn test_avg() {
         let docs = make_docs(&[10, 20, 30]);
         let acc = doc! { "$avg": "$x" };
-        assert_eq!(evaluate_accumulator(&docs, &Bson::Document(acc)).unwrap(), Bson::Double(20.0));
+        assert_eq!(
+            evaluate_accumulator(&docs, &Bson::Document(acc)).unwrap(),
+            Bson::Double(20.0)
+        );
     }
 
     #[test]
@@ -324,8 +333,14 @@ mod tests {
         let docs = make_docs(&[30, 10, 20]);
         let min_acc = doc! { "$min": "$x" };
         let max_acc = doc! { "$max": "$x" };
-        assert_eq!(evaluate_accumulator(&docs, &Bson::Document(min_acc)).unwrap(), Bson::Int32(10));
-        assert_eq!(evaluate_accumulator(&docs, &Bson::Document(max_acc)).unwrap(), Bson::Int32(30));
+        assert_eq!(
+            evaluate_accumulator(&docs, &Bson::Document(min_acc)).unwrap(),
+            Bson::Int32(10)
+        );
+        assert_eq!(
+            evaluate_accumulator(&docs, &Bson::Document(max_acc)).unwrap(),
+            Bson::Int32(30)
+        );
     }
 
     #[test]
@@ -333,8 +348,14 @@ mod tests {
         let docs = make_docs(&[1, 2, 3]);
         let first = doc! { "$first": "$x" };
         let last = doc! { "$last": "$x" };
-        assert_eq!(evaluate_accumulator(&docs, &Bson::Document(first)).unwrap(), Bson::Int32(1));
-        assert_eq!(evaluate_accumulator(&docs, &Bson::Document(last)).unwrap(), Bson::Int32(3));
+        assert_eq!(
+            evaluate_accumulator(&docs, &Bson::Document(first)).unwrap(),
+            Bson::Int32(1)
+        );
+        assert_eq!(
+            evaluate_accumulator(&docs, &Bson::Document(last)).unwrap(),
+            Bson::Int32(3)
+        );
     }
 
     #[test]
@@ -360,6 +381,9 @@ mod tests {
     fn test_count() {
         let docs = make_docs(&[1, 2, 3]);
         let acc = doc! { "$count": {} };
-        assert_eq!(evaluate_accumulator(&docs, &Bson::Document(acc)).unwrap(), Bson::Int32(3));
+        assert_eq!(
+            evaluate_accumulator(&docs, &Bson::Document(acc)).unwrap(),
+            Bson::Int32(3)
+        );
     }
 }

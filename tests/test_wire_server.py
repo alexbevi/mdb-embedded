@@ -39,9 +39,7 @@ def wire_env(tmp_path_factory):
     db_path = str(tmp_path_factory.mktemp("wire_redb"))
     port = _find_free_port()
     # Explicit auth_required=False selects RustWireServer (parity with TLS/auth builds).
-    server = WireServer(
-        db_path, host="127.0.0.1", port=port, auth_required=False
-    )
+    server = WireServer(db_path, host="127.0.0.1", port=port, auth_required=False)
     server.start()
     _wait_for_port("127.0.0.1", port)
     yield server, port

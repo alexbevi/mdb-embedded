@@ -417,7 +417,7 @@ fn eval_op<'py>(
                     "$geoWithin requires $centerSphere or $geometry Polygon/MultiPolygon",
                 ))
             }
-        },
+        }
         "$geoIntersects" => {
             let inner = cond_val.cast::<PyDict>()?;
             if let Some(shape) = parse_geo_intersects_inner_geometry(inner)? {
@@ -430,7 +430,7 @@ fn eval_op<'py>(
                     "$geoIntersects requires $geometry Polygon or MultiPolygon",
                 ))
             }
-        },
+        }
         _ => Err(PyValueError::new_err(format!(
             "unknown query operator: {op}"
         ))),

@@ -1,7 +1,6 @@
 """Tests for smongo.storage -- redb-backed client, TTLReaper, and related APIs."""
 
 import threading
-import time
 from datetime import UTC, datetime, timedelta
 
 import pytest

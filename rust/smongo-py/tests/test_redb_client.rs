@@ -31,7 +31,8 @@ fn test_redb_client_basic_crud() -> PyResult<()> {
         // Find
         let filter = PyDict::new(py);
         filter.set_item("name", "Alice")?;
-        let found: Option<Bound<'_, PyDict>> = coll.call_method1("find_one", (filter,))?.extract()?;
+        let found: Option<Bound<'_, PyDict>> =
+            coll.call_method1("find_one", (filter,))?.extract()?;
         assert!(found.is_some());
         let doc = found.unwrap();
         assert_eq!(doc.get_item("name")?.unwrap().extract::<String>()?, "Alice");
@@ -39,7 +40,9 @@ fn test_redb_client_basic_crud() -> PyResult<()> {
 
         // Count
         let empty_filter = PyDict::new(py);
-        let count: u64 = coll.call_method1("count_documents", (empty_filter,))?.extract()?;
+        let count: u64 = coll
+            .call_method1("count_documents", (empty_filter,))?
+            .extract()?;
         assert_eq!(count, 1);
 
         // Update
@@ -54,8 +57,16 @@ fn test_redb_client_basic_crud() -> PyResult<()> {
         // Verify update
         let filter = PyDict::new(py);
         filter.set_item("name", "Alice")?;
-        let updated: Option<Bound<'_, PyDict>> = coll.call_method1("find_one", (filter,))?.extract()?;
-        assert_eq!(updated.unwrap().get_item("age")?.unwrap().extract::<i32>()?, 31);
+        let updated: Option<Bound<'_, PyDict>> =
+            coll.call_method1("find_one", (filter,))?.extract()?;
+        assert_eq!(
+            updated
+                .unwrap()
+                .get_item("age")?
+                .unwrap()
+                .extract::<i32>()?,
+            31
+        );
 
         // Delete
         let filter = PyDict::new(py);
@@ -64,7 +75,9 @@ fn test_redb_client_basic_crud() -> PyResult<()> {
 
         // Verify deletion
         let empty_filter = PyDict::new(py);
-        let count: u64 = coll.call_method1("count_documents", (empty_filter,))?.extract()?;
+        let count: u64 = coll
+            .call_method1("count_documents", (empty_filter,))?
+            .extract()?;
         assert_eq!(count, 0);
 
         // Close

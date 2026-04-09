@@ -1353,9 +1353,7 @@ fn persist_user_to_redb(
     let lc_ref = lc.bind(py).cast::<crate::redb_client::RedbLocalClient>()?;
     let json_util = crate::cached_modules::bson_json_util(py)?;
     let value: String = json_util.call_method1("dumps", (user_doc,))?.extract()?;
-    lc_ref
-        .borrow()
-        .sync_kv_put("table:__users", key, &value)
+    lc_ref.borrow().sync_kv_put("table:__users", key, &value)
 }
 
 fn delete_user_from_redb(

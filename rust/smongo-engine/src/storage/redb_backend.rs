@@ -435,7 +435,10 @@ impl StorageCursor for RedbCursor {
         self.entries = None;
         self.materialize()?;
         let seek = self.effective_key()?;
-        let entries = self.entries.as_ref().ok_or(StorageError::Other("not materialized".into()))?;
+        let entries = self
+            .entries
+            .as_ref()
+            .ok_or(StorageError::Other("not materialized".into()))?;
 
         if entries.is_empty() {
             return Err(StorageError::NotFound("table is empty".into()));
@@ -471,7 +474,10 @@ impl StorageCursor for RedbCursor {
 
     fn next(&mut self) -> StorageResult<()> {
         self.materialize()?;
-        let entries = self.entries.as_ref().ok_or(StorageError::Other("not materialized".into()))?;
+        let entries = self
+            .entries
+            .as_ref()
+            .ok_or(StorageError::Other("not materialized".into()))?;
 
         let next_pos = match self.position {
             Some(p) => p + 1,

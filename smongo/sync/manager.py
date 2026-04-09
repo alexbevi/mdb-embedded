@@ -11,7 +11,7 @@ from typing import Any
 
 from .._types import Document, Predicate
 from ..query import compile_query
-from .conflict import VectorClock, _RESOLVERS, _lww, _resolve_variables
+from .conflict import _RESOLVERS, VectorClock, _lww, _resolve_variables
 from .dlq import _DLQMixin
 from .metrics import _MetricsMixin
 from .pull import _PullMixin

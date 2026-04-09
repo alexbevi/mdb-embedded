@@ -47,9 +47,7 @@ class _MetricsMixin:
         try:
             key = f"{time.time_ns():020d}-{uuid.uuid4()}"
             with self._ck_lock:
-                self._rust.sync_kv_put(
-                    self._conflict_log_uri, key, json.dumps(entry, default=str)
-                )
+                self._rust.sync_kv_put(self._conflict_log_uri, key, json.dumps(entry, default=str))
         except Exception:
             pass
         log.info(
@@ -130,6 +128,7 @@ class _MetricsMixin:
     def _compute_index_hash(indexes: list[dict[str, Any]]) -> str:
         """Compute a deterministic hash of index definitions for change detection."""
         import hashlib
+
         normalized = sorted(
             (idx.get("name", ""), json.dumps(idx, sort_keys=True, default=str))
             for idx in indexes

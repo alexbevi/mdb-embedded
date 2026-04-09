@@ -9,10 +9,9 @@ use smongo_engine::database::DatabaseError;
 
 pub(crate) fn map_collection_error(err: CollectionError, op: &str) -> PyErr {
     match err {
-        CollectionError::UniqueConstraintViolation(msg) => DuplicateKeyError::new_err(format!(
-            "E11000 duplicate key error: {}",
-            msg
-        )),
+        CollectionError::UniqueConstraintViolation(msg) => {
+            DuplicateKeyError::new_err(format!("E11000 duplicate key error: {}", msg))
+        }
         other => PyRuntimeError::new_err(format!("{}: {}", op, other)),
     }
 }

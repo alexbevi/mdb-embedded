@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "smongo"
-version = "0.9.6"
+version = "0.10.0"
 description = "Small MongoDB, big ambitions -- a local-first document engine (redb + Rust) with Atlas sync"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -88,6 +88,18 @@ module = [
     "smongo.aggregation.vector",
 ]
 warn_unused_ignores = false
+
+[[tool.mypy.overrides]]
+module = [
+    "smongo.sync.*",
+    "smongo.storage.redb_engine",
+    "smongo.wire.commands.admin",
+]
+disable_error_code = ["attr-defined", "no-any-return", "has-type"]
+
+[[tool.mypy.overrides]]
+module = "smongo.client"
+disable_error_code = ["arg-type"]
 
 [tool.ruff]
 target-version = "py311"

@@ -100,24 +100,34 @@ impl From<&ExecutionPlan> for ExecutionPlanExplain {
             ExecutionPlan::IndexSeek { index_name, .. } => ExecutionPlanExplain::IndexSeek {
                 index_name: index_name.clone(),
             },
-            ExecutionPlan::CoveringIndexScan { index_name, .. } => ExecutionPlanExplain::CoveringIndexScan {
-                index_name: index_name.clone(),
-            },
-            ExecutionPlan::SortedIndexScan { index_name, .. } => ExecutionPlanExplain::SortedIndexScan {
-                index_name: index_name.clone(),
-            },
-            ExecutionPlan::VectorIndexSearch { index_name, .. } => ExecutionPlanExplain::VectorIndexSearch {
-                index_name: index_name.clone(),
-            },
+            ExecutionPlan::CoveringIndexScan { index_name, .. } => {
+                ExecutionPlanExplain::CoveringIndexScan {
+                    index_name: index_name.clone(),
+                }
+            }
+            ExecutionPlan::SortedIndexScan { index_name, .. } => {
+                ExecutionPlanExplain::SortedIndexScan {
+                    index_name: index_name.clone(),
+                }
+            }
+            ExecutionPlan::VectorIndexSearch { index_name, .. } => {
+                ExecutionPlanExplain::VectorIndexSearch {
+                    index_name: index_name.clone(),
+                }
+            }
             ExecutionPlan::BitmapScan { index_name, .. } => ExecutionPlanExplain::BitmapScan {
                 index_name: index_name.clone(),
             },
-            ExecutionPlan::TextIndexScan { index_name, .. } => ExecutionPlanExplain::TextIndexScan {
-                index_name: index_name.clone(),
-            },
-            ExecutionPlan::PrefixIndexScan { index_name, .. } => ExecutionPlanExplain::PrefixIndexScan {
-                index_name: index_name.clone(),
-            },
+            ExecutionPlan::TextIndexScan { index_name, .. } => {
+                ExecutionPlanExplain::TextIndexScan {
+                    index_name: index_name.clone(),
+                }
+            }
+            ExecutionPlan::PrefixIndexScan { index_name, .. } => {
+                ExecutionPlanExplain::PrefixIndexScan {
+                    index_name: index_name.clone(),
+                }
+            }
             ExecutionPlan::GeoNear { index_name, .. }
             | ExecutionPlan::GeoCapWithin { index_name, .. }
             | ExecutionPlan::GeoCellCover { index_name, .. } => ExecutionPlanExplain::Geo {
@@ -130,11 +140,7 @@ impl From<&ExecutionPlan> for ExecutionPlanExplain {
 
 impl ExplainResult {
     /// Create a new explain result
-    pub fn new(
-        query_filter: Document,
-        execution_plan: ExecutionPlan,
-        plan_reason: String,
-    ) -> Self {
+    pub fn new(query_filter: Document, execution_plan: ExecutionPlan, plan_reason: String) -> Self {
         let index_used = match &execution_plan {
             ExecutionPlan::CollectionScan | ExecutionPlan::OrUnionPlans { .. } => None,
             ExecutionPlan::IndexScan { index_name, .. }

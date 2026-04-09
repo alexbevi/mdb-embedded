@@ -120,11 +120,7 @@ fn serialize_doc(doc: &Document) -> Result<Vec<u8>, i32> {
 ///
 /// # Safety
 /// `out` and `out_len` must be valid, non-null pointers.
-unsafe fn write_bytes_out(
-    bytes: Vec<u8>,
-    out: *mut *mut u8,
-    out_len: *mut usize,
-) {
+unsafe fn write_bytes_out(bytes: Vec<u8>, out: *mut *mut u8, out_len: *mut usize) {
     let len = bytes.len();
     let boxed = bytes.into_boxed_slice();
     let ptr = Box::into_raw(boxed) as *mut u8;
@@ -187,10 +183,7 @@ fn cstr_to_str<'a>(s: *const c_char) -> Result<&'a str, i32> {
 /// * `path` must be a valid, NUL-terminated C string.
 /// * `out` must be a valid pointer to a `*mut SmongoDb`.
 #[no_mangle]
-pub unsafe extern "C" fn smongo_open(
-    path: *const c_char,
-    out: *mut *mut SmongoDb,
-) -> i32 {
+pub unsafe extern "C" fn smongo_open(path: *const c_char, out: *mut *mut SmongoDb) -> i32 {
     clear_last_error();
 
     if out.is_null() {
@@ -271,8 +264,7 @@ pub unsafe extern "C" fn smongo_list_collection_names(
     let db_ref = unsafe { &*db };
     match db_ref.inner.list_collection_names() {
         Ok(names) => {
-            let bson_names: Vec<bson::Bson> =
-                names.into_iter().map(bson::Bson::String).collect();
+            let bson_names: Vec<bson::Bson> = names.into_iter().map(bson::Bson::String).collect();
             let result_doc = bson::doc! { "names": bson_names };
             match serialize_doc(&result_doc) {
                 Ok(bytes) => {
@@ -291,10 +283,7 @@ pub unsafe extern "C" fn smongo_list_collection_names(
 /// # Safety
 /// `db` must be a valid `SmongoDb` handle. `name` must be a valid C string.
 #[no_mangle]
-pub unsafe extern "C" fn smongo_drop_collection(
-    db: *mut SmongoDb,
-    name: *const c_char,
-) -> i32 {
+pub unsafe extern "C" fn smongo_drop_collection(db: *mut SmongoDb, name: *const c_char) -> i32 {
     clear_last_error();
 
     if db.is_null() {
@@ -710,10 +699,21 @@ pub unsafe extern "C" fn smongo_find_one_with_options(
 
 fn parse_find_options_from_bson(doc: &Document) -> FindOptions {
     let sort = doc.get_document("sort").ok().cloned();
-    let limit = doc.get_i64("limit").ok().or_else(|| doc.get_i32("limit").ok().map(|n| n as i64));
-    let skip = doc.get_i64("skip").ok().or_else(|| doc.get_i32("skip").ok().map(|n| n as i64));
+    let limit = doc
+        .get_i64("limit")
+        .ok()
+        .or_else(|| doc.get_i32("limit").ok().map(|n| n as i64));
+    let skip = doc
+        .get_i64("skip")
+        .ok()
+        .or_else(|| doc.get_i32("skip").ok().map(|n| n as i64));
     let projection = doc.get_document("projection").ok().cloned();
-    FindOptions { sort, limit, skip, projection }
+    FindOptions {
+        sort,
+        limit,
+        skip,
+        projection,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -822,7 +822,10 @@ pub unsafe extern "C" fn smongo_update_one_with_options(
     };
 
     let col_ref = unsafe { &*col };
-    match col_ref.inner.update_one_with_options(filter_doc, update_doc, opts) {
+    match col_ref
+        .inner
+        .update_one_with_options(filter_doc, update_doc, opts)
+    {
         Ok(res) => {
             let mut result_doc = bson::doc! {
                 "matchedCount": res.matched_count as i64,
@@ -1176,10 +1179,7 @@ pub unsafe extern "C" fn smongo_create_index(
 /// # Safety
 /// `col` must be a valid collection handle. `name` must be a valid C string.
 #[no_mangle]
-pub unsafe extern "C" fn smongo_drop_index(
-    col: *mut SmongoCollection,
-    name: *const c_char,
-) -> i32 {
+pub unsafe extern "C" fn smongo_drop_index(col: *mut SmongoCollection, name: *const c_char) -> i32 {
     clear_last_error();
 
     if col.is_null() {
@@ -1527,9 +1527,7 @@ pub unsafe extern "C" fn smongo_start_session(
 /// # Safety
 /// `session` must be a valid `SmongoSession` handle.
 #[no_mangle]
-pub unsafe extern "C" fn smongo_session_begin_transaction(
-    session: *mut SmongoSession,
-) -> i32 {
+pub unsafe extern "C" fn smongo_session_begin_transaction(session: *mut SmongoSession) -> i32 {
     clear_last_error();
 
     if session.is_null() {
@@ -1549,9 +1547,7 @@ pub unsafe extern "C" fn smongo_session_begin_transaction(
 /// # Safety
 /// `session` must be a valid `SmongoSession` handle.
 #[no_mangle]
-pub unsafe extern "C" fn smongo_session_commit_transaction(
-    session: *mut SmongoSession,
-) -> i32 {
+pub unsafe extern "C" fn smongo_session_commit_transaction(session: *mut SmongoSession) -> i32 {
     clear_last_error();
 
     if session.is_null() {
@@ -1571,9 +1567,7 @@ pub unsafe extern "C" fn smongo_session_commit_transaction(
 /// # Safety
 /// `session` must be a valid `SmongoSession` handle.
 #[no_mangle]
-pub unsafe extern "C" fn smongo_session_rollback_transaction(
-    session: *mut SmongoSession,
-) -> i32 {
+pub unsafe extern "C" fn smongo_session_rollback_transaction(session: *mut SmongoSession) -> i32 {
     clear_last_error();
 
     if session.is_null() {
@@ -2094,10 +2088,7 @@ pub unsafe extern "C" fn smongo_session_free(session: *mut SmongoSession) {
 /// # Safety
 /// `db` and `count_out` must be valid pointers.
 #[no_mangle]
-pub unsafe extern "C" fn smongo_reap_ttl(
-    db: *mut SmongoDb,
-    count_out: *mut i64,
-) -> i32 {
+pub unsafe extern "C" fn smongo_reap_ttl(db: *mut SmongoDb, count_out: *mut i64) -> i32 {
     clear_last_error();
 
     if db.is_null() || count_out.is_null() {

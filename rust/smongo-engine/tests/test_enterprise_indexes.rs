@@ -93,7 +93,10 @@ fn test_descending_key_reverses_sort_order() {
 
     // With descending encoding, the smaller value should sort AFTER
     // the larger value in byte order.
-    assert!(k1 > k2, "descending: key(10) should be > key(20) in byte order");
+    assert!(
+        k1 > k2,
+        "descending: key(10) should be > key(20) in byte order"
+    );
 }
 
 // ============================================================
@@ -111,13 +114,7 @@ fn test_plan_query_full_selects_sorted_scan() {
         options: IndexOptions::default(),
     }];
 
-    let plan = plan_query_full(
-        &doc! {},
-        &indexes,
-        None,
-        Some(&doc! { "age": 1 }),
-        Some(10),
-    );
+    let plan = plan_query_full(&doc! {}, &indexes, None, Some(&doc! { "age": 1 }), Some(10));
 
     assert!(
         matches!(plan.execution_plan, ExecutionPlan::SortedIndexScan { .. }),
@@ -137,17 +134,14 @@ fn test_sorted_scan_reverse_direction() {
         options: IndexOptions::default(),
     }];
 
-    let plan = plan_query_full(
-        &doc! {},
-        &indexes,
-        None,
-        Some(&doc! { "age": -1 }),
-        Some(5),
-    );
+    let plan = plan_query_full(&doc! {}, &indexes, None, Some(&doc! { "age": -1 }), Some(5));
 
     match &plan.execution_plan {
         ExecutionPlan::SortedIndexScan { reverse, limit, .. } => {
-            assert!(*reverse, "descending sort on ascending index should be reverse");
+            assert!(
+                *reverse,
+                "descending sort on ascending index should be reverse"
+            );
             assert_eq!(*limit, 5);
         }
         other => panic!("Expected SortedIndexScan, got: {:?}", other),
@@ -165,13 +159,7 @@ fn test_sorted_scan_no_match_different_fields() {
         options: IndexOptions::default(),
     }];
 
-    let plan = plan_query_full(
-        &doc! {},
-        &indexes,
-        None,
-        Some(&doc! { "age": 1 }),
-        Some(10),
-    );
+    let plan = plan_query_full(&doc! {}, &indexes, None, Some(&doc! { "age": 1 }), Some(10));
 
     // sort field "age" doesn't match index field "name"
     assert!(
@@ -248,10 +236,7 @@ fn test_sort_limit_fusion() {
 
     let docs: Vec<Document> = (0..50).map(|i| doc! { "val": i }).collect();
 
-    let pipeline = vec![
-        doc! { "$sort": { "val": -1 } },
-        doc! { "$limit": 5 },
-    ];
+    let pipeline = vec![doc! { "$sort": { "val": -1 } }, doc! { "$limit": 5 }];
 
     let stream = aggregate_stream(docs, &pipeline).unwrap();
     let results: Vec<Document> = stream.filter_map(|r| r.ok()).collect();
@@ -268,8 +253,8 @@ fn test_sort_limit_fusion() {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod vector_index_tests {
-    use smongo_engine::index::vector_index::VectorIndex;
     use bson::doc;
+    use smongo_engine::index::vector_index::VectorIndex;
 
     #[test]
     fn test_vector_index_build_and_search() {
@@ -399,8 +384,8 @@ mod bitmap_tests {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod text_index_tests {
-    use smongo_engine::index::text_index::{tokenize, TextIndex};
     use bson::doc;
+    use smongo_engine::index::text_index::{tokenize, TextIndex};
 
     #[test]
     fn test_tokenizer_consistency() {
@@ -460,11 +445,7 @@ mod text_index_tests {
             doc! { "_id": 1, "title": "Rust programming", "body": "Systems language" },
             doc! { "_id": 2, "title": "Python scripting", "body": "Dynamic language" },
         ];
-        let idx = TextIndex::build(
-            &docs,
-            &["title".to_string(), "body".to_string()],
-            None,
-        );
+        let idx = TextIndex::build(&docs, &["title".to_string(), "body".to_string()], None);
         let results = idx.search("language", None);
         assert_eq!(results.len(), 2);
     }
@@ -515,15 +496,54 @@ fn test_explain_covers_all_plan_types() {
 
     let plans = vec![
         ExecutionPlan::CollectionScan,
-        ExecutionPlan::IndexScan { index_name: "x".into(), index_keys: doc! {} },
-        ExecutionPlan::IndexSeek { index_name: "x".into(), index_keys: doc! {}, seek_values: doc! {} },
-        ExecutionPlan::CoveringIndexScan { index_name: "x".into(), index_keys: doc! {}, seek_values: None, projection: doc! {} },
-        ExecutionPlan::SortedIndexScan { index_name: "x".into(), index_keys: doc! {}, limit: 10, reverse: false },
-        ExecutionPlan::VectorIndexSearch { index_name: "x".into(), field: "v".into(), dimensions: 3, metric: "cosine".into() },
-        ExecutionPlan::BitmapScan { index_name: "x".into(), field: "f".into() },
-        ExecutionPlan::TextIndexScan { index_name: "x".into(), fields: vec!["t".into()] },
-        ExecutionPlan::PrefixIndexScan { index_name: "x".into(), index_keys: doc! {}, prefix_length: 16 },
-        ExecutionPlan::GeoNear { index_name: "x".into(), field: "loc".into(), lon: 0.0, lat: 0.0, max_distance_m: None, min_distance_m: None },
+        ExecutionPlan::IndexScan {
+            index_name: "x".into(),
+            index_keys: doc! {},
+        },
+        ExecutionPlan::IndexSeek {
+            index_name: "x".into(),
+            index_keys: doc! {},
+            seek_values: doc! {},
+        },
+        ExecutionPlan::CoveringIndexScan {
+            index_name: "x".into(),
+            index_keys: doc! {},
+            seek_values: None,
+            projection: doc! {},
+        },
+        ExecutionPlan::SortedIndexScan {
+            index_name: "x".into(),
+            index_keys: doc! {},
+            limit: 10,
+            reverse: false,
+        },
+        ExecutionPlan::VectorIndexSearch {
+            index_name: "x".into(),
+            field: "v".into(),
+            dimensions: 3,
+            metric: "cosine".into(),
+        },
+        ExecutionPlan::BitmapScan {
+            index_name: "x".into(),
+            field: "f".into(),
+        },
+        ExecutionPlan::TextIndexScan {
+            index_name: "x".into(),
+            fields: vec!["t".into()],
+        },
+        ExecutionPlan::PrefixIndexScan {
+            index_name: "x".into(),
+            index_keys: doc! {},
+            prefix_length: 16,
+        },
+        ExecutionPlan::GeoNear {
+            index_name: "x".into(),
+            field: "loc".into(),
+            lon: 0.0,
+            lat: 0.0,
+            max_distance_m: None,
+            min_distance_m: None,
+        },
         ExecutionPlan::OrUnionPlans { subplans: vec![] },
     ];
 

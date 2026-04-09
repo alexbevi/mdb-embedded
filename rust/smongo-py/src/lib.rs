@@ -4,11 +4,11 @@
 mod aggregation;
 mod aggregation_joins;
 mod bson_helpers;
-mod geo_s2;
-mod geo_polygon;
-mod geo_query;
 mod cached_modules;
 mod engine_errors;
+mod geo_polygon;
+mod geo_query;
+mod geo_s2;
 mod index_encoding;
 mod index_helpers;
 mod locking;

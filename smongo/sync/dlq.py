@@ -31,9 +31,7 @@ log = logging.getLogger("smongo.sync")
 class _DLQMixin:
     """Mixin providing dead-letter queue operations for the SyncManager."""
 
-    def _dlq_enqueue(
-        self, ns: str, entry: Document, error_code: Any, error_msg: str
-    ) -> None:
+    def _dlq_enqueue(self, ns: str, entry: Document, error_code: Any, error_msg: str) -> None:
         """Add a failed op to the DLQ for later retry."""
         backoff_base = float(self._config.get("dlq_backoff_base_sec", 30))
         now = time.time()
@@ -102,9 +100,7 @@ class _DLQMixin:
                 for k, _ in item_map:
                     self._dlq_remove(k)
             except BulkWriteError as bwe:
-                failed_idxs = {
-                    e.get("index") for e in (bwe.details or {}).get("writeErrors", [])
-                }
+                failed_idxs = {e.get("index") for e in (bwe.details or {}).get("writeErrors", [])}
                 for i, (k, v) in enumerate(item_map):
                     if i in failed_idxs:
                         v["retry_count"] += 1
@@ -117,9 +113,7 @@ class _DLQMixin:
                                 v.get("error_msg"),
                             )
                         else:
-                            delay = min(
-                                backoff_base * (2 ** v["retry_count"]), backoff_max
-                            )
+                            delay = min(backoff_base * (2 ** v["retry_count"]), backoff_max)
                             v["next_retry_ts"] = time.time() + delay
                         self._dlq_update(k, v)
                     else:
@@ -131,9 +125,7 @@ class _DLQMixin:
                     if v["retry_count"] >= max_retries:
                         v["permanently_failed"] = True
                     else:
-                        delay = min(
-                            backoff_base * (2 ** v["retry_count"]), backoff_max
-                        )
+                        delay = min(backoff_base * (2 ** v["retry_count"]), backoff_max)
                         v["next_retry_ts"] = time.time() + delay
                     self._dlq_update(k, v)
 
@@ -165,9 +157,7 @@ class _DLQMixin:
 
     def _dlq_update(self, key: str, value: dict[str, Any]) -> None:
         with self._ck_lock:
-            self._rust.sync_kv_put(
-                self._dlq_uri, key, json.dumps(value, default=str)
-            )
+            self._rust.sync_kv_put(self._dlq_uri, key, json.dumps(value, default=str))
 
     def _dlq_count(self, *, permanent_only: bool = False) -> int:
         with self._ck_lock:

@@ -9,8 +9,8 @@ use pyo3::types::{PyDict, PyList};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use bson::{Bson, Document};
 use crate::engine_errors::{map_collection_error, map_database_error};
+use bson::{Bson, Document};
 use smongo_engine::collection::{DeleteOptions, FindOptions, InsertOptions, UpdateOptions};
 use smongo_engine::database::{Database, TransactionSession};
 use smongo_engine::oplog::{OplogReader as EngineOplogReader, OplogWriter as EngineOplogWriter};
@@ -340,7 +340,10 @@ impl RedbOplogReaderBridge {
     }
 }
 
-fn oplog_entry_to_pydict(py: Python<'_>, entry: &smongo_engine::oplog::OplogEntry) -> PyResult<Py<PyDict>> {
+fn oplog_entry_to_pydict(
+    py: Python<'_>,
+    entry: &smongo_engine::oplog::OplogEntry,
+) -> PyResult<Py<PyDict>> {
     let doc = bson::to_document(entry)
         .map_err(|e| PyRuntimeError::new_err(format!("oplog entry: {}", e)))?;
     Ok(crate::bson_helpers::doc_to_pydict(py, &doc)?.unbind())
@@ -372,12 +375,7 @@ impl RedbLocalCollection {
         }
         let nid = self.oplog_node_id.lock().clone();
         self.db
-            .collection_with_oplog(
-                &self.db_name,
-                &self.name,
-                Some(self.oplog_hub.clone()),
-                nid,
-            )
+            .collection_with_oplog(&self.db_name, &self.name, Some(self.oplog_hub.clone()), nid)
             .map_err(|e| map_database_error(e, "collection_with_oplog"))
     }
 
@@ -402,11 +400,7 @@ impl RedbLocalCollection {
         self.find(py, &empty, None)
     }
 
-    pub(crate) fn count(
-        &self,
-        py: Python<'_>,
-        query: Option<&Bound<'_, PyDict>>,
-    ) -> PyResult<i64> {
+    pub(crate) fn count(&self, py: Python<'_>, query: Option<&Bound<'_, PyDict>>) -> PyResult<i64> {
         let empty = PyDict::new(py);
         let q = query.unwrap_or(&empty);
         self.count_documents(q).map(|n| n as i64)
@@ -612,18 +606,18 @@ impl RedbLocalCollection {
             .open_storage_session()
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         let ns = format!("{}.{}", self.db_name, self.name);
-        let writer = EngineOplogWriter::new(
-            session,
-            &oplog_table,
-            &ns,
-            Some(self.oplog_hub.clone()),
-        );
+        let writer =
+            EngineOplogWriter::new(session, &oplog_table, &ns, Some(self.oplog_hub.clone()));
         writer
             .truncate_count(keep)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
-    pub fn get_by_id(&self, py: Python<'_>, doc_id: Bound<'_, PyAny>) -> PyResult<Option<Py<PyDict>>> {
+    pub fn get_by_id(
+        &self,
+        py: Python<'_>,
+        doc_id: Bound<'_, PyAny>,
+    ) -> PyResult<Option<Py<PyDict>>> {
         let id = crate::bson_helpers::py_to_bson(&doc_id)?;
         let mut filter = Document::new();
         filter.insert("_id", id);
@@ -806,9 +800,7 @@ impl RedbLocalCollection {
             let v = ts
                 .collection(&self.name)
                 .map_err(|e| map_database_error(e, "collection"))?;
-            let docs = v
-                .find(query)
-                .map_err(|e| map_collection_error(e, "find"))?;
+            let docs = v.find(query).map_err(|e| map_collection_error(e, "find"))?;
             let results = PyList::empty(py);
             for doc in docs {
                 results.append(crate::bson_helpers::doc_to_pydict(py, &doc)?)?;
@@ -876,9 +868,8 @@ impl RedbLocalCollection {
         let bson_pipeline = crate::bson_helpers::pylist_to_pipeline(pipeline)?;
 
         let ctx = smongo_engine::aggregation::DatabaseContext::new(&*self.db);
-        let results =
-            smongo_engine::aggregation::aggregate_with_db(docs, &bson_pipeline, &ctx)
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let results = smongo_engine::aggregation::aggregate_with_db(docs, &bson_pipeline, &ctx)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
         let out = PyList::empty(py);
         for doc in &results {
@@ -919,14 +910,7 @@ impl RedbLocalCollection {
         return_document: &str,
         internal: bool,
     ) -> PyResult<Py<PyAny>> {
-        self.find_one_and_replace_core(
-            py,
-            filter,
-            replacement,
-            upsert,
-            return_document,
-            internal,
-        )
+        self.find_one_and_replace_core(py, filter, replacement, upsert, return_document, internal)
     }
 
     pub fn count_documents(&self, filter: &Bound<'_, PyDict>) -> PyResult<u64> {
@@ -1005,23 +989,13 @@ impl RedbLocalCollection {
         drop(guard);
         let collection = self.engine_col()?;
         let result = collection
-            .update_one_with_options(
-                query,
-                update_doc,
-                UpdateOptions {
-                    upsert,
-                    internal,
-                },
-            )
+            .update_one_with_options(query, update_doc, UpdateOptions { upsert, internal })
             .map_err(|e| map_collection_error(e, "update_one"))?;
         let result_dict = PyDict::new(py);
         result_dict.set_item("matched_count", result.matched_count)?;
         result_dict.set_item("modified_count", result.modified_count)?;
         if let Some(ref uid) = result.upserted_id {
-            result_dict.set_item(
-                "upserted_id",
-                crate::bson_helpers::bson_to_py(py, uid)?,
-            )?;
+            result_dict.set_item("upserted_id", crate::bson_helpers::bson_to_py(py, uid)?)?;
         }
         Ok(result_dict.unbind())
     }
@@ -1059,23 +1033,13 @@ impl RedbLocalCollection {
         drop(guard);
         let collection = self.engine_col()?;
         let result = collection
-            .update_many_with_options(
-                query,
-                update_doc,
-                UpdateOptions {
-                    upsert,
-                    internal,
-                },
-            )
+            .update_many_with_options(query, update_doc, UpdateOptions { upsert, internal })
             .map_err(|e| map_collection_error(e, "update_many"))?;
         let result_dict = PyDict::new(py);
         result_dict.set_item("matched_count", result.matched_count)?;
         result_dict.set_item("modified_count", result.modified_count)?;
         if let Some(ref uid) = result.upserted_id {
-            result_dict.set_item(
-                "upserted_id",
-                crate::bson_helpers::bson_to_py(py, uid)?,
-            )?;
+            result_dict.set_item("upserted_id", crate::bson_helpers::bson_to_py(py, uid)?)?;
         }
         Ok(result_dict.unbind())
     }
@@ -1174,8 +1138,9 @@ impl RedbLocalCollection {
                 opts_doc.insert("partial_filter_expression", v);
             }
             Some(
-                bson::from_document::<smongo_engine::index::IndexOptions>(opts_doc)
-                    .map_err(|e| PyRuntimeError::new_err(format!("Invalid index options: {}", e)))?,
+                bson::from_document::<smongo_engine::index::IndexOptions>(opts_doc).map_err(
+                    |e| PyRuntimeError::new_err(format!("Invalid index options: {}", e)),
+                )?,
             )
         } else {
             None
@@ -1253,10 +1218,7 @@ impl RedbLocalCollection {
             doc_count += 1;
             data_size += bson::to_vec(d).map(|v| v.len()).unwrap_or(0) as i64;
         }
-        let n_indexes = collection
-            .list_indexes()
-            .map(|v| v.len())
-            .unwrap_or(0);
+        let n_indexes = collection.list_indexes().map(|v| v.len()).unwrap_or(0);
         let storage_size = data_size + (doc_count * 64);
         let storage_engine = PyDict::new(py);
         storage_engine.set_item("name", "redb")?;
@@ -1274,7 +1236,11 @@ impl RedbLocalCollection {
     }
 
     /// Subscribe to local oplog via engine ChangeStream (optional pipeline unused).
-    pub fn watch(&self, py: Python<'_>, _pipeline: Option<Bound<'_, PyAny>>) -> PyResult<Py<RedbChangeStream>> {
+    pub fn watch(
+        &self,
+        py: Python<'_>,
+        _pipeline: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<Py<RedbChangeStream>> {
         let stream = Arc::new(smongo_engine::oplog::ChangeStream::new(
             Some(format!("{}.{}", self.db_name, self.name)),
             None,

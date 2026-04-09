@@ -33,9 +33,7 @@ class TestTopBottomAccumulators:
                 {
                     "$group": {
                         "_id": "$dept",
-                        "topSalary": {
-                            "$top": {"sortBy": {"salary": -1}, "output": "$salary"}
-                        },
+                        "topSalary": {"$top": {"sortBy": {"salary": -1}, "output": "$salary"}},
                     }
                 }
             ]

@@ -1,6 +1,8 @@
 """Test RedbLocalClient from Python (basic CRUD and indexes)."""
-import tempfile
+
 import os
+import tempfile
+
 from smongo._smongo_core import RedbLocalClient
 
 
@@ -38,10 +40,7 @@ def test_redb_basic_crud():
         assert doc["age"] == 31
 
         # Insert many
-        result = coll.insert_many([
-            {"name": "Bob", "age": 25},
-            {"name": "Charlie", "age": 35}
-        ])
+        result = coll.insert_many([{"name": "Bob", "age": 25}, {"name": "Charlie", "age": 35}])
         assert len(result["inserted_ids"]) == 2
 
         # Find all

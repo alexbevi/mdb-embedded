@@ -41,9 +41,7 @@ class TTLReaper:
         coll = self._collection
         dbn = getattr(coll, "db_name", "?")
         cn = getattr(coll, "name", "coll")
-        self._thread = threading.Thread(
-            target=self._run, daemon=True, name=f"ttl:{dbn}.{cn}"
-        )
+        self._thread = threading.Thread(target=self._run, daemon=True, name=f"ttl:{dbn}.{cn}")
         self._thread.start()
 
     def stop(self) -> None:
@@ -77,4 +75,4 @@ class TTLReaper:
             self._stop.wait(timeout=self._interval)
 
 
-__all__ = ["TTLReaper", "_TTL_DELETE_BATCH_SIZE"]
+__all__ = ["_TTL_DELETE_BATCH_SIZE", "TTLReaper"]

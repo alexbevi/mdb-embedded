@@ -21,8 +21,8 @@
 //! apply_update(&mut doc, &update).unwrap();
 //! ```
 
-use bson::{Bson, Document};
 use crate::paths::{get_value, set_value, unset_value};
+use bson::{Bson, Document};
 
 /// Apply a MongoDB update specification to a document.
 ///
@@ -60,10 +60,17 @@ pub fn apply_update_for_upsert(doc: &mut Document, update: &Document) -> Result<
     apply_update_impl(doc, update, true)
 }
 
-fn apply_update_impl(doc: &mut Document, update: &Document, is_upsert_insert: bool) -> Result<(), String> {
+fn apply_update_impl(
+    doc: &mut Document,
+    update: &Document,
+    is_upsert_insert: bool,
+) -> Result<(), String> {
     for key in update.keys() {
         if !key.starts_with('$') {
-            return Err(format!("Update keys must be operators starting with $, found: {}", key));
+            return Err(format!(
+                "Update keys must be operators starting with $, found: {}",
+                key
+            ));
         }
     }
 
@@ -172,7 +179,10 @@ fn add_numbers(current: Option<&Bson>, increment: &Bson) -> Result<Bson, String>
             // Field doesn't exist, create with increment value's type
             Ok(increment.clone())
         }
-        Some(other) => Err(format!("Cannot apply numeric operation to non-numeric field: {:?}", other)),
+        Some(other) => Err(format!(
+            "Cannot apply numeric operation to non-numeric field: {:?}",
+            other
+        )),
     }
 }
 
@@ -203,7 +213,10 @@ fn multiply_numbers(current: Option<&Bson>, multiplier: &Bson) -> Result<Bson, S
             // Field doesn't exist, create as 0
             Ok(Bson::Int32(0))
         }
-        Some(other) => Err(format!("Cannot apply $mul to non-numeric field: {:?}", other)),
+        Some(other) => Err(format!(
+            "Cannot apply $mul to non-numeric field: {:?}",
+            other
+        )),
     }
 }
 
@@ -318,7 +331,11 @@ fn apply_push(doc: &mut Document, spec: &Document) -> Result<(), String> {
                             };
                             arr.sort_by(|a, b| {
                                 let cmp = compare_bson(Some(a), Some(b));
-                                if d < 0 { cmp.reverse() } else { cmp }
+                                if d < 0 {
+                                    cmp.reverse()
+                                } else {
+                                    cmp
+                                }
                             });
                         }
                         Bson::Document(sort_doc) => {
@@ -331,10 +348,14 @@ fn apply_push(doc: &mut Document, spec: &Document) -> Result<(), String> {
                                     };
                                     let val_a = if let Bson::Document(da) = a {
                                         get_value(da, field).cloned()
-                                    } else { None };
+                                    } else {
+                                        None
+                                    };
                                     let val_b = if let Bson::Document(db) = b {
                                         get_value(db, field).cloned()
-                                    } else { None };
+                                    } else {
+                                        None
+                                    };
                                     let cmp = compare_bson(val_a.as_ref(), val_b.as_ref());
                                     let result = if dir < 0 { cmp.reverse() } else { cmp };
                                     if result != std::cmp::Ordering::Equal {
@@ -385,7 +406,7 @@ fn apply_pull(doc: &mut Document, spec: &Document) -> Result<(), String> {
     for (key, condition) in spec {
         let arr = match get_value(doc, key) {
             Some(Bson::Array(a)) => a.clone(),
-            None => continue, // Field doesn't exist, nothing to pull
+            None => continue,    // Field doesn't exist, nothing to pull
             Some(_) => continue, // Not an array, skip
         };
 
@@ -414,7 +435,7 @@ fn apply_pop(doc: &mut Document, spec: &Document) -> Result<(), String> {
     for (key, direction) in spec {
         let mut arr = match get_value(doc, key) {
             Some(Bson::Array(a)) => a.clone(),
-            None => continue, // Field doesn't exist, nothing to pop
+            None => continue,    // Field doesn't exist, nothing to pop
             Some(_) => continue, // Not an array, skip
         };
 
@@ -427,7 +448,10 @@ fn apply_pop(doc: &mut Document, spec: &Document) -> Result<(), String> {
             Bson::Int32(n) => *n,
             Bson::Int64(n) => *n as i32,
             _ => {
-                return Err(format!("$pop direction must be -1 or 1, got: {:?}", direction))
+                return Err(format!(
+                    "$pop direction must be -1 or 1, got: {:?}",
+                    direction
+                ))
             }
         };
 
@@ -491,7 +515,12 @@ fn apply_rename(doc: &mut Document, spec: &Document) -> Result<(), String> {
     for (old_name, new_name_bson) in spec {
         let new_name = match new_name_bson {
             Bson::String(s) => s.as_str(),
-            _ => return Err(format!("$rename target must be a string, got: {:?}", new_name_bson)),
+            _ => {
+                return Err(format!(
+                    "$rename target must be a string, got: {:?}",
+                    new_name_bson
+                ))
+            }
         };
 
         // Check if source field exists
@@ -542,8 +571,8 @@ fn apply_current_date(doc: &mut Document, spec: &Document) -> Result<(), String>
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use bson::doc;
     use crate::paths::field_exists;
+    use bson::doc;
 
     #[test]
     fn test_apply_update_validates_operators() {
@@ -833,7 +862,10 @@ mod tests {
         let update = doc! { "$rename": { "user.name": "user.fullName" } };
         apply_update(&mut doc, &update).unwrap();
         assert!(!field_exists(&doc, "user.name"));
-        assert_eq!(get_value(&doc, "user.fullName"), Some(&Bson::String("Alice".to_string())));
+        assert_eq!(
+            get_value(&doc, "user.fullName"),
+            Some(&Bson::String("Alice".to_string()))
+        );
     }
 
     #[test]
@@ -869,7 +901,16 @@ mod tests {
         let update = doc! { "$push": { "scores": { "$each": [10, 20], "$position": 1 } } };
         apply_update(&mut doc, &update).unwrap();
         let arr = doc.get_array("scores").unwrap();
-        assert_eq!(arr, &vec![Bson::Int32(50), Bson::Int32(10), Bson::Int32(20), Bson::Int32(60), Bson::Int32(70)]);
+        assert_eq!(
+            arr,
+            &vec![
+                Bson::Int32(50),
+                Bson::Int32(10),
+                Bson::Int32(20),
+                Bson::Int32(60),
+                Bson::Int32(70)
+            ]
+        );
     }
 
     #[test]
@@ -889,7 +930,15 @@ mod tests {
         apply_update(&mut doc, &update).unwrap();
         let arr = doc.get_array("scores").unwrap();
         // -1 means insert before the last element
-        assert_eq!(arr, &vec![Bson::Int32(50), Bson::Int32(60), Bson::Int32(10), Bson::Int32(70)]);
+        assert_eq!(
+            arr,
+            &vec![
+                Bson::Int32(50),
+                Bson::Int32(60),
+                Bson::Int32(10),
+                Bson::Int32(70)
+            ]
+        );
     }
 
     #[test]
@@ -899,7 +948,10 @@ mod tests {
         apply_update(&mut doc, &update).unwrap();
         let arr = doc.get_array("scores").unwrap();
         assert_eq!(arr.len(), 3);
-        assert_eq!(arr, &vec![Bson::Int32(50), Bson::Int32(60), Bson::Int32(70)]);
+        assert_eq!(
+            arr,
+            &vec![Bson::Int32(50), Bson::Int32(60), Bson::Int32(70)]
+        );
     }
 
     #[test]
@@ -909,7 +961,10 @@ mod tests {
         apply_update(&mut doc, &update).unwrap();
         let arr = doc.get_array("scores").unwrap();
         assert_eq!(arr.len(), 3);
-        assert_eq!(arr, &vec![Bson::Int32(70), Bson::Int32(80), Bson::Int32(90)]);
+        assert_eq!(
+            arr,
+            &vec![Bson::Int32(70), Bson::Int32(80), Bson::Int32(90)]
+        );
     }
 
     #[test]
@@ -927,7 +982,15 @@ mod tests {
         let update = doc! { "$push": { "scores": { "$each": [50, 10], "$sort": 1 } } };
         apply_update(&mut doc, &update).unwrap();
         let arr = doc.get_array("scores").unwrap();
-        assert_eq!(arr, &vec![Bson::Int32(10), Bson::Int32(30), Bson::Int32(50), Bson::Int32(60)]);
+        assert_eq!(
+            arr,
+            &vec![
+                Bson::Int32(10),
+                Bson::Int32(30),
+                Bson::Int32(50),
+                Bson::Int32(60)
+            ]
+        );
     }
 
     #[test]
@@ -936,7 +999,15 @@ mod tests {
         let update = doc! { "$push": { "scores": { "$each": [50, 10], "$sort": -1 } } };
         apply_update(&mut doc, &update).unwrap();
         let arr = doc.get_array("scores").unwrap();
-        assert_eq!(arr, &vec![Bson::Int32(60), Bson::Int32(50), Bson::Int32(30), Bson::Int32(10)]);
+        assert_eq!(
+            arr,
+            &vec![
+                Bson::Int32(60),
+                Bson::Int32(50),
+                Bson::Int32(30),
+                Bson::Int32(10)
+            ]
+        );
     }
 
     #[test]
@@ -955,10 +1026,14 @@ mod tests {
         assert_eq!(arr.len(), 3);
         if let Bson::Document(d) = &arr[0] {
             assert_eq!(d.get_i32("score").unwrap(), 10);
-        } else { panic!("expected document"); }
+        } else {
+            panic!("expected document");
+        }
         if let Bson::Document(d) = &arr[2] {
             assert_eq!(d.get_i32("score").unwrap(), 30);
-        } else { panic!("expected document"); }
+        } else {
+            panic!("expected document");
+        }
     }
 
     #[test]
@@ -994,6 +1069,9 @@ mod tests {
         };
         apply_update(&mut doc, &update).unwrap();
         let arr = doc.get_array("scores").unwrap();
-        assert_eq!(arr, &vec![Bson::Int32(90), Bson::Int32(70), Bson::Int32(40)]);
+        assert_eq!(
+            arr,
+            &vec![Bson::Int32(90), Bson::Int32(70), Bson::Int32(40)]
+        );
     }
 }

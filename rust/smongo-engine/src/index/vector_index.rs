@@ -147,7 +147,9 @@ impl VectorIndex {
         if pos + metric_len > data.len() {
             return None;
         }
-        let metric = std::str::from_utf8(&data[pos..pos + metric_len]).ok()?.to_string();
+        let metric = std::str::from_utf8(&data[pos..pos + metric_len])
+            .ok()?
+            .to_string();
         pos += metric_len;
         if pos + 4 > data.len() {
             return None;
@@ -165,7 +167,9 @@ impl VectorIndex {
             if pos + id_len > data.len() {
                 return None;
             }
-            let doc_id = std::str::from_utf8(&data[pos..pos + id_len]).ok()?.to_string();
+            let doc_id = std::str::from_utf8(&data[pos..pos + id_len])
+                .ok()?
+                .to_string();
             pos += id_len;
             let vec_bytes = dimensions * 4;
             if pos + vec_bytes > data.len() {

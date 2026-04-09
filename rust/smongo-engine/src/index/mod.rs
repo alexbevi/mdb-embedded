@@ -7,11 +7,11 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod bitmap_index;
+pub mod prefix_index;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod text_index;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod vector_index;
-pub mod prefix_index;
 
 use bson::{Bson, Document};
 use serde::{Deserialize, Serialize};
@@ -63,9 +63,8 @@ pub fn is_2dsphere_keys(keys: &Document) -> bool {
     if keys.len() != 1 {
         return false;
     }
-    keys.values().all(|v| {
-        matches!(v, Bson::String(s) if s == "2dsphere" || s == "2d")
-    })
+    keys.values()
+        .all(|v| matches!(v, Bson::String(s) if s == "2dsphere" || s == "2d"))
 }
 
 /// Field name for a single-field `2dsphere` index, or `None`.
@@ -328,7 +327,10 @@ fn decode_index_value_part(bytes: &[u8]) -> Option<Bson> {
     // Try to decode as UTF-8 string first (most common for text fields)
     if let Ok(s) = std::str::from_utf8(bytes) {
         // If it's all printable ASCII or valid UTF-8, it's probably a string
-        if !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c.is_whitespace() || "_-./".contains(c)) {
+        if !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_alphanumeric() || c.is_whitespace() || "_-./".contains(c))
+        {
             return Some(Bson::String(s.to_string()));
         }
     }
@@ -337,7 +339,9 @@ fn decode_index_value_part(bytes: &[u8]) -> Option<Bson> {
     // For the last field before _id, we may have extra bytes appended (the _id)
     if bytes.len() >= 4 {
         // Check if first 4 bytes could be Int32
-        if bytes.len() == 4 || (bytes.len() > 4 && bytes[4..].iter().all(|&b| b >= 32 && b <= 126)) {
+        if bytes.len() == 4
+            || (bytes.len() > 4 && bytes[4..].iter().all(|&b| (32..=126).contains(&b)))
+        {
             // Either exactly 4 bytes, or 4 bytes followed by ASCII (the _id)
             let arr: [u8; 4] = bytes[0..4].try_into().ok()?;
             return Some(Bson::Int32(i32::from_be_bytes(arr)));

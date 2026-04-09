@@ -57,12 +57,10 @@ pub fn field_exists(doc: &Document, key: &str) -> bool {
 
     for part in key.split('.') {
         match current {
-            Bson::Document(d) => {
-                match d.get(part) {
-                    Some(val) => current = val.clone(),
-                    None => return false,
-                }
-            }
+            Bson::Document(d) => match d.get(part) {
+                Some(val) => current = val.clone(),
+                None => return false,
+            },
             Bson::Array(arr) => {
                 let Ok(idx) = part.parse::<usize>() else {
                     return false;
@@ -149,7 +147,10 @@ mod tests {
     #[test]
     fn test_get_value_simple() {
         let doc = doc! { "name": "Alice", "age": 30 };
-        assert_eq!(get_value(&doc, "name"), Some(&Bson::String("Alice".to_string())));
+        assert_eq!(
+            get_value(&doc, "name"),
+            Some(&Bson::String("Alice".to_string()))
+        );
         assert_eq!(get_value(&doc, "age"), Some(&Bson::Int32(30)));
         assert_eq!(get_value(&doc, "missing"), None);
     }
@@ -157,7 +158,10 @@ mod tests {
     #[test]
     fn test_get_value_nested() {
         let doc = doc! { "user": { "name": "Bob", "age": 25 } };
-        assert_eq!(get_value(&doc, "user.name"), Some(&Bson::String("Bob".to_string())));
+        assert_eq!(
+            get_value(&doc, "user.name"),
+            Some(&Bson::String("Bob".to_string()))
+        );
         assert_eq!(get_value(&doc, "user.age"), Some(&Bson::Int32(25)));
         assert_eq!(get_value(&doc, "user.missing"), None);
     }
@@ -188,7 +192,10 @@ mod tests {
     fn test_get_value_deep_nesting() {
         let doc = doc! { "a": { "b": { "c": { "d": 42 } } } };
         assert_eq!(get_value(&doc, "a.b.c.d"), Some(&Bson::Int32(42)));
-        assert_eq!(get_value(&doc, "a.b.c"), Some(&Bson::Document(doc! { "d": 42 })));
+        assert_eq!(
+            get_value(&doc, "a.b.c"),
+            Some(&Bson::Document(doc! { "d": 42 }))
+        );
     }
 
     // Tests for field_exists

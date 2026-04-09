@@ -195,6 +195,15 @@ Pipeline execution with 27 stages (all running in Rust via `smongo-engine`): `$m
 
 Build analytics and similarity queries that run locally with no external vector DB.
 
+**Spill-to-disk:** Pass `allowDiskUse=True` to `Collection.aggregate()` and `$sort` / `$group` stages that exceed the 100 MB in-memory limit will spill intermediate data to temporary files instead of raising `MemoryLimitExceeded`. This makes smongo viable for larger-than-memory aggregation workloads on resource-constrained edge devices.
+
+```python
+results = coll.aggregate(
+    [{"$sort": {"ts": 1}}, {"$group": {"_id": "$sensor", "avg": {"$avg": "$reading"}}}],
+    allowDiskUse=True,
+)
+```
+
 ### B-Tree indexes & query planner
 Create single-field, compound, unique, sparse, and TTL indexes backed by the engine’s index tables on **redb**. The query planner scores candidate indexes and picks the optimal execution path:
 - **Index Scan** -- range or equality scan on the best-matching index
@@ -399,10 +408,12 @@ with WireServer("./data", port=27017) as srv:
 
 ```
 smongo/
-  __init__.py        MongoClient, SyncManager, DuplicateKeyError,
-                     InsertOne, UpdateOne, UpdateMany,
+  __init__.py        MongoClient, AsyncMongoClient, SyncManager,
+                     DuplicateKeyError, InsertOne, UpdateOne, UpdateMany,
                      DeleteOne, DeleteMany, ReplaceOne, BulkWriteResult
   _smongo_core/      Compiled Rust extension (PyO3) -- the actual engine
+  async_client.py    AsyncMongoClient, AsyncDatabase, AsyncCollection,
+                     AsyncCursor, AsyncChangeStream (asyncio-native API)
   client.py          URI-based routing, bulk_write, find_one_and_* facade
   storage/           Storage layer (Python + Rust bridge)
     redb_engine.py     RedbClient / RedbCollection (default `local://`)
@@ -554,6 +565,58 @@ coll.aggregate([
 hybrid = MongoClient("local://data", sync="mongodb+srv://user:pass@cluster.mongodb.net")
 hybrid.sync.status()   # includes pushed, pulled, conflicts, errors, state
 hybrid.sync.sync_now()
+```
+
+### Async API
+
+Full `asyncio`-native client for FastAPI, Starlette, and other async frameworks. All blocking engine work is dispatched via `asyncio.to_thread` -- the event loop stays responsive while Rust handles reads and writes.
+
+```python
+from smongo import AsyncMongoClient
+
+async def main():
+    async with AsyncMongoClient("local://data") as client:
+        db = client["myapp"]
+        users = db["users"]
+
+        await users.insert_one({"name": "Alice", "age": 34, "city": "NYC"})
+
+        async for doc in await users.find({"city": "NYC"}):
+            print(doc["name"])
+
+        results = await users.aggregate([
+            {"$group": {"_id": "$city", "avg_age": {"$avg": "$age"}}},
+            {"$sort": {"avg_age": -1}},
+        ])
+
+        # Change streams work async too
+        async with await users.watch() as stream:
+            async for event in stream:
+                print(event["operationType"], event["documentKey"])
+```
+
+### Change Streams with Resume Tokens
+
+Watch for real-time changes on any collection. Each event includes a `_resumeToken` that survives process restarts -- pass it to `resume_after` to pick up exactly where you left off.
+
+```python
+from smongo import MongoClient
+
+client = MongoClient("local://data")
+coll = client["mydb"]["events"]
+
+saved_token = None
+
+with coll.watch() as stream:
+    for event in stream:
+        print(event["operationType"], event["documentKey"])
+        saved_token = event["_resumeToken"]
+        break  # process one event
+
+# Later (even after restart) -- resume from where we left off
+with coll.watch(resume_after=saved_token) as stream:
+    for event in stream:
+        print("Resumed:", event["operationType"])
 ```
 
 ---

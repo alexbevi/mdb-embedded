@@ -210,7 +210,9 @@ impl<B: StorageBackend> Database<B> {
         let mut collections = Vec::new();
         for name in all_tables {
             // Skip internal tables (indexes, metadata, oplog)
-            if name.starts_with("__") || name.contains(".idx_") || name.contains(".indexes_metadata")
+            if name.starts_with("__")
+                || name.contains(".idx_")
+                || name.contains(".indexes_metadata")
             {
                 continue;
             }
@@ -533,9 +535,7 @@ mod tests {
     fn test_drop_collection_removes_index_tables() {
         let (_temp_dir, db) = setup_database();
         let users = db.collection("users").unwrap();
-        users
-            .insert_one(doc! { "email": "a@example.com" })
-            .unwrap();
+        users.insert_one(doc! { "email": "a@example.com" }).unwrap();
         users.create_index(doc! { "email": 1 }, None).unwrap();
         let tables_before = db.backend.list_tables().unwrap();
         assert!(tables_before.iter().any(|t| t.contains("idx_")));
@@ -543,9 +543,9 @@ mod tests {
         db.drop_collection("users").unwrap();
 
         let tables_after = db.backend.list_tables().unwrap();
-        assert!(!tables_after.iter().any(|t| {
-            t == "users" || t.starts_with("users.")
-        }));
+        assert!(!tables_after
+            .iter()
+            .any(|t| { t == "users" || t.starts_with("users.") }));
         assert!(db.drop_collection("users").is_err());
     }
 
@@ -603,9 +603,7 @@ mod tests {
         users
             .insert_one(doc! { "name": "Alice", "age": 30 })
             .unwrap();
-        users
-            .insert_one(doc! { "name": "Bob", "age": 25 })
-            .unwrap();
+        users.insert_one(doc! { "name": "Bob", "age": 25 }).unwrap();
         let all_users = users.find(doc! {}).unwrap();
         assert_eq!(all_users.len(), 2);
         users

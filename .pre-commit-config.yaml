@@ -21,7 +21,7 @@ repos:
     hooks:
       - id: cargo-fmt
         name: cargo fmt
-        entry: cargo fmt --manifest-path rust/Cargo.toml --
+        entry: cargo fmt --manifest-path rust/Cargo.toml --all --
         language: system
         types: [rust]
         pass_filenames: false

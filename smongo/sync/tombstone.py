@@ -69,9 +69,7 @@ class TombstoneRegistry:
         with self._lock:
             if self._persistent_redb:
                 assert self._uri is not None and self._redb_client is not None
-                return {
-                    k: float(v) for k, v in self._redb_client.sync_kv_scan(self._uri)
-                }
+                return {k: float(v) for k, v in self._redb_client.sync_kv_scan(self._uri)}
             return dict(self._tombstones)
 
     def load(self, data: dict[str, float]) -> None:

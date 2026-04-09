@@ -9,7 +9,6 @@ from typing import Any, cast
 
 from .._types import Document
 
-
 # ------------------------------------------------------------------
 # Vector clocks
 # ------------------------------------------------------------------
@@ -25,16 +24,16 @@ class VectorClock:
     def __init__(self, state: dict[str, int] | None = None) -> None:
         self._clock: dict[str, int] = dict(state or {})
 
-    def tick(self, node_id: str) -> "VectorClock":
+    def tick(self, node_id: str) -> VectorClock:
         self._clock[node_id] = self._clock.get(node_id, 0) + 1
         return self
 
-    def merge(self, other: "VectorClock") -> "VectorClock":
+    def merge(self, other: VectorClock) -> VectorClock:
         for nid, ts in other._clock.items():
             self._clock[nid] = max(self._clock.get(nid, 0), ts)
         return self
 
-    def dominates(self, other: "VectorClock") -> bool:
+    def dominates(self, other: VectorClock) -> bool:
         """True if every entry in *other* is <= our entry, with at least one strictly greater."""
         if not other._clock:
             return bool(self._clock)
@@ -46,14 +45,14 @@ class VectorClock:
             for nid in set(self._clock) | set(other._clock)
         )
 
-    def concurrent_with(self, other: "VectorClock") -> bool:
+    def concurrent_with(self, other: VectorClock) -> bool:
         return not self.dominates(other) and not other.dominates(self)
 
     def to_dict(self) -> dict[str, int]:
         return dict(self._clock)
 
     @classmethod
-    def from_dict(cls, d: dict[str, int] | None) -> "VectorClock":
+    def from_dict(cls, d: dict[str, int] | None) -> VectorClock:
         return cls(d)
 
 
@@ -200,7 +199,7 @@ def _apply_commutative_to_doc(base_doc: Document, update_spec: Document) -> Docu
     result = dict(base_doc)
     for field, val in update_spec.get("$inc", {}).items():
         cur = result.get(field, 0)
-        if isinstance(cur, (int, float)) and isinstance(val, (int, float)):
+        if isinstance(cur, int | float) and isinstance(val, int | float):
             result[field] = cur + val
     for field, val in update_spec.get("$push", {}).items():
         cur = result.get(field, [])
@@ -228,11 +227,15 @@ def _apply_commutative_to_doc(base_doc: Document, update_spec: Document) -> Docu
             result[field] = cur
     for field, val in update_spec.get("$min", {}).items():
         cur = result.get(field)
-        if cur is None or (isinstance(val, (int, float)) and isinstance(cur, (int, float)) and val < cur):
+        if cur is None or (
+            isinstance(val, int | float) and isinstance(cur, int | float) and val < cur
+        ):
             result[field] = val
     for field, val in update_spec.get("$max", {}).items():
         cur = result.get(field)
-        if cur is None or (isinstance(val, (int, float)) and isinstance(cur, (int, float)) and val > cur):
+        if cur is None or (
+            isinstance(val, int | float) and isinstance(cur, int | float) and val > cur
+        ):
             result[field] = val
     return result
 

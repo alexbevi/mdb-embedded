@@ -272,9 +272,7 @@ class TestClientRedbDefault:
         try:
             coll = client["db"]["c"]
             coll.insert_many([{"city": "NYC"}, {"city": "SF"}, {"city": "NYC"}])
-            rows = list(
-                coll.aggregate([{"$group": {"_id": "$city", "count": {"$sum": 1}}}])
-            )
+            rows = list(coll.aggregate([{"$group": {"_id": "$city", "count": {"$sum": 1}}}]))
             nyc = next(r for r in rows if r["_id"] == "NYC")
             assert nyc["count"] == 2
             plan = coll.explain({"city": 1})

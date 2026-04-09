@@ -31,9 +31,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use bson::{Bson, Document};
 #[cfg(not(target_arch = "wasm32"))]
 use parking_lot::{Condvar, Mutex};
+use serde::{Deserialize, Serialize};
 #[cfg(target_arch = "wasm32")]
 use std::sync::Mutex;
-use serde::{Deserialize, Serialize};
 
 use crate::storage::{DefaultSession, StorageCursor, StorageError, StorageSession};
 
@@ -131,7 +131,8 @@ pub fn decode_oplog_value_bytes(bytes: &[u8]) -> OplogResult<OplogEntry> {
         }
     }
     let mut r = Cursor::new(bytes);
-    let doc = Document::from_reader(&mut r).map_err(|e| OplogError::Serialization(e.to_string()))?;
+    let doc =
+        Document::from_reader(&mut r).map_err(|e| OplogError::Serialization(e.to_string()))?;
     oplog_entry_from_document(doc)
 }
 
@@ -203,9 +204,7 @@ fn oplog_entry_from_document(doc: Document) -> OplogResult<OplogEntry> {
         .get_str("checksum")
         .ok()
         .map(std::string::ToString::to_string);
-    let internal = doc
-        .get_bool("internal")
-        .unwrap_or(false);
+    let internal = doc.get_bool("internal").unwrap_or(false);
     let changed_fields = doc.get_array("changed_fields").ok().map(|arr| {
         arr.iter()
             .filter_map(|b| b.as_str().map(String::from))
@@ -283,12 +282,16 @@ impl OplogHub {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn lock_listeners(m: &Mutex<Vec<Arc<ChangeStream>>>) -> parking_lot::MutexGuard<'_, Vec<Arc<ChangeStream>>> {
+    fn lock_listeners(
+        m: &Mutex<Vec<Arc<ChangeStream>>>,
+    ) -> parking_lot::MutexGuard<'_, Vec<Arc<ChangeStream>>> {
         m.lock()
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn lock_listeners(m: &Mutex<Vec<Arc<ChangeStream>>>) -> std::sync::MutexGuard<'_, Vec<Arc<ChangeStream>>> {
+    fn lock_listeners(
+        m: &Mutex<Vec<Arc<ChangeStream>>>,
+    ) -> std::sync::MutexGuard<'_, Vec<Arc<ChangeStream>>> {
         m.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
@@ -381,12 +384,7 @@ pub struct OplogWriter<S: StorageSession = DefaultSession> {
 }
 
 impl<S: StorageSession> OplogWriter<S> {
-    pub fn new(
-        session: S,
-        oplog_uri: &str,
-        namespace: &str,
-        hub: Option<Arc<OplogHub>>,
-    ) -> Self {
+    pub fn new(session: S, oplog_uri: &str, namespace: &str, hub: Option<Arc<OplogHub>>) -> Self {
         Self {
             session,
             oplog_uri: oplog_uri.to_string(),
@@ -428,9 +426,7 @@ impl<S: StorageSession> OplogWriter<S> {
 
     /// Remove all entries with keys strictly less than `key`.
     pub fn truncate_before(&self, key: &str) -> OplogResult<i64> {
-        let mut cursor = self
-            .session
-            .open_cursor(&self.oplog_uri)?;
+        let mut cursor = self.session.open_cursor(&self.oplog_uri)?;
         let mut to_remove = Vec::new();
 
         while cursor.next().is_ok() {
@@ -442,9 +438,7 @@ impl<S: StorageSession> OplogWriter<S> {
         }
 
         if !to_remove.is_empty() {
-            let mut cursor = self
-                .session
-                .open_cursor(&self.oplog_uri)?;
+            let mut cursor = self.session.open_cursor(&self.oplog_uri)?;
             for k in &to_remove {
                 cursor.set_key_str(k);
                 let _ = cursor.remove();
@@ -467,9 +461,7 @@ impl<S: StorageSession> OplogWriter<S> {
             return Ok(0);
         }
 
-        let mut cursor = self
-            .session
-            .open_cursor(&self.oplog_uri)?;
+        let mut cursor = self.session.open_cursor(&self.oplog_uri)?;
         for k in &keys[..excess as usize] {
             cursor.set_key_str(k);
             let _ = cursor.remove();
@@ -657,10 +649,7 @@ pub struct ChangeStream {
 
 impl ChangeStream {
     /// Create a new change stream, optionally filtering by namespace and a predicate.
-    pub fn new(
-        namespace: Option<String>,
-        filter: Option<ChangeFilter>,
-    ) -> Self {
+    pub fn new(namespace: Option<String>, filter: Option<ChangeFilter>) -> Self {
         Self {
             namespace,
             filter,
@@ -828,9 +817,7 @@ fn bson_to_json_value(bson: &Bson) -> serde_json::Value {
             }
             serde_json::Value::Object(map)
         }
-        Bson::Array(arr) => {
-            serde_json::Value::Array(arr.iter().map(bson_to_json_value).collect())
-        }
+        Bson::Array(arr) => serde_json::Value::Array(arr.iter().map(bson_to_json_value).collect()),
         _ => serde_json::json!(format!("{:?}", bson)),
     }
 }
@@ -853,9 +840,7 @@ fn json_to_bson_value(json: &serde_json::Value) -> Bson {
             }
         }
         serde_json::Value::String(s) => Bson::String(s.clone()),
-        serde_json::Value::Array(arr) => {
-            Bson::Array(arr.iter().map(json_to_bson_value).collect())
-        }
+        serde_json::Value::Array(arr) => Bson::Array(arr.iter().map(json_to_bson_value).collect()),
         serde_json::Value::Object(map) => {
             if let Some(oid) = map.get("$oid").and_then(|v| v.as_str()) {
                 if let Ok(id) = bson::oid::ObjectId::parse_str(oid) {
@@ -1123,10 +1108,20 @@ mod tests {
             let w = OplogWriter::new(session, "__oplog_m", "db.m", None);
             w.ensure_table().unwrap();
             let _k1 = w
-                .log("insert", Bson::String("a".into()), Some(doc! {"x": 1}), Default::default())
+                .log(
+                    "insert",
+                    Bson::String("a".into()),
+                    Some(doc! {"x": 1}),
+                    Default::default(),
+                )
                 .unwrap();
             k_mid = w
-                .log("update", Bson::String("b".into()), Some(doc! {"$set": {"y": 2}}), Default::default())
+                .log(
+                    "update",
+                    Bson::String("b".into()),
+                    Some(doc! {"$set": {"y": 2}}),
+                    Default::default(),
+                )
                 .unwrap();
             w.log("delete", Bson::String("c".into()), None, Default::default())
                 .unwrap();

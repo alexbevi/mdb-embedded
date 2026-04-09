@@ -4,8 +4,6 @@ These test the Python fallback paths (_py_group_stage, _py_sort_stage) that
 Rust delegates to when allow_disk_use=True and memory limits are exceeded.
 """
 
-import pytest
-
 from smongo.aggregation import Cursor
 from smongo.aggregation.stages import (
     _eval_accumulator,

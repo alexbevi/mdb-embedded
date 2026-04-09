@@ -18,8 +18,7 @@ pub fn haversine_meters(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
     let lat2_r = lat2.to_radians();
     let dlat = (lat2 - lat1).to_radians();
     let dlon = (lon2 - lon1).to_radians();
-    let a = (dlat / 2.0).sin().powi(2)
-        + lat1_r.cos() * lat2_r.cos() * (dlon / 2.0).sin().powi(2);
+    let a = (dlat / 2.0).sin().powi(2) + lat1_r.cos() * lat2_r.cos() * (dlon / 2.0).sin().powi(2);
     EARTH_RADIUS_METERS * 2.0 * a.sqrt().asin()
 }
 
@@ -35,9 +34,9 @@ pub fn extract_lon_lat_py(val: &Bound<'_, PyAny>) -> PyResult<Option<(f64, f64)>
             .transpose()?
             .unwrap_or_default();
         if typ == "Point" {
-            let coords = dict.get_item("coordinates")?.ok_or_else(|| {
-                PyValueError::new_err("GeoJSON Point requires 'coordinates'")
-            })?;
+            let coords = dict
+                .get_item("coordinates")?
+                .ok_or_else(|| PyValueError::new_err("GeoJSON Point requires 'coordinates'"))?;
             let list = coords.cast::<PyList>()?;
             if list.len() < 2 {
                 return Err(PyValueError::new_err(

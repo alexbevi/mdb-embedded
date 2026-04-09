@@ -108,10 +108,7 @@ pub enum ExecutionPlan {
         metric: String,
     },
     /// Bitmap lookup for low-cardinality equality / `$in` queries.
-    BitmapScan {
-        index_name: String,
-        field: String,
-    },
+    BitmapScan { index_name: String, field: String },
     /// Full-text inverted-index scan for `$text` queries.
     TextIndexScan {
         index_name: String,
@@ -147,9 +144,7 @@ pub enum ExecutionPlan {
         cell_ids: Vec<u64>,
     },
     /// Union of plans for top-level `$or` (each branch must be indexable).
-    OrUnionPlans {
-        subplans: Vec<ExecutionPlan>,
-    },
+    OrUnionPlans { subplans: Vec<ExecutionPlan> },
 }
 
 /// Query plan with estimated cost
@@ -203,7 +198,9 @@ pub fn plan_query_full(
     // base plan (post-sort is O(n log n), sorted scan is O(limit)).
     if let (Some(sort_doc), Some(lim)) = (sort, limit) {
         if lim > 0 {
-            if let Some(sorted_plan) = plan_sorted_index_scan(sort_doc, indexes, lim as usize, query) {
+            if let Some(sorted_plan) =
+                plan_sorted_index_scan(sort_doc, indexes, lim as usize, query)
+            {
                 if sorted_plan.estimated_cost < base_plan.estimated_cost {
                     return sorted_plan;
                 }
@@ -348,6 +345,7 @@ fn plan_or_query(query: &Document, branches: &[Bson], indexes: &[IndexSpec]) -> 
     }
 }
 
+#[allow(dead_code)]
 fn plan_simple_query(query: &Document, indexes: &[IndexSpec]) -> QueryPlan {
     plan_simple_query_with_projection(query, indexes, None)
 }
@@ -471,7 +469,8 @@ fn plan_simple_query_with_projection(
             _ => {}
         }
 
-        if let Some(plan) = evaluate_index_for_query_with_projection(query, index_spec, projection) {
+        if let Some(plan) = evaluate_index_for_query_with_projection(query, index_spec, projection)
+        {
             best_plan = Some(pick_better(best_plan, plan));
         }
     }
@@ -497,6 +496,7 @@ fn pick_better(current: Option<QueryPlan>, candidate: QueryPlan) -> QueryPlan {
 }
 
 /// Evaluate if a btree index can be used for a query
+#[allow(dead_code)]
 fn evaluate_index_for_query(query: &Document, index_spec: &IndexSpec) -> Option<QueryPlan> {
     evaluate_index_for_query_with_projection(query, index_spec, None)
 }
@@ -638,12 +638,9 @@ fn is_equality_query(value: &Bson) -> bool {
 
 fn is_range_query(value: &Bson) -> bool {
     match value {
-        Bson::Document(doc) => doc.keys().any(|k| {
-            matches!(
-                k.as_str(),
-                "$gt" | "$gte" | "$lt" | "$lte"
-            )
-        }),
+        Bson::Document(doc) => doc
+            .keys()
+            .any(|k| matches!(k.as_str(), "$gt" | "$gte" | "$lt" | "$lte")),
         _ => false,
     }
 }
@@ -686,8 +683,8 @@ pub fn calculate_selectivity(query: &Document) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bson::doc;
     use crate::index::IndexOptions;
+    use bson::doc;
 
     #[test]
     fn test_plan_empty_query() {
@@ -706,7 +703,10 @@ mod tests {
 
         let plan = plan_query(&doc! { "email": "alice@example.com" }, &indexes);
 
-        assert!(matches!(plan.execution_plan, ExecutionPlan::IndexSeek { .. }));
+        assert!(matches!(
+            plan.execution_plan,
+            ExecutionPlan::IndexSeek { .. }
+        ));
         assert_eq!(plan.estimated_cost, 10);
     }
 
@@ -720,7 +720,10 @@ mod tests {
 
         let plan = plan_query(&doc! { "age": { "$gte": 18 } }, &indexes);
 
-        assert!(matches!(plan.execution_plan, ExecutionPlan::IndexScan { .. }));
+        assert!(matches!(
+            plan.execution_plan,
+            ExecutionPlan::IndexScan { .. }
+        ));
         assert_eq!(plan.estimated_cost, 100);
     }
 
@@ -750,7 +753,9 @@ mod tests {
     #[test]
     fn test_is_range_query() {
         assert!(is_range_query(&Bson::Document(doc! { "$gt": 18 })));
-        assert!(is_range_query(&Bson::Document(doc! { "$gte": 18, "$lte": 65 })));
+        assert!(is_range_query(&Bson::Document(
+            doc! { "$gte": 18, "$lte": 65 }
+        )));
         assert!(!is_range_query(&Bson::String("value".to_string())));
         assert!(!is_range_query(&Bson::Document(doc! { "$eq": 42 })));
     }
@@ -820,7 +825,10 @@ mod tests {
 
         // Query matches partial filter exactly
         let plan = plan_query(&doc! { "status": "active" }, &indexes);
-        assert!(matches!(plan.execution_plan, ExecutionPlan::IndexSeek { .. }));
+        assert!(matches!(
+            plan.execution_plan,
+            ExecutionPlan::IndexSeek { .. }
+        ));
     }
 
     #[test]
@@ -836,11 +844,17 @@ mod tests {
 
         // Query has tighter bound (21 >= 18) — eligible
         let plan = plan_query(&doc! { "age": { "$gte": 21 } }, &indexes);
-        assert!(matches!(plan.execution_plan, ExecutionPlan::IndexScan { .. }));
+        assert!(matches!(
+            plan.execution_plan,
+            ExecutionPlan::IndexScan { .. }
+        ));
 
         // Query has looser bound (10 < 18) — ineligible
         let plan2 = plan_query(&doc! { "age": { "$gte": 10 } }, &indexes);
-        assert!(matches!(plan2.execution_plan, ExecutionPlan::CollectionScan));
+        assert!(matches!(
+            plan2.execution_plan,
+            ExecutionPlan::CollectionScan
+        ));
     }
 
     #[test]
@@ -862,7 +876,10 @@ mod tests {
             Some(&doc! { "score": 1 }),
             Some(10),
         );
-        assert!(!matches!(plan.execution_plan, ExecutionPlan::SortedIndexScan { .. }));
+        assert!(!matches!(
+            plan.execution_plan,
+            ExecutionPlan::SortedIndexScan { .. }
+        ));
     }
 
     #[test]
@@ -874,6 +891,9 @@ mod tests {
         }];
 
         let plan = plan_query(&doc! { "email": "test" }, &indexes);
-        assert!(matches!(plan.execution_plan, ExecutionPlan::IndexSeek { .. }));
+        assert!(matches!(
+            plan.execution_plan,
+            ExecutionPlan::IndexSeek { .. }
+        ));
     }
 }

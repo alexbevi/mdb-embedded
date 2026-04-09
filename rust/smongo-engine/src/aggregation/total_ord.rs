@@ -53,8 +53,8 @@ impl Ord for TotalF64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BinaryHeap;
     use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
 
     #[test]
     fn test_total_f32_ordering() {

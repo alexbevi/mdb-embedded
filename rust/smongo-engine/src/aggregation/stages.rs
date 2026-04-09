@@ -8,7 +8,10 @@ use crate::query::eval_query;
 
 use super::accumulators::evaluate_accumulator;
 use super::expressions::{bson_to_f64_pub as bson_to_f64, evaluate_expression};
-use super::{compare_bson, bson_to_key_string, AggregationError, AggregationResult, CollectionResolver, DocStream};
+use super::{
+    bson_to_key_string, compare_bson, AggregationError, AggregationResult, CollectionResolver,
+    DocStream,
+};
 
 // ---------------------------------------------------------------------------
 // $match
@@ -35,11 +38,7 @@ pub fn stage_project(docs: Vec<Document>, projection: &Bson) -> AggregationResul
         .ok_or_else(|| AggregationError::InvalidStage("$project requires document".into()))?;
 
     let has_exclusion = proj_doc.iter().any(|(k, v)| {
-        k != "_id"
-            && matches!(
-                v,
-                Bson::Int32(0) | Bson::Int64(0) | Bson::Boolean(false)
-            )
+        k != "_id" && matches!(v, Bson::Int32(0) | Bson::Int64(0) | Bson::Boolean(false))
     });
 
     let id_excluded = matches!(
@@ -221,9 +220,7 @@ pub fn stage_unwind(docs: Vec<Document>, spec: &Bson) -> AggregationResult<Vec<D
                 .get_str("path")
                 .map_err(|_| AggregationError::MissingField("$unwind requires path".into()))?;
             let p = path.strip_prefix('$').unwrap_or(path).to_string();
-            let preserve = d
-                .get_bool("preserveNullAndEmptyArrays")
-                .unwrap_or(false);
+            let preserve = d.get_bool("preserveNullAndEmptyArrays").unwrap_or(false);
             let idx_field = d.get_str("includeArrayIndex").ok().map(String::from);
             (p, preserve, idx_field)
         }
@@ -341,10 +338,7 @@ pub fn stage_unset(docs: Vec<Document>, spec: &Bson) -> AggregationResult<Vec<Do
 // $replaceRoot / $replaceWith
 // ---------------------------------------------------------------------------
 
-pub fn stage_replace_root(
-    docs: Vec<Document>,
-    spec: &Bson,
-) -> AggregationResult<Vec<Document>> {
+pub fn stage_replace_root(docs: Vec<Document>, spec: &Bson) -> AggregationResult<Vec<Document>> {
     let new_root_expr = match spec {
         Bson::Document(d) => d.get("newRoot").unwrap_or(spec),
         _ => spec,
@@ -448,10 +442,7 @@ fn redact_doc(doc: &Document, expr: &Bson) -> AggregationResult<Option<Document>
 // $sortByCount
 // ---------------------------------------------------------------------------
 
-pub fn stage_sort_by_count(
-    docs: Vec<Document>,
-    expr: &Bson,
-) -> AggregationResult<Vec<Document>> {
+pub fn stage_sort_by_count(docs: Vec<Document>, expr: &Bson) -> AggregationResult<Vec<Document>> {
     let group_spec = Bson::Document(bson::doc! {
         "_id": expr.clone(),
         "count": { "$sum": 1 }
@@ -478,10 +469,7 @@ pub fn stage_bucket(docs: Vec<Document>, spec: &Bson) -> AggregationResult<Vec<D
     let default_bucket = bucket_doc.get("default");
     let output_spec = bucket_doc.get_document("output").ok();
 
-    let boundary_vals: Vec<f64> = boundaries
-        .iter()
-        .filter_map(bson_to_f64)
-        .collect();
+    let boundary_vals: Vec<f64> = boundaries.iter().filter_map(bson_to_f64).collect();
     if boundary_vals.len() < 2 {
         return Err(AggregationError::InvalidStage(
             "$bucket requires at least 2 boundaries".into(),
@@ -504,9 +492,9 @@ pub fn stage_bucket(docs: Vec<Document>, spec: &Bson) -> AggregationResult<Vec<D
                         break;
                     }
                 }
-                    if !placed && default_bucket.is_some() {
-                        default_docs.push(doc.clone());
-                    }
+                if !placed && default_bucket.is_some() {
+                    default_docs.push(doc.clone());
+                }
             }
             None => {
                 if default_bucket.is_some() {
@@ -646,9 +634,8 @@ pub fn stage_lookup(
         .get_str("as")
         .map_err(|_| AggregationError::MissingField("$lookup.as required".into()))?;
 
-    let resolver = resolver.ok_or_else(|| {
-        AggregationError::Other("$lookup requires a CollectionResolver".into())
-    })?;
+    let resolver = resolver
+        .ok_or_else(|| AggregationError::Other("$lookup requires a CollectionResolver".into()))?;
 
     let foreign_docs = resolver.resolve(from, None)?;
     let mut foreign_map: HashMap<String, Vec<&Document>> = HashMap::new();
@@ -662,9 +649,7 @@ pub fn stage_lookup(
     let mut results = Vec::with_capacity(docs.len());
     for doc in docs {
         let local_val = get_value(&doc, local_field);
-        let local_key = local_val
-            .map(|v| format!("{:?}", v))
-            .unwrap_or_default();
+        let local_key = local_val.map(|v| format!("{:?}", v)).unwrap_or_default();
         let matches: Vec<Bson> = foreign_map
             .get(&local_key)
             .map(|v| v.iter().map(|d| Bson::Document((*d).clone())).collect())
@@ -691,16 +676,30 @@ pub fn stage_graph_lookup(
         .as_document()
         .ok_or_else(|| AggregationError::InvalidStage("$graphLookup requires document".into()))?;
 
-    let from = gl_doc.get_str("from").map_err(|_| AggregationError::MissingField("from required".into()))?;
-    let start_with = gl_doc.get("startWith").ok_or_else(|| AggregationError::MissingField("startWith required".into()))?;
-    let connect_from = gl_doc.get_str("connectFromField").map_err(|_| AggregationError::MissingField("connectFromField required".into()))?;
-    let connect_to = gl_doc.get_str("connectToField").map_err(|_| AggregationError::MissingField("connectToField required".into()))?;
-    let as_field = gl_doc.get_str("as").map_err(|_| AggregationError::MissingField("as required".into()))?;
-    let max_depth = gl_doc.get("maxDepth").and_then(|v| v.as_i64().or_else(|| v.as_i32().map(|i| i as i64)));
+    let from = gl_doc
+        .get_str("from")
+        .map_err(|_| AggregationError::MissingField("from required".into()))?;
+    let start_with = gl_doc
+        .get("startWith")
+        .ok_or_else(|| AggregationError::MissingField("startWith required".into()))?;
+    let connect_from = gl_doc
+        .get_str("connectFromField")
+        .map_err(|_| AggregationError::MissingField("connectFromField required".into()))?;
+    let connect_to = gl_doc
+        .get_str("connectToField")
+        .map_err(|_| AggregationError::MissingField("connectToField required".into()))?;
+    let as_field = gl_doc
+        .get_str("as")
+        .map_err(|_| AggregationError::MissingField("as required".into()))?;
+    let max_depth = gl_doc
+        .get("maxDepth")
+        .and_then(|v| v.as_i64().or_else(|| v.as_i32().map(|i| i as i64)));
     let depth_field = gl_doc.get_str("depthField").ok();
     let restrict = gl_doc.get_document("restrictSearchWithMatch").ok();
 
-    let resolver = resolver.ok_or_else(|| AggregationError::Other("$graphLookup requires a CollectionResolver".into()))?;
+    let resolver = resolver.ok_or_else(|| {
+        AggregationError::Other("$graphLookup requires a CollectionResolver".into())
+    })?;
     let foreign_docs = resolver.resolve(from, None)?;
 
     let mut results = Vec::with_capacity(docs.len());
@@ -835,9 +834,9 @@ pub fn stage_set_window_fields(
     docs: Vec<Document>,
     spec: &Bson,
 ) -> AggregationResult<Vec<Document>> {
-    let wf_doc = spec
-        .as_document()
-        .ok_or_else(|| AggregationError::InvalidStage("$setWindowFields requires document".into()))?;
+    let wf_doc = spec.as_document().ok_or_else(|| {
+        AggregationError::InvalidStage("$setWindowFields requires document".into())
+    })?;
 
     let sort_by = wf_doc.get_document("sortBy").ok();
     let output = wf_doc
@@ -938,11 +937,7 @@ pub fn stage_project_stream(input: DocStream, projection: &Bson) -> AggregationR
         .clone();
 
     let has_exclusion = proj_doc.iter().any(|(k, v)| {
-        k != "_id"
-            && matches!(
-                v,
-                Bson::Int32(0) | Bson::Int64(0) | Bson::Boolean(false)
-            )
+        k != "_id" && matches!(v, Bson::Int32(0) | Bson::Int64(0) | Bson::Boolean(false))
     });
 
     let id_excluded = matches!(
@@ -1039,9 +1034,7 @@ fn parse_unwind_spec(spec: &Bson) -> AggregationResult<(String, bool, Option<Str
                 .get_str("path")
                 .map_err(|_| AggregationError::MissingField("$unwind requires path".into()))?;
             let p = path.strip_prefix('$').unwrap_or(path).to_string();
-            let preserve = d
-                .get_bool("preserveNullAndEmptyArrays")
-                .unwrap_or(false);
+            let preserve = d.get_bool("preserveNullAndEmptyArrays").unwrap_or(false);
             let idx_field = d.get_str("includeArrayIndex").ok().map(String::from);
             Ok((p, preserve, idx_field))
         }
@@ -1151,10 +1144,7 @@ pub fn stage_unset_stream(input: DocStream, spec: &Bson) -> AggregationResult<Do
     })))
 }
 
-pub fn stage_replace_root_stream(
-    input: DocStream,
-    spec: &Bson,
-) -> AggregationResult<DocStream> {
+pub fn stage_replace_root_stream(input: DocStream, spec: &Bson) -> AggregationResult<DocStream> {
     let new_root_expr = match spec {
         Bson::Document(d) => d.get("newRoot").unwrap_or(spec).clone(),
         _ => spec.clone(),
@@ -1270,10 +1260,7 @@ pub fn stage_sample_stream(input: DocStream, spec: &Bson) -> AggregationResult<D
     Ok(Box::new(results.into_iter().map(Ok)))
 }
 
-pub fn stage_sort_by_count_stream(
-    input: DocStream,
-    expr: &Bson,
-) -> AggregationResult<DocStream> {
+pub fn stage_sort_by_count_stream(input: DocStream, expr: &Bson) -> AggregationResult<DocStream> {
     let docs: Vec<Document> = input.collect::<Result<Vec<_>, _>>()?;
     let results = stage_sort_by_count(docs, expr)?;
     Ok(Box::new(results.into_iter().map(Ok)))
@@ -1285,10 +1272,7 @@ pub fn stage_bucket_stream(input: DocStream, spec: &Bson) -> AggregationResult<D
     Ok(Box::new(results.into_iter().map(Ok)))
 }
 
-pub fn stage_bucket_auto_stream(
-    input: DocStream,
-    spec: &Bson,
-) -> AggregationResult<DocStream> {
+pub fn stage_bucket_auto_stream(input: DocStream, spec: &Bson) -> AggregationResult<DocStream> {
     let docs: Vec<Document> = input.collect::<Result<Vec<_>, _>>()?;
     let results = stage_bucket_auto(docs, spec)?;
     Ok(Box::new(results.into_iter().map(Ok)))
@@ -1352,8 +1336,9 @@ fn stage_union_with(
     spec: &Bson,
     resolver: Option<&dyn CollectionResolver>,
 ) -> AggregationResult<Vec<Document>> {
-    let resolver = resolver
-        .ok_or_else(|| AggregationError::Other("$unionWith requires a CollectionResolver".into()))?;
+    let resolver = resolver.ok_or_else(|| {
+        AggregationError::Other("$unionWith requires a CollectionResolver".into())
+    })?;
 
     let (coll_name, sub_pipeline) = match spec {
         Bson::String(name) => (name.as_str(), Vec::new()),
@@ -1379,8 +1364,7 @@ fn stage_union_with(
     let mut foreign_docs = resolver.resolve(coll_name, None)?;
 
     if !sub_pipeline.is_empty() {
-        foreign_docs =
-            super::aggregate_with_resolver(foreign_docs, &sub_pipeline, Some(resolver))?;
+        foreign_docs = super::aggregate_with_resolver(foreign_docs, &sub_pipeline, Some(resolver))?;
     }
 
     let mut result = docs;
@@ -1407,10 +1391,7 @@ pub fn execute_out(
 ) -> AggregationResult<()> {
     let target = match spec {
         Bson::String(name) => name.as_str(),
-        Bson::Document(d) => d
-            .get_str("coll")
-            .or_else(|_| d.get_str("db"))
-            .unwrap_or(""),
+        Bson::Document(d) => d.get_str("coll").or_else(|_| d.get_str("db")).unwrap_or(""),
         _ => {
             return Err(AggregationError::InvalidStage(
                 "$out requires string or document".into(),
@@ -1418,7 +1399,9 @@ pub fn execute_out(
         }
     };
     if target.is_empty() {
-        return Err(AggregationError::MissingField("$out target collection required".into()));
+        return Err(AggregationError::MissingField(
+            "$out target collection required".into(),
+        ));
     }
     mutator.drop_and_insert(target, docs)
 }
@@ -1432,27 +1415,30 @@ pub fn execute_merge(
         .as_document()
         .ok_or_else(|| AggregationError::InvalidStage("$merge requires document".into()))?;
 
-    let into = merge_doc.get("into").ok_or_else(|| {
-        AggregationError::MissingField("$merge.into required".into())
-    })?;
+    let into = merge_doc
+        .get("into")
+        .ok_or_else(|| AggregationError::MissingField("$merge.into required".into()))?;
     let target = match into {
         Bson::String(s) => s.as_str(),
         Bson::Document(d) => d.get_str("coll").unwrap_or(""),
         _ => "",
     };
     if target.is_empty() {
-        return Err(AggregationError::MissingField("$merge target collection required".into()));
+        return Err(AggregationError::MissingField(
+            "$merge target collection required".into(),
+        ));
     }
 
     let on_fields: Vec<String> = match merge_doc.get("on") {
         Some(Bson::String(s)) => vec![s.clone()],
-        Some(Bson::Array(arr)) => arr.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+        Some(Bson::Array(arr)) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
         _ => vec!["_id".to_string()],
     };
 
-    let when_matched = merge_doc
-        .get_str("whenMatched")
-        .unwrap_or("replace");
+    let when_matched = merge_doc.get_str("whenMatched").unwrap_or("replace");
 
     mutator.upsert(target, &on_fields, docs, when_matched)
 }
@@ -1461,10 +1447,7 @@ pub fn execute_merge(
 // $vectorSearch
 // ---------------------------------------------------------------------------
 
-pub fn stage_vector_search_stream(
-    input: DocStream,
-    spec: &Bson,
-) -> AggregationResult<DocStream> {
+pub fn stage_vector_search_stream(input: DocStream, spec: &Bson) -> AggregationResult<DocStream> {
     let docs: Vec<Document> = input.collect::<Result<Vec<_>, _>>()?;
     let results = super::vector::vector_search_stage(docs, spec)?;
     Ok(Box::new(results.into_iter().map(Ok)))
@@ -1517,8 +1500,8 @@ fn stage_geo_near(docs: Vec<Document>, spec: &Bson) -> AggregationResult<Vec<Doc
     // When limit is specified, use a BinaryHeap-style top-k selection:
     // O(n log k) instead of O(n log n).  We store all prepared docs in a Vec
     // and keep only the k smallest-distance indices in a max-heap.
-    use std::collections::BinaryHeap;
     use super::total_ord::TotalF64;
+    use std::collections::BinaryHeap;
 
     let use_heap = limit.map(|l| l as usize);
 
@@ -1571,7 +1554,7 @@ fn stage_geo_near(docs: Vec<Document>, spec: &Bson) -> AggregationResult<Vec<Doc
             let d = TotalF64(dist);
             if heap.len() < k {
                 heap.push((d, idx));
-            } else if let Some(&(ref max_dist, _)) = heap.peek() {
+            } else if let Some((max_dist, _)) = heap.peek() {
                 if d < *max_dist {
                     heap.pop();
                     heap.push((d, idx));

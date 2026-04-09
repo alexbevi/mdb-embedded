@@ -49,10 +49,7 @@ fn cmd_find(
     let limit_val = dict_get_i64(cmd, "limit", 0)?;
     let batch_size = dict_get_i64(cmd, "batchSize", 101)?;
     let single_batch = dict_get_bool(cmd, "singleBatch", false)?;
-    let plan = coll_py
-        .bind(py)
-        .borrow()
-        .explain(py, &filter_dict, false)?;
+    let plan = coll_py.bind(py).borrow().explain(py, &filter_dict, false)?;
     let plan_bound = plan.bind(py);
     let plan_str = plan_bound
         .get_item("plan")?
@@ -338,8 +335,9 @@ fn cmd_update(
                         )?;
                         Py::new(py, crate::results::UpdateResult::new(py, 1, 1, None))?.into_any()
                     }
-                    None => Py::new(py, crate::results::UpdateResult::new(py, 0, 0, None))?
-                        .into_any(),
+                    None => {
+                        Py::new(py, crate::results::UpdateResult::new(py, 0, 0, None))?.into_any()
+                    }
                 }
             };
             let result = result_py.bind(py);
@@ -580,11 +578,8 @@ fn cmd_distinct(
     let raw_query = cmd
         .get_item("query")?
         .unwrap_or_else(|| PyDict::new(py).into_any());
-    let docs = RedbLocalCollection::find_streaming_typed(
-        coll_py.clone_ref(py),
-        py,
-        Some(&raw_query),
-    )?;
+    let docs =
+        RedbLocalCollection::find_streaming_typed(coll_py.clone_ref(py), py, Some(&raw_query))?;
 
     let seen = PyList::empty(py);
     let iter = docs.bind(py).try_iter()?;

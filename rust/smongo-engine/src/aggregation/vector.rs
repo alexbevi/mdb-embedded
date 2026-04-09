@@ -10,10 +10,7 @@ use crate::query::eval_query;
 
 use super::{AggregationError, AggregationResult};
 
-pub fn vector_search_stage(
-    docs: Vec<Document>,
-    spec: &Bson,
-) -> AggregationResult<Vec<Document>> {
+pub fn vector_search_stage(docs: Vec<Document>, spec: &Bson) -> AggregationResult<Vec<Document>> {
     let vs_doc = spec
         .as_document()
         .ok_or_else(|| AggregationError::InvalidStage("$vectorSearch requires document".into()))?;
@@ -60,9 +57,9 @@ pub fn vector_search_stage(
     // BinaryHeap-based top-k selection: O(n log k) instead of O(n log n).
     // We use a min-heap (via Reverse) of size `heap_cap` so the smallest
     // score in the heap is always at the top and can be cheaply evicted.
-    use std::collections::BinaryHeap;
-    use std::cmp::Reverse;
     use super::total_ord::TotalF32;
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
 
     let heap_cap = num_candidates.min(limit.max(num_candidates));
     let mut heap: BinaryHeap<Reverse<(TotalF32, usize)>> = BinaryHeap::with_capacity(heap_cap + 1);

@@ -118,9 +118,7 @@ fn as_f64_bson(b: &Bson) -> Option<f64> {
 fn parse_field_near_spec(cond: &Document) -> Option<(f64, f64, Option<f64>, Option<f64>)> {
     let outer_max = cond.get("$maxDistance").and_then(as_f64_bson);
     let outer_min = cond.get("$minDistance").and_then(as_f64_bson);
-    let nv = cond
-        .get("$near")
-        .or_else(|| cond.get("$nearSphere"))?;
+    let nv = cond.get("$near").or_else(|| cond.get("$nearSphere"))?;
     match nv {
         Bson::Array(arr) => {
             if arr.len() < 2 {

@@ -358,19 +358,41 @@ class Collection:
             return self.backend.find_one(query, projection=projection)
         return self.backend.find_one(query)  # type: ignore[no-any-return]
 
-    def aggregate(self, pipeline: Pipeline) -> list[Document] | Any:
+    def aggregate(
+        self,
+        pipeline: Pipeline,
+        *,
+        allowDiskUse: bool = False,
+        memory_limit_bytes: int | None = None,
+    ) -> list[Document] | Any:
         """Run an aggregation *pipeline* and return the result documents.
 
-        In local mode with redb, the pipeline runs entirely in the Rust engine
+        In local mode with redb the pipeline runs entirely in the Rust engine
         via ``DatabaseContext`` — no FFI round-trips for cross-collection stages.
+
+        When *allowDiskUse* is ``True``, ``$sort`` and ``$group`` stages that
+        exceed the in-memory limit will spill intermediate data to temporary
+        files instead of raising :class:`~smongo.aggregation.MemoryLimitExceeded`.
         """
         if self.mode == "remote":
             return list(self.backend.aggregate(pipeline))
         if isinstance(self.backend, RedbCollection) and hasattr(self.backend, "_rust_coll"):
+            if allowDiskUse:
+                docs = self.backend.get_all()
+                coll_getter = self._make_collection_getter()
+                kwargs: dict[str, Any] = {"allowDiskUse": True}
+                if memory_limit_bytes is not None:
+                    kwargs["memory_limit_bytes"] = memory_limit_bytes
+                return Cursor(docs, collection_getter=coll_getter).aggregate(pipeline, **kwargs)
             return self.backend._rust_coll.aggregate_engine(pipeline)
         docs = self.backend.find_streaming()
         coll_getter = self._make_collection_getter()
-        return Cursor(docs, collection_getter=coll_getter).aggregate(pipeline)
+        kwargs = {}
+        if allowDiskUse:
+            kwargs["allowDiskUse"] = True
+        if memory_limit_bytes is not None:
+            kwargs["memory_limit_bytes"] = memory_limit_bytes
+        return Cursor(docs, collection_getter=coll_getter).aggregate(pipeline, **kwargs)
 
     def count_documents(self, query: Filter | None = None) -> int:
         """Return the number of documents matching *query*."""
@@ -387,11 +409,34 @@ class Collection:
 
     # -- change streams ------------------------------------------------
 
-    def watch(self, pipeline: Pipeline | None = None) -> Any:
-        """Open a change stream on this collection, optionally filtered by *pipeline*."""
+    def watch(
+        self,
+        pipeline: Pipeline | None = None,
+        *,
+        resume_after: dict[str, Any] | None = None,
+        max_await_time_ms: int | None = None,
+    ) -> Any:
+        """Open a change stream on this collection.
+
+        Args:
+            pipeline: Optional ``$match`` filter pipeline.
+            resume_after: Resume token from a previous event's ``_resumeToken``
+                field.  The stream will skip past the identified event and
+                deliver only subsequent changes.
+            max_await_time_ms: Maximum blocking time (ms) for the iterator's
+                ``__next__`` before raising ``StopIteration``.  Only applies to
+                the embedded (local) backend.  Defaults to 30 000 ms.
+        """
         if self.mode == "remote":
-            return self.backend.watch(pipeline)
-        return self.backend.watch(pipeline)
+            kwargs: dict[str, Any] = {}
+            if resume_after is not None:
+                kwargs["resume_after"] = resume_after
+            return self.backend.watch(pipeline, **kwargs)
+        return self.backend.watch(
+            pipeline,
+            resume_after=resume_after,
+            max_await_time_ms=max_await_time_ms,
+        )
 
     # -- writes --------------------------------------------------------
 

@@ -7,9 +7,6 @@ Covers:
 - NumPy import error handling (mocked)
 """
 
-import sys
-from unittest.mock import patch
-
 import pytest
 
 from smongo.aggregation import Cursor
@@ -199,7 +196,9 @@ class TestVectorSearchSpecValidation:
 
         data = [{"_id": "a", "embedding": [1.0, 0.0]}]
         with pytest.raises(ValueError, match="requires non-empty"):
-            vector_search_stage(data, {"path": "embedding", "queryVector": "not_a_list", "limit": 10})
+            vector_search_stage(
+                data, {"path": "embedding", "queryVector": "not_a_list", "limit": 10}
+            )
 
 
 class TestVectorSearchNumCandidates:

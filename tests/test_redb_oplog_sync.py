@@ -86,9 +86,7 @@ def test_redb_drop_collection_removes_data() -> None:
         coll.insert_one({"_id": "a", "email": "x@y.z"})
         coll.create_index([("email", 1)], name="synced_idx_from_remote")
         assert coll.count_documents({}) == 1
-        assert any(
-            idx["name"] == "synced_idx_from_remote" for idx in coll.list_indexes()
-        )
+        assert any(idx["name"] == "synced_idx_from_remote" for idx in coll.list_indexes())
         db.drop_collection("items")
         fresh = db.collection("items")
         assert fresh.count_documents({}) == 0

@@ -156,9 +156,7 @@ class _PushMixin:
                 batch_start_key = key
 
             if len(ops) >= batch_size:
-                n_ok = self._flush_bulk(
-                    remote_coll, ops, ns=ns, op_entries=op_entries
-                )
+                n_ok = self._flush_bulk(remote_coll, ops, ns=ns, op_entries=op_entries)
                 if n_ok > 0:
                     safe_key = key
                     with self._lock:
@@ -171,9 +169,7 @@ class _PushMixin:
                 batch_start_key = None
 
         if ops:
-            n_ok = self._flush_bulk(
-                remote_coll, ops, ns=ns, op_entries=op_entries
-            )
+            n_ok = self._flush_bulk(remote_coll, ops, ns=ns, op_entries=op_entries)
             if n_ok > 0:
                 safe_key = last_key
                 with self._lock:
@@ -243,10 +239,7 @@ class _PushMixin:
         local_hash = self._compute_index_hash(local_indexes)
         remote_hash = self._compute_index_hash(remote_indexes)
         cache_key = f"push:{ns}"
-        if (
-            local_hash == remote_hash
-            and self._index_hash_cache.get(cache_key) == local_hash
-        ):
+        if local_hash == remote_hash and self._index_hash_cache.get(cache_key) == local_hash:
             return
         self._index_hash_cache[cache_key] = local_hash
 
@@ -318,8 +311,6 @@ class _PushMixin:
                     err.get("errmsg", ""),
                 )
                 if op_entries and idx is not None and idx < len(op_entries):
-                    self._dlq_enqueue(
-                        ns, op_entries[idx], err.get("code"), err.get("errmsg", "")
-                    )
+                    self._dlq_enqueue(ns, op_entries[idx], err.get("code"), err.get("errmsg", ""))
             log.warning("Bulk write partial failure: %d/%d ops succeeded", n_ok, len(ops))
             return n_ok

@@ -15,6 +15,13 @@ import warnings
 from typing import Any
 
 from .aggregation import Cursor, DocumentLimitExceeded
+from .async_client import (
+    AsyncChangeStream,
+    AsyncCollection,
+    AsyncCursor,
+    AsyncDatabase,
+    AsyncMongoClient,
+)
 from .client import (
     BulkWriteError,
     BulkWriteResult,
@@ -40,7 +47,7 @@ from .storage import DeleteResult, InsertResult, StreamingCursor, UpdateResult
 from .sync import SyncManager
 from .wire import WireServer
 
-__version__ = "0.9.6"
+__version__ = "0.10.0"
 
 try:
     from ._smongo_core import __build_version__ as _native_version
@@ -79,6 +86,11 @@ def connect(
 
 
 __all__ = [
+    "AsyncChangeStream",
+    "AsyncCollection",
+    "AsyncCursor",
+    "AsyncDatabase",
+    "AsyncMongoClient",
     "BulkWriteError",
     "BulkWriteResult",
     "Collection",

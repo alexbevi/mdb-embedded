@@ -11,8 +11,8 @@ Architecture:
 """
 
 from .conflict import (
-    VectorClock,
     _RESOLVERS,
+    VectorClock,
     _apply_commutative_to_doc,
     _crdt_counter_merge,
     _crdt_merge_doc,
@@ -41,13 +41,13 @@ except ImportError:
 
 
 __all__ = [
-    "BulkWriteError",
     "DEFAULT_TOMBSTONE_TTL_SEC",
+    "_RESOLVERS",
+    "BulkWriteError",
     "PyMongoError",
     "SyncManager",
     "TombstoneRegistry",
     "VectorClock",
-    "_RESOLVERS",
     "_apply_commutative_to_doc",
     "_crdt_counter_merge",
     "_crdt_merge_doc",

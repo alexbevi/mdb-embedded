@@ -1,11 +1,11 @@
 """Unit tests for sync internals and helper strategies."""
 
 import json
-
-import pytest
 import threading
 import time
 import types
+
+import pytest
 
 from smongo.sync import (
     BulkWriteError,
@@ -1084,9 +1084,7 @@ def test_dlq_enqueue_on_partial_failure():
 
     class FailRemote:
         def bulk_write(self, ops, ordered=False):
-            raise BulkWriteError(
-                {"writeErrors": [{"index": 1, "code": 11000, "errmsg": "dup"}]}
-            )
+            raise BulkWriteError({"writeErrors": [{"index": 1, "code": 11000, "errmsg": "dup"}]})
 
     n_ok = mgr._flush_bulk(
         FailRemote(), ["op_a", "op_b"], ns="db.users", op_entries=[entry_a, entry_b]
@@ -1098,10 +1096,17 @@ def test_dlq_enqueue_on_partial_failure():
 def test_dlq_retry_success():
     """Successful retry removes the entry from the DLQ."""
     mgr = _make_manager()
-    mgr._dlq_enqueue("db.users", {
-        "op": "insert", "doc_id": "a",
-        "payload": {"_id": "a", "x": 1}, "ts": 1.0,
-    }, 11000, "dup")
+    mgr._dlq_enqueue(
+        "db.users",
+        {
+            "op": "insert",
+            "doc_id": "a",
+            "payload": {"_id": "a", "x": 1},
+            "ts": 1.0,
+        },
+        11000,
+        "dup",
+    )
 
     assert mgr._dlq_count() == 1
 
@@ -1125,16 +1130,21 @@ def test_dlq_retry_exhaust():
     """After max retries, the entry is marked permanently failed."""
     mgr = _make_manager()
     mgr._config["max_dlq_retries"] = 2
-    mgr._dlq_enqueue("db.users", {
-        "op": "insert", "doc_id": "a",
-        "payload": {"_id": "a", "x": 1}, "ts": 1.0,
-    }, 11000, "dup")
+    mgr._dlq_enqueue(
+        "db.users",
+        {
+            "op": "insert",
+            "doc_id": "a",
+            "payload": {"_id": "a", "x": 1},
+            "ts": 1.0,
+        },
+        11000,
+        "dup",
+    )
 
     class FailRemote:
         def bulk_write(self, ops, ordered=False):
-            raise BulkWriteError(
-                {"writeErrors": [{"index": 0, "code": 11000, "errmsg": "dup"}]}
-            )
+            raise BulkWriteError({"writeErrors": [{"index": 0, "code": 11000, "errmsg": "dup"}]})
 
     mgr._tracked = {"db.users": (None, FailRemote(), None)}
     dlq_store = mgr._rust.table(mgr._dlq_uri)
@@ -1154,14 +1164,28 @@ def test_dlq_status_reporting():
     """status() includes dlq_depth and dlq_permanent_failures."""
     mgr = _make_manager()
     mgr._thread = None
-    mgr._dlq_enqueue("db.users", {
-        "op": "insert", "doc_id": "a",
-        "payload": {"_id": "a"}, "ts": 1.0,
-    }, 11000, "dup")
-    mgr._dlq_enqueue("db.users", {
-        "op": "insert", "doc_id": "b",
-        "payload": {"_id": "b"}, "ts": 2.0,
-    }, 11000, "dup")
+    mgr._dlq_enqueue(
+        "db.users",
+        {
+            "op": "insert",
+            "doc_id": "a",
+            "payload": {"_id": "a"},
+            "ts": 1.0,
+        },
+        11000,
+        "dup",
+    )
+    mgr._dlq_enqueue(
+        "db.users",
+        {
+            "op": "insert",
+            "doc_id": "b",
+            "payload": {"_id": "b"},
+            "ts": 2.0,
+        },
+        11000,
+        "dup",
+    )
 
     # Mark one as permanently failed
     dlq_store = mgr._rust.table(mgr._dlq_uri)
@@ -1179,21 +1203,34 @@ def test_dlq_entry_to_pymongo_op():
     """_entry_to_pymongo_op reconstructs write ops from oplog entries."""
     mgr = _make_manager()
 
-    insert_op = mgr._entry_to_pymongo_op({
-        "op": "insert", "doc_id": "a",
-        "payload": {"_id": "a", "x": 1}, "ts": 1.0,
-    })
+    insert_op = mgr._entry_to_pymongo_op(
+        {
+            "op": "insert",
+            "doc_id": "a",
+            "payload": {"_id": "a", "x": 1},
+            "ts": 1.0,
+        }
+    )
     assert insert_op is not None
 
-    update_op = mgr._entry_to_pymongo_op({
-        "op": "update", "doc_id": "a",
-        "payload": {"$set": {"x": 2}}, "ts": 2.0,
-    })
+    update_op = mgr._entry_to_pymongo_op(
+        {
+            "op": "update",
+            "doc_id": "a",
+            "payload": {"$set": {"x": 2}},
+            "ts": 2.0,
+        }
+    )
     assert update_op is not None
 
-    delete_op = mgr._entry_to_pymongo_op({
-        "op": "delete", "doc_id": "a", "payload": None, "ts": 3.0,
-    })
+    delete_op = mgr._entry_to_pymongo_op(
+        {
+            "op": "delete",
+            "doc_id": "a",
+            "payload": None,
+            "ts": 3.0,
+        }
+    )
     assert delete_op is not None
 
     none_op = mgr._entry_to_pymongo_op({"op": "index_create", "doc_id": "idx"})
@@ -1581,12 +1618,10 @@ def test_conflict_log_persisted_to_kv():
     local = Local()
     mgr._resolver_name = "lww"
     mgr._resolve = _lww
-    mgr._upsert_remote_doc(
-        "db.users", local, {"_id": "1", "x": "v2", "_lastModified": 2}
-    )
+    mgr._upsert_remote_doc("db.users", local, {"_id": "1", "x": "v2", "_lastModified": 2})
     kv_table = mgr._rust.table(mgr._conflict_log_uri)
     assert len(kv_table) == 1
-    stored = json.loads(list(kv_table.values())[0])
+    stored = json.loads(next(iter(kv_table.values())))
     assert stored["doc_id"] == "1"
 
 

@@ -10,9 +10,7 @@ use pyo3::types::{PyDict, PyList};
 /// (longitude, latitude, max_distance_m, min_distance_m)
 pub(crate) type NearSpec = (f64, f64, Option<f64>, Option<f64>);
 
-pub(crate) fn parse_field_near_spec(
-    cond_dict: &Bound<'_, PyDict>,
-) -> PyResult<Option<NearSpec>> {
+pub(crate) fn parse_field_near_spec(cond_dict: &Bound<'_, PyDict>) -> PyResult<Option<NearSpec>> {
     let outer_max = cond_dict
         .get_item("$maxDistance")?
         .and_then(|v| v.extract::<f64>().ok());
@@ -127,7 +125,9 @@ pub(crate) fn parse_geo_within_inner_geometry(
         return Ok(None);
     };
     let g = geom.cast::<PyDict>()?;
-    Ok(Some(crate::geo_polygon::geo_query_shape_from_geometry_dict(g)?))
+    Ok(Some(
+        crate::geo_polygon::geo_query_shape_from_geometry_dict(g)?,
+    ))
 }
 
 pub(crate) fn parse_field_geo_within_geometry(
@@ -148,7 +148,9 @@ pub(crate) fn parse_geo_intersects_inner_geometry(
         return Ok(None);
     };
     let g = geom.cast::<PyDict>()?;
-    Ok(Some(crate::geo_polygon::geo_query_shape_from_geometry_dict(g)?))
+    Ok(Some(
+        crate::geo_polygon::geo_query_shape_from_geometry_dict(g)?,
+    ))
 }
 
 pub(crate) fn parse_field_geo_intersects_geometry(

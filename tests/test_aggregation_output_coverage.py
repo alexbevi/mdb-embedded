@@ -58,9 +58,7 @@ class TestOutErrorConditions:
 
         data = [{"_id": "1", "x": 1}]
         # Test dict with 'coll' key
-        result = Cursor(data, collection_getter=getter).aggregate(
-            [{"$out": {"coll": "target"}}]
-        )
+        result = Cursor(data, collection_getter=getter).aggregate([{"$out": {"coll": "target"}}])
         assert len(result) == 1
         assert len(target.data) == 1
 

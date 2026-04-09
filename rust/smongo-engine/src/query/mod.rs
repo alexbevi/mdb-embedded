@@ -11,10 +11,13 @@
 //! - Expression operator ($expr)
 //! - Text search operator ($text)
 
-use bson::{Bson, Document};
 use crate::aggregation::expressions::{evaluate_expression, is_truthy};
-use crate::geo::{extract_lon_lat, haversine_meters, GeoQueryShape, EARTH_RADIUS_METERS, DEFAULT_NEAR_MAX_DISTANCE_M};
+use crate::geo::{
+    extract_lon_lat, haversine_meters, GeoQueryShape, DEFAULT_NEAR_MAX_DISTANCE_M,
+    EARTH_RADIUS_METERS,
+};
 use crate::paths;
+use bson::{Bson, Document};
 
 /// Evaluate a MongoDB query predicate against a document.
 ///
@@ -223,7 +226,9 @@ fn eval_near_family(value: Option<&Bson>, cond_doc: &Document) -> Result<bool, S
             if geom.get_str("type").map_err(|e| e.to_string())? != "Point" {
                 return Err("only GeoJSON Point is supported for $near".to_string());
             }
-            let coords = geom.get("coordinates").ok_or("$geometry requires coordinates")?;
+            let coords = geom
+                .get("coordinates")
+                .ok_or("$geometry requires coordinates")?;
             let (lon, lat) = parse_point_coords_near(coords)?;
             (lon, lat, max_d, min_d)
         }
@@ -365,24 +370,14 @@ fn bson_cmp(a: &Bson, b: &Bson) -> std::cmp::Ordering {
         (Bson::Null, Bson::Null) => Ordering::Equal,
         (Bson::Int32(a), Bson::Int32(b)) => a.cmp(b),
         (Bson::Int64(a), Bson::Int64(b)) => a.cmp(b),
-        (Bson::Double(a), Bson::Double(b)) => {
-            a.partial_cmp(b).unwrap_or(Ordering::Equal)
-        }
+        (Bson::Double(a), Bson::Double(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
         // Cross-number comparisons
         (Bson::Int32(a), Bson::Int64(b)) => (*a as i64).cmp(b),
         (Bson::Int64(a), Bson::Int32(b)) => a.cmp(&(*b as i64)),
-        (Bson::Int32(a), Bson::Double(b)) => {
-            (*a as f64).partial_cmp(b).unwrap_or(Ordering::Equal)
-        }
-        (Bson::Double(a), Bson::Int32(b)) => {
-            a.partial_cmp(&(*b as f64)).unwrap_or(Ordering::Equal)
-        }
-        (Bson::Int64(a), Bson::Double(b)) => {
-            (*a as f64).partial_cmp(b).unwrap_or(Ordering::Equal)
-        }
-        (Bson::Double(a), Bson::Int64(b)) => {
-            a.partial_cmp(&(*b as f64)).unwrap_or(Ordering::Equal)
-        }
+        (Bson::Int32(a), Bson::Double(b)) => (*a as f64).partial_cmp(b).unwrap_or(Ordering::Equal),
+        (Bson::Double(a), Bson::Int32(b)) => a.partial_cmp(&(*b as f64)).unwrap_or(Ordering::Equal),
+        (Bson::Int64(a), Bson::Double(b)) => (*a as f64).partial_cmp(b).unwrap_or(Ordering::Equal),
+        (Bson::Double(a), Bson::Int64(b)) => a.partial_cmp(&(*b as f64)).unwrap_or(Ordering::Equal),
         (Bson::String(a), Bson::String(b)) => a.cmp(b),
         (Bson::Boolean(a), Bson::Boolean(b)) => a.cmp(b),
         (Bson::DateTime(a), Bson::DateTime(b)) => a.cmp(b),
@@ -1113,7 +1108,9 @@ mod tests {
     #[test]
     fn test_mod_with_not() {
         let doc = doc! { "qty": 10 };
-        assert!(eval_query(&doc, &doc! { "qty": { "$not": { "$mod": [5, 0] } } }).unwrap() == false);
+        assert!(
+            eval_query(&doc, &doc! { "qty": { "$not": { "$mod": [5, 0] } } }).unwrap() == false
+        );
         assert!(eval_query(&doc, &doc! { "qty": { "$not": { "$mod": [3, 0] } } }).unwrap() == true);
     }
 }

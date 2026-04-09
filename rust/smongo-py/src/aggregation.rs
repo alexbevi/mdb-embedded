@@ -51,7 +51,6 @@ fn to_group_key(py: Python<'_>, val: &Bound<'_, PyAny>) -> PyResult<String> {
     Ok(format!("j:{dumped}"))
 }
 
-
 // ---------------------------------------------------------------------------
 // $group
 // ---------------------------------------------------------------------------
@@ -1229,7 +1228,12 @@ pub fn aggregate_pipeline<'py>(
     allow_disk_use: bool,
     memory_limit_bytes: usize,
 ) -> PyResult<Bound<'py, PyList>> {
-    let _ = (collection_getter, max_pipeline_docs, allow_disk_use, memory_limit_bytes);
+    let _ = (
+        collection_getter,
+        max_pipeline_docs,
+        allow_disk_use,
+        memory_limit_bytes,
+    );
 
     if let Some(handle) = db_handle {
         if let Ok(coll_ref) = handle.cast::<crate::redb_client::RedbLocalCollection>() {
@@ -1246,4 +1250,3 @@ pub fn aggregate_pipeline<'py>(
     // should pass db_handle for full support.
     run_engine_pipeline(py, docs, pipeline)
 }
-

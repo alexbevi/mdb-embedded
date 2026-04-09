@@ -7,6 +7,58 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-04-09
+
+### Added
+
+- **`allowDiskUse` for aggregation pipelines.** `Collection.aggregate(pipeline, allowDiskUse=True)`
+  enables spill-to-disk for `$sort` and `$group` stages that exceed the in-memory limit (default
+  100 MB).  Uses chunked external merge sort (`DiskSpillSorter`) and file-backed group partitioning
+  (`DiskSpillGrouper`) via temporary JSON-lines files.  The fast Rust engine path remains the default
+  when `allowDiskUse` is `False`.
+
+- **Async Python API (`AsyncMongoClient`).** Full `asyncio`-native client:
+  `AsyncMongoClient`, `AsyncDatabase`, `AsyncCollection`, `AsyncCursor`, and
+  `AsyncChangeStream`.  All blocking engine work is dispatched via `asyncio.to_thread`
+  (Python 3.11+), keeping the event loop responsive for FastAPI, Starlette, and other
+  async frameworks.
+
+  ```python
+  from smongo import AsyncMongoClient
+
+  async def main():
+      client = AsyncMongoClient("local://data")
+      db = client["mydb"]
+      coll = db["users"]
+      await coll.insert_one({"name": "Alice"})
+      async for doc in await coll.find({"name": "Alice"}):
+          print(doc)
+  ```
+
+- **Change streams with resume tokens.** `Collection.watch()` now returns events with
+  `_resumeToken` fields containing `{ts, seq}` pairs.  Pass `resume_after=token` to
+  restart a stream from the event after the identified one — surviving process restarts,
+  reconnects, and crash recovery.  `max_await_time_ms` controls how long the blocking
+  iterator waits before raising `StopIteration` (default 30 s).
+
+- **`AsyncChangeStream`** wraps the synchronous change stream for use in async contexts:
+  `async for event in await coll.watch(): ...` polls the oplog without blocking the loop.
+
+## [0.9.7] — 2026-04-09
+
+### Fixed
+
+- All `cargo clippy -- -D warnings` errors resolved across the workspace
+  (`smongo-engine`, `smongo-py`, `smongo-node`).
+- Pre-commit `cargo-fmt` hook updated to use `--all` for workspace support.
+- Pre-existing `ruff` and `mypy` issues in Python sources fixed or suppressed.
+
+### Added
+
+- `WASM-BROWSER-GUIDE.md` — comprehensive guide for the WASM/JS browser
+  experience covering secure proxy sync, CSP hardening, and production
+  deployment best practices.
+
 ## [0.9.6] — 2026-04-09
 
 ## [0.9.5] — 2026-04-09

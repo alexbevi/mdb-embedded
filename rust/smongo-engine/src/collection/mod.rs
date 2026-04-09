@@ -42,17 +42,17 @@ use std::io::Cursor;
 use std::marker::PhantomData;
 
 use crate::explain::{ExecutionStats, ExplainResult};
-use crate::index::{
-    decode_index_key, extract_index_key, generate_index_name, is_2dsphere_keys, validate_custom_index_name,
-    IndexOptions, IndexSpec,
-};
-use crate::oplog::{append_oplog, AppendOplogOpts, CollectionOplogSettings};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::index::twodsphere_index_key;
+use crate::index::{
+    decode_index_key, extract_index_key, generate_index_name, is_2dsphere_keys,
+    validate_custom_index_name, IndexOptions, IndexSpec,
+};
+use crate::oplog::{append_oplog, AppendOplogOpts, CollectionOplogSettings};
 use crate::planner::{plan_query, ExecutionPlan};
 use crate::query::eval_query;
-use crate::update::apply_update;
 use crate::storage::{DefaultSession, StorageCursor, StorageError, StorageResult, StorageSession};
+use crate::update::apply_update;
 
 mod geo_find;
 
@@ -126,10 +126,16 @@ impl std::fmt::Display for CollectionError {
             CollectionError::QueryError(e) => write!(f, "Query error: {}", e),
             CollectionError::UpdateError(e) => write!(f, "Update error: {}", e),
             CollectionError::MissingIdError => write!(f, "Document missing _id field"),
-            CollectionError::IndexAlreadyExists(name) => write!(f, "Index already exists: {}", name),
+            CollectionError::IndexAlreadyExists(name) => {
+                write!(f, "Index already exists: {}", name)
+            }
             CollectionError::IndexNotFound(name) => write!(f, "Index not found: {}", name),
-            CollectionError::UniqueConstraintViolation(msg) => write!(f, "Unique constraint violation: {}", msg),
-            CollectionError::InvalidIndexSpec(msg) => write!(f, "Invalid index specification: {}", msg),
+            CollectionError::UniqueConstraintViolation(msg) => {
+                write!(f, "Unique constraint violation: {}", msg)
+            }
+            CollectionError::InvalidIndexSpec(msg) => {
+                write!(f, "Invalid index specification: {}", msg)
+            }
             CollectionError::Other(e) => write!(f, "Error: {}", e),
         }
     }
@@ -369,6 +375,7 @@ enum FindCursorState<C: StorageCursor> {
     },
     /// Streaming covering index scan — reads directly from index keys without
     /// document fetch.  Each iteration decodes one index entry.
+    #[allow(dead_code)]
     CoveringIndexStream {
         index_cursor: C,
         index_keys: Document,
@@ -541,9 +548,7 @@ impl<'a, C: StorageCursor> Iterator for FindCursor<'a, C> {
                         Ok(k) => k,
                         Err(e) => return Some(Err(e.into())),
                     };
-                    if let Some(mut doc) =
-                        crate::index::decode_index_key(&key_raw, index_keys)
-                    {
+                    if let Some(mut doc) = crate::index::decode_index_key(&key_raw, index_keys) {
                         let id_str = match index_cursor.get_value_str() {
                             Ok(s) => s,
                             Err(e) => return Some(Err(e.into())),
@@ -568,11 +573,7 @@ impl<S: StorageSession> Collection<S> {
     /// Create a collection with a custom storage table name.
     ///
     /// Use this when you need a namespaced table like `mydb_users`.
-    pub fn with_table_uri(
-        session: S,
-        name: &str,
-        table_uri: &str,
-    ) -> CollectionResult<Self> {
+    pub fn with_table_uri(session: S, name: &str, table_uri: &str) -> CollectionResult<Self> {
         session.create_table(table_uri)?;
 
         Ok(Collection {
@@ -604,11 +605,15 @@ impl<S: StorageSession> Collection<S> {
         if self.oplog.is_none() {
             return f(self);
         }
-        self.session.begin_transaction().map_err(CollectionError::from)?;
+        self.session
+            .begin_transaction()
+            .map_err(CollectionError::from)?;
         let r = f(self);
         match &r {
             Ok(_) => {
-                self.session.commit_transaction().map_err(CollectionError::from)?;
+                self.session
+                    .commit_transaction()
+                    .map_err(CollectionError::from)?;
             }
             Err(_) => {
                 let _ = self.session.rollback_transaction();
@@ -673,9 +678,8 @@ impl<S: StorageSession> Collection<S> {
 
     fn validate_doc(&self, doc: &Document) -> CollectionResult<()> {
         if let Some(ref schema) = self.validator {
-            crate::schema::validate_document(doc, schema).map_err(|e| {
-                CollectionError::Other(format!("Validation failed: {}", e))
-            })
+            crate::schema::validate_document(doc, schema)
+                .map_err(|e| CollectionError::Other(format!("Validation failed: {}", e)))
         } else {
             Ok(())
         }
@@ -697,7 +701,11 @@ impl<S: StorageSession> Collection<S> {
     }
 
     /// Run a planner [`ExecutionPlan`] and return all documents matching `filter`.
-    pub fn execute_plan(&self, plan: &ExecutionPlan, filter: &Document) -> CollectionResult<Vec<Document>> {
+    pub fn execute_plan(
+        &self,
+        plan: &ExecutionPlan,
+        filter: &Document,
+    ) -> CollectionResult<Vec<Document>> {
         match plan {
             ExecutionPlan::CollectionScan => self.collect_collection_scan(filter),
             ExecutionPlan::IndexScan {
@@ -714,25 +722,27 @@ impl<S: StorageSession> Collection<S> {
                 index_keys,
                 seek_values,
                 projection,
-            } => self.collect_covering_index_scan(filter, index_name, index_keys, seek_values.as_ref(), projection),
+            } => self.collect_covering_index_scan(
+                filter,
+                index_name,
+                index_keys,
+                seek_values.as_ref(),
+                projection,
+            ),
             ExecutionPlan::SortedIndexScan {
-                index_name,
-                limit,
-                ..
+                index_name, limit, ..
             } => self.collect_sorted_index_scan(filter, index_name, *limit),
-            ExecutionPlan::BitmapScan {
-                index_name,
-                field,
-            } => self.collect_bitmap_scan(filter, index_name, field),
+            ExecutionPlan::BitmapScan { index_name, field } => {
+                self.collect_bitmap_scan(filter, index_name, field)
+            }
             ExecutionPlan::PrefixIndexScan {
                 index_name,
                 index_keys,
                 prefix_length,
             } => self.collect_prefix_index_scan(filter, index_name, index_keys, *prefix_length),
-            ExecutionPlan::TextIndexScan {
-                index_name,
-                fields,
-            } => self.collect_text_index_scan(filter, index_name, fields),
+            ExecutionPlan::TextIndexScan { index_name, fields } => {
+                self.collect_text_index_scan(filter, index_name, fields)
+            }
             ExecutionPlan::VectorIndexSearch {
                 index_name,
                 field,
@@ -741,7 +751,9 @@ impl<S: StorageSession> Collection<S> {
             } => self.collect_vector_index_search(filter, index_name, field, *dimensions, metric),
             ExecutionPlan::GeoNear { .. }
             | ExecutionPlan::GeoCapWithin { .. }
-            | ExecutionPlan::GeoCellCover { .. } => geo_find::materialize_geo_plan(self, plan, filter),
+            | ExecutionPlan::GeoCellCover { .. } => {
+                geo_find::materialize_geo_plan(self, plan, filter)
+            }
             ExecutionPlan::OrUnionPlans { subplans } => {
                 let mut seen = HashSet::new();
                 let mut out = Vec::new();
@@ -775,7 +787,9 @@ impl<S: StorageSession> Collection<S> {
             return Ok(out);
         }
         loop {
-            let id_str = index_cursor.get_value_str().map_err(CollectionError::from)?;
+            let id_str = index_cursor
+                .get_value_str()
+                .map_err(CollectionError::from)?;
             if let Some(doc) = self.fetch_doc_by_id_str(&id_str)? {
                 if filter.is_empty()
                     || eval_query(&doc, filter).map_err(CollectionError::QueryError)?
@@ -828,7 +842,9 @@ impl<S: StorageSession> Collection<S> {
             return Ok(out);
         }
         loop {
-            let id_str = index_cursor.get_value_str().map_err(CollectionError::from)?;
+            let id_str = index_cursor
+                .get_value_str()
+                .map_err(CollectionError::from)?;
             if let Some(doc) = self.fetch_doc_by_id_str(&id_str)? {
                 if eval_query(&doc, filter).map_err(CollectionError::QueryError)? {
                     out.push(doc);
@@ -869,7 +885,9 @@ impl<S: StorageSession> Collection<S> {
             if !index_key_raw.starts_with(&seek_key) {
                 break;
             }
-            let id_str = index_cursor.get_value_str().map_err(CollectionError::from)?;
+            let id_str = index_cursor
+                .get_value_str()
+                .map_err(CollectionError::from)?;
             if let Some(doc) = self.fetch_doc_by_id_str(&id_str)? {
                 if eval_query(&doc, filter).map_err(CollectionError::QueryError)? {
                     out.push(doc);
@@ -925,9 +943,9 @@ impl<S: StorageSession> Collection<S> {
 
                 // Decode index key into field values
                 if let Some(index_doc) = decode_index_key(&index_key_raw, index_keys) {
-
                     // Apply filter FIRST (to full index doc)
-                    let filter_result = eval_query(&index_doc, filter).map_err(CollectionError::QueryError)?;
+                    let filter_result =
+                        eval_query(&index_doc, filter).map_err(CollectionError::QueryError)?;
 
                     if filter_result {
                         // Build projected document from index data
@@ -935,12 +953,13 @@ impl<S: StorageSession> Collection<S> {
 
                         // Add _id if needed
                         if should_include_id(projection) {
-                            let id_str = index_cursor.get_value_str().map_err(CollectionError::from)?;
+                            let id_str = index_cursor
+                                .get_value_str()
+                                .map_err(CollectionError::from)?;
                             projected.insert("_id".to_string(), Bson::String(id_str));
                         }
 
                         out.push(projected);
-                    } else {
                     }
                 }
 
@@ -966,7 +985,9 @@ impl<S: StorageSession> Collection<S> {
 
                         // Add _id if needed
                         if should_include_id(projection) {
-                            let id_str = index_cursor.get_value_str().map_err(CollectionError::from)?;
+                            let id_str = index_cursor
+                                .get_value_str()
+                                .map_err(CollectionError::from)?;
                             projected.insert("_id".to_string(), Bson::String(id_str));
                         }
 
@@ -1004,7 +1025,9 @@ impl<S: StorageSession> Collection<S> {
         if index_cursor.next().is_ok() {
             loop {
                 let key_raw = index_cursor.get_key_raw().map_err(CollectionError::from)?;
-                let id_str = index_cursor.get_value_str().map_err(CollectionError::from)?;
+                let id_str = index_cursor
+                    .get_value_str()
+                    .map_err(CollectionError::from)?;
                 bitmap.insert(&id_str, &key_raw);
                 if index_cursor.next().is_err() {
                     break;
@@ -1110,7 +1133,9 @@ impl<S: StorageSession> Collection<S> {
             if !key_raw.starts_with(&prefix) {
                 break;
             }
-            let id_str = index_cursor.get_value_str().map_err(CollectionError::from)?;
+            let id_str = index_cursor
+                .get_value_str()
+                .map_err(CollectionError::from)?;
             if let Some(doc) = self.fetch_doc_by_id_str(&id_str)? {
                 if eval_query(&doc, filter).map_err(CollectionError::QueryError)? {
                     out.push(doc);
@@ -1249,7 +1274,11 @@ impl<S: StorageSession> Collection<S> {
         self.with_oplog_transaction(|col| col.insert_one_inner(document, opts.internal))
     }
 
-    fn insert_one_inner(&self, mut document: Document, internal: bool) -> CollectionResult<InsertOneResult> {
+    fn insert_one_inner(
+        &self,
+        mut document: Document,
+        internal: bool,
+    ) -> CollectionResult<InsertOneResult> {
         // Ensure document has _id
         let inserted_id = ensure_id(&mut document);
 
@@ -1350,12 +1379,7 @@ impl<S: StorageSession> Collection<S> {
                 index_name,
                 index_keys,
                 seek_values,
-            } => self.find_one_with_index_seek(
-                &filter,
-                index_name,
-                index_keys,
-                seek_values,
-            ),
+            } => self.find_one_with_index_seek(&filter, index_name, index_keys, seek_values),
             ExecutionPlan::IndexScan {
                 index_name,
                 index_keys,
@@ -1363,12 +1387,10 @@ impl<S: StorageSession> Collection<S> {
             ExecutionPlan::CollectionScan => self.find_one_with_collection_scan(&filter),
             // All other plans (covering, sorted, geo, bitmap, text, prefix,
             // vector, or-union) materialize through execute_plan.
-            _ => {
-                Ok(self
-                    .execute_plan(&plan.execution_plan, &filter)?
-                    .into_iter()
-                    .next())
-            }
+            _ => Ok(self
+                .execute_plan(&plan.execution_plan, &filter)?
+                .into_iter()
+                .next()),
         }
     }
 
@@ -1419,10 +1441,7 @@ impl<S: StorageSession> Collection<S> {
             // prefix, vector, or-union) materialize through execute_plan.
             _ => {
                 let docs = self.execute_plan(&plan.execution_plan, &filter)?;
-                FindCursorState::Materialized {
-                    docs,
-                    next_ix: 0,
-                }
+                FindCursorState::Materialized { docs, next_ix: 0 }
             }
         };
 
@@ -1469,10 +1488,7 @@ impl<S: StorageSession> Collection<S> {
         );
 
         // If the planner chose SortedIndexScan, we can skip the post-sort.
-        let skip_post_sort = matches!(
-            plan.execution_plan,
-            ExecutionPlan::SortedIndexScan { .. }
-        );
+        let skip_post_sort = matches!(plan.execution_plan, ExecutionPlan::SortedIndexScan { .. });
 
         let mut docs = self.execute_plan(&plan.execution_plan, &filter)?;
 
@@ -1519,7 +1535,11 @@ impl<S: StorageSession> Collection<S> {
             ..options
         };
         let mut docs = self.find_with_options(filter, find_opts)?;
-        Ok(if docs.is_empty() { None } else { Some(docs.swap_remove(0)) })
+        Ok(if docs.is_empty() {
+            None
+        } else {
+            Some(docs.swap_remove(0))
+        })
     }
 
     // ============================================================
@@ -1548,7 +1568,8 @@ impl<S: StorageSession> Collection<S> {
         let indexes = self.list_indexes()?;
         let plan = plan_query(&filter, &indexes);
 
-        let mut explain = ExplainResult::new(filter.clone(), plan.execution_plan.clone(), plan.reason);
+        let mut explain =
+            ExplainResult::new(filter.clone(), plan.execution_plan.clone(), plan.reason);
 
         // Estimate statistics by sampling the collection
         self.estimate_query_stats(&filter, &plan.execution_plan, &mut explain.execution_stats)?;
@@ -1578,7 +1599,8 @@ impl<S: StorageSession> Collection<S> {
         let indexes = self.list_indexes()?;
         let plan = plan_query(&filter, &indexes);
 
-        let mut explain = ExplainResult::new(filter.clone(), plan.execution_plan.clone(), plan.reason);
+        let mut explain =
+            ExplainResult::new(filter.clone(), plan.execution_plan.clone(), plan.reason);
 
         // Estimate statistics by sampling the collection
         self.estimate_query_stats(&filter, &plan.execution_plan, &mut explain.execution_stats)?;
@@ -1602,8 +1624,7 @@ impl<S: StorageSession> Collection<S> {
     /// println!("{}", explain.summary());
     /// ```
     pub fn explain_aggregate(&self, pipeline: Vec<Document>) -> CollectionResult<ExplainResult> {
-        let (leading_match, _remaining) =
-            crate::aggregation::optimize_pipeline(&pipeline);
+        let (leading_match, _remaining) = crate::aggregation::optimize_pipeline(&pipeline);
         let filter = leading_match.unwrap_or_default();
         self.explain_find(filter)
     }
@@ -1711,11 +1732,7 @@ impl<S: StorageSession> Collection<S> {
     /// # Returns
     ///
     /// `UpdateResult` with matched and modified counts
-    pub fn update_one(
-        &self,
-        filter: Document,
-        update: Document,
-    ) -> CollectionResult<UpdateResult> {
+    pub fn update_one(&self, filter: Document, update: Document) -> CollectionResult<UpdateResult> {
         self.update_one_with_options(filter, update, UpdateOptions::default())
     }
 
@@ -2091,8 +2108,7 @@ impl<S: StorageSession> Collection<S> {
         &self,
         pipeline: Vec<Document>,
     ) -> CollectionResult<crate::aggregation::DocStream> {
-        let (leading_match, remaining_pipeline) =
-            crate::aggregation::optimize_pipeline(&pipeline);
+        let (leading_match, remaining_pipeline) = crate::aggregation::optimize_pipeline(&pipeline);
 
         let docs = match leading_match {
             Some(filter) => self.find(filter)?,
@@ -2136,7 +2152,10 @@ impl<S: StorageSession> Collection<S> {
     // ============================================================
 
     /// Find one document using collection scan
-    fn find_one_with_collection_scan(&self, filter: &Document) -> CollectionResult<Option<Document>> {
+    fn find_one_with_collection_scan(
+        &self,
+        filter: &Document,
+    ) -> CollectionResult<Option<Document>> {
         let mut cursor = self.cursor()?;
 
         if cursor.next().is_err() {
@@ -2337,8 +2356,7 @@ impl<S: StorageSession> Collection<S> {
 
         // Store index metadata in a special metadata table
         let metadata_table = format!("{}.indexes_metadata", self.collection_name);
-        self.session
-            .create_table(&metadata_table)?;
+        self.session.create_table(&metadata_table)?;
 
         let index_spec = IndexSpec {
             name: index_name.clone(),
@@ -2512,10 +2530,7 @@ impl<S: StorageSession> Collection<S> {
     /// Uses `search_near` to jump close to `prefix` in the sorted key space,
     /// then checks whether the landing position (or its immediate successor)
     /// starts with `prefix`.
-    fn index_has_prefix<C: StorageCursor>(
-        cursor: &mut C,
-        prefix: &[u8],
-    ) -> CollectionResult<bool> {
+    fn index_has_prefix<C: StorageCursor>(cursor: &mut C, prefix: &[u8]) -> CollectionResult<bool> {
         cursor.set_key_raw(prefix);
         match cursor.search_near() {
             Ok(exact) => {
@@ -2576,8 +2591,8 @@ impl<S: StorageSession> Collection<S> {
                             }
                             continue;
                         }
-                        let field = crate::index::twodsphere_field(keys)
-                            .unwrap_or_else(|| "?".to_string());
+                        let field =
+                            crate::index::twodsphere_field(keys).unwrap_or_else(|| "?".to_string());
                         return Err(CollectionError::Other(format!(
                             "2dsphere indexed field '{field}' must be a GeoJSON Point or [longitude, latitude] array"
                         )));
@@ -2595,9 +2610,7 @@ impl<S: StorageSession> Collection<S> {
             // Extract index key
             let index_key_bytes = extract_index_key(&doc, keys);
 
-            if options.unique
-                && Self::index_has_prefix(&mut index_cursor, &index_key_bytes)?
-            {
+            if options.unique && Self::index_has_prefix(&mut index_cursor, &index_key_bytes)? {
                 let field_names: Vec<&str> = keys.keys().map(|s| s.as_str()).collect();
                 return Err(CollectionError::UniqueConstraintViolation(format!(
                     "Duplicate key for index on fields: {}",
@@ -2644,7 +2657,8 @@ impl<S: StorageSession> Collection<S> {
                     }
                     #[cfg(not(target_arch = "wasm32"))]
                     {
-                        let index_table_name = format!("{}.idx_{}", self.collection_name, index_spec.name);
+                        let index_table_name =
+                            format!("{}.idx_{}", self.collection_name, index_spec.name);
                         let mut index_cursor = self.session.open_cursor(&index_table_name)?;
                         let Some(combined_key) = twodsphere_index_key(doc, &index_spec.keys) else {
                             if index_spec.options.sparse {
@@ -2662,7 +2676,8 @@ impl<S: StorageSession> Collection<S> {
                     }
                 }
                 IndexType::BTree => {
-                    let index_table_name = format!("{}.idx_{}", self.collection_name, index_spec.name);
+                    let index_table_name =
+                        format!("{}.idx_{}", self.collection_name, index_spec.name);
                     let mut index_cursor = self.session.open_cursor(&index_table_name)?;
                     let index_key_bytes = extract_index_key(doc, &index_spec.keys);
 
@@ -2691,7 +2706,9 @@ impl<S: StorageSession> Collection<S> {
                     let fields = crate::index::text_fields(&index_spec.keys);
                     if let Ok(mut cursor) = self.session.open_cursor(&table) {
                         for field in &fields {
-                            if let Some(bson::Bson::String(text)) = crate::paths::get_value(doc, field) {
+                            if let Some(bson::Bson::String(text)) =
+                                crate::paths::get_value(doc, field)
+                            {
                                 #[cfg(not(target_arch = "wasm32"))]
                                 for token in crate::index::text_index::tokenize(text) {
                                     let mut key = token.as_bytes().to_vec();
@@ -2725,7 +2742,8 @@ impl<S: StorageSession> Collection<S> {
                     let table = format!("{}.pfx_{}", self.collection_name, index_spec.name);
                     if let Ok(mut cursor) = self.session.open_cursor(&table) {
                         let full_key = extract_index_key(doc, &index_spec.keys);
-                        let truncated = crate::index::prefix_index::truncate_key(&full_key, prefix_length);
+                        let truncated =
+                            crate::index::prefix_index::truncate_key(&full_key, prefix_length);
                         let mut combined = truncated;
                         combined.extend_from_slice(id_str.as_bytes());
                         cursor.set_key_raw(&combined);
@@ -2782,7 +2800,9 @@ impl<S: StorageSession> Collection<S> {
                     let fields = crate::index::text_fields(&index_spec.keys);
                     if let Ok(mut cursor) = self.session.open_cursor(&table) {
                         for field in &fields {
-                            if let Some(bson::Bson::String(text)) = crate::paths::get_value(doc, field) {
+                            if let Some(bson::Bson::String(text)) =
+                                crate::paths::get_value(doc, field)
+                            {
                                 #[cfg(not(target_arch = "wasm32"))]
                                 for token in crate::index::text_index::tokenize(text) {
                                     let mut key = token.as_bytes().to_vec();
@@ -2813,7 +2833,8 @@ impl<S: StorageSession> Collection<S> {
                     let table = format!("{}.pfx_{}", self.collection_name, index_spec.name);
                     if let Ok(mut cursor) = self.session.open_cursor(&table) {
                         let full_key = extract_index_key(doc, &index_spec.keys);
-                        let truncated = crate::index::prefix_index::truncate_key(&full_key, prefix_length);
+                        let truncated =
+                            crate::index::prefix_index::truncate_key(&full_key, prefix_length);
                         let mut combined = truncated;
                         combined.extend_from_slice(id_str.as_bytes());
                         cursor.set_key_raw(&combined);
@@ -2844,17 +2865,23 @@ impl<S: StorageSession> Collection<S> {
     /// All subsequent CRUD operations will be part of the transaction
     /// until [`commit_transaction`] or [`rollback_transaction`] is called.
     pub fn begin_transaction(&self) -> CollectionResult<()> {
-        self.session.begin_transaction().map_err(CollectionError::from)
+        self.session
+            .begin_transaction()
+            .map_err(CollectionError::from)
     }
 
     /// Commit the active transaction, making all writes durable.
     pub fn commit_transaction(&self) -> CollectionResult<()> {
-        self.session.commit_transaction().map_err(CollectionError::from)
+        self.session
+            .commit_transaction()
+            .map_err(CollectionError::from)
     }
 
     /// Roll back the active transaction, discarding all writes.
     pub fn rollback_transaction(&self) -> CollectionResult<()> {
-        self.session.rollback_transaction().map_err(CollectionError::from)
+        self.session
+            .rollback_transaction()
+            .map_err(CollectionError::from)
     }
 
     /// Execute `f` inside a transaction. Commits on `Ok`, rolls back on `Err`.
@@ -3006,30 +3033,27 @@ impl<'a, S: StorageSession> CollectionView<'a, S> {
         let indexes = self.list_indexes()?;
         let id_str = extract_id_string(doc)?;
         for spec in indexes {
-            match resolve_index_type(&spec.keys, &spec.options) {
-                IndexType::BTree => {
-                    let idx_table = format!("{}.idx_{}", self.collection_name, spec.name);
-                    let mut idx_cursor = self.session.open_cursor(&idx_table)?;
-                    let key_bytes = extract_index_key(doc, &spec.keys);
-                    if spec.options.unique
-                        && Collection::<S>::index_has_prefix(&mut idx_cursor, &key_bytes)?
-                    {
-                        let fields: Vec<&str> = spec.keys.keys().map(|s| s.as_str()).collect();
-                        return Err(CollectionError::UniqueConstraintViolation(format!(
-                            "Duplicate key for index '{}' on fields: {}",
-                            spec.name,
-                            fields.join(", ")
-                        )));
-                    }
-                    let mut combined = key_bytes;
-                    combined.extend_from_slice(id_str.as_bytes());
-                    idx_cursor.set_key_raw(&combined);
-                    idx_cursor.set_value_str(&id_str);
-                    idx_cursor.insert()?;
+            // CollectionView only handles BTree; advanced index types
+            // are maintained through the main Collection path.
+            if resolve_index_type(&spec.keys, &spec.options) == IndexType::BTree {
+                let idx_table = format!("{}.idx_{}", self.collection_name, spec.name);
+                let mut idx_cursor = self.session.open_cursor(&idx_table)?;
+                let key_bytes = extract_index_key(doc, &spec.keys);
+                if spec.options.unique
+                    && Collection::<S>::index_has_prefix(&mut idx_cursor, &key_bytes)?
+                {
+                    let fields: Vec<&str> = spec.keys.keys().map(|s| s.as_str()).collect();
+                    return Err(CollectionError::UniqueConstraintViolation(format!(
+                        "Duplicate key for index '{}' on fields: {}",
+                        spec.name,
+                        fields.join(", ")
+                    )));
                 }
-                // CollectionView only handles BTree; advanced index types
-                // are maintained through the main Collection path.
-                _ => {}
+                let mut combined = key_bytes;
+                combined.extend_from_slice(id_str.as_bytes());
+                idx_cursor.set_key_raw(&combined);
+                idx_cursor.set_value_str(&id_str);
+                idx_cursor.insert()?;
             }
         }
         Ok(())
@@ -3040,19 +3064,16 @@ impl<'a, S: StorageSession> CollectionView<'a, S> {
         let indexes = self.list_indexes()?;
         let id_str = extract_id_string(doc)?;
         for spec in indexes {
-            match resolve_index_type(&spec.keys, &spec.options) {
-                IndexType::BTree => {
-                    let idx_table = format!("{}.idx_{}", self.collection_name, spec.name);
-                    let mut idx_cursor = self.session.open_cursor(&idx_table)?;
-                    let key_bytes = extract_index_key(doc, &spec.keys);
-                    let mut combined = key_bytes;
-                    combined.extend_from_slice(id_str.as_bytes());
-                    idx_cursor.set_key_raw(&combined);
-                    if idx_cursor.search().is_ok() {
-                        idx_cursor.remove()?;
-                    }
+            if resolve_index_type(&spec.keys, &spec.options) == IndexType::BTree {
+                let idx_table = format!("{}.idx_{}", self.collection_name, spec.name);
+                let mut idx_cursor = self.session.open_cursor(&idx_table)?;
+                let key_bytes = extract_index_key(doc, &spec.keys);
+                let mut combined = key_bytes;
+                combined.extend_from_slice(id_str.as_bytes());
+                idx_cursor.set_key_raw(&combined);
+                if idx_cursor.search().is_ok() {
+                    idx_cursor.remove()?;
                 }
-                _ => {}
             }
         }
         Ok(())
@@ -3095,11 +3116,7 @@ impl<'a, S: StorageSession> CollectionView<'a, S> {
         Ok(results)
     }
 
-    pub fn update_one(
-        &self,
-        filter: Document,
-        update: Document,
-    ) -> CollectionResult<UpdateResult> {
+    pub fn update_one(&self, filter: Document, update: Document) -> CollectionResult<UpdateResult> {
         let mut cursor = self.cursor()?;
         if cursor.next().is_ok() {
             loop {
@@ -3201,7 +3218,9 @@ impl<'a, S: StorageSession> CollectionView<'a, S> {
                 deleted += 1;
             }
         }
-        Ok(DeleteResult { deleted_count: deleted })
+        Ok(DeleteResult {
+            deleted_count: deleted,
+        })
     }
 
     pub fn count_documents(&self, filter: Option<Document>) -> CollectionResult<u64> {
@@ -3239,8 +3258,8 @@ impl<'a, S: StorageSession> CollectionView<'a, S> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use bson::doc;
     use crate::database::Database;
+    use bson::doc;
     use tempfile::TempDir;
 
     fn setup_collection() -> (TempDir, Collection) {
@@ -3298,9 +3317,7 @@ mod tests {
     #[test]
     fn test_find_one_not_found() {
         let (_temp_dir, collection) = setup_collection();
-        collection
-            .insert_one(doc! { "name": "Alice" })
-            .unwrap();
+        collection.insert_one(doc! { "name": "Alice" }).unwrap();
 
         let result = collection.find_one(doc! { "name": "Bob" }).unwrap();
         assert!(result.is_none());
@@ -3356,16 +3373,17 @@ mod tests {
         assert_eq!(result.matched_count, 1);
         assert_eq!(result.modified_count, 1);
 
-        let doc = collection.find_one(doc! { "name": "Alice" }).unwrap().unwrap();
+        let doc = collection
+            .find_one(doc! { "name": "Alice" })
+            .unwrap()
+            .unwrap();
         assert_eq!(doc.get_i32("age").unwrap(), 31);
     }
 
     #[test]
     fn test_update_one_no_match() {
         let (_temp_dir, collection) = setup_collection();
-        collection
-            .insert_one(doc! { "name": "Alice" })
-            .unwrap();
+        collection.insert_one(doc! { "name": "Alice" }).unwrap();
 
         let result = collection
             .update_one(doc! { "name": "Bob" }, doc! { "$set": { "age": 30 } })
@@ -3403,12 +3421,8 @@ mod tests {
     #[test]
     fn test_delete_one() {
         let (_temp_dir, collection) = setup_collection();
-        collection
-            .insert_one(doc! { "name": "Alice" })
-            .unwrap();
-        collection
-            .insert_one(doc! { "name": "Bob" })
-            .unwrap();
+        collection.insert_one(doc! { "name": "Alice" }).unwrap();
+        collection.insert_one(doc! { "name": "Bob" }).unwrap();
 
         let result = collection.delete_one(doc! { "name": "Alice" }).unwrap();
         assert_eq!(result.deleted_count, 1);
@@ -3421,9 +3435,7 @@ mod tests {
     #[test]
     fn test_delete_one_no_match() {
         let (_temp_dir, collection) = setup_collection();
-        collection
-            .insert_one(doc! { "name": "Alice" })
-            .unwrap();
+        collection.insert_one(doc! { "name": "Alice" }).unwrap();
 
         let result = collection.delete_one(doc! { "name": "Bob" }).unwrap();
         assert_eq!(result.deleted_count, 0);
@@ -3503,7 +3515,9 @@ mod tests {
         let (_temp_dir, collection) = setup_collection();
 
         // Create compound index
-        let index_name = collection.create_index(doc! { "age": 1, "name": -1 }, None).unwrap();
+        let index_name = collection
+            .create_index(doc! { "age": 1, "name": -1 }, None)
+            .unwrap();
         assert!(index_name.contains("age_1"));
         assert!(index_name.contains("name_-1"));
 
@@ -3550,22 +3564,29 @@ mod tests {
         let (_temp_dir, collection) = setup_collection();
 
         // Insert documents
-        collection.insert_one(doc! { "email": "alice@example.com", "name": "Alice" }).unwrap();
+        collection
+            .insert_one(doc! { "email": "alice@example.com", "name": "Alice" })
+            .unwrap();
 
         // Create unique index
-        let index_name = collection.create_index(
-            doc! { "email": 1 },
-            Some(crate::index::IndexOptions {
-                unique: true,
-                ..Default::default()
-            })
-        ).unwrap();
+        let index_name = collection
+            .create_index(
+                doc! { "email": 1 },
+                Some(crate::index::IndexOptions {
+                    unique: true,
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
         assert_eq!(index_name, "email_1");
 
         // Try to insert duplicate - should fail
         let result = collection.insert_one(doc! { "email": "alice@example.com", "name": "Alice2" });
         assert!(result.is_err());
-        assert!(matches!(result, Err(CollectionError::UniqueConstraintViolation(_))));
+        assert!(matches!(
+            result,
+            Err(CollectionError::UniqueConstraintViolation(_))
+        ));
     }
 
     #[test]
@@ -3573,9 +3594,15 @@ mod tests {
         let (_temp_dir, collection) = setup_collection();
 
         // Insert documents first
-        collection.insert_one(doc! { "email": "alice@example.com", "age": 30 }).unwrap();
-        collection.insert_one(doc! { "email": "bob@example.com", "age": 25 }).unwrap();
-        collection.insert_one(doc! { "email": "charlie@example.com", "age": 35 }).unwrap();
+        collection
+            .insert_one(doc! { "email": "alice@example.com", "age": 30 })
+            .unwrap();
+        collection
+            .insert_one(doc! { "email": "bob@example.com", "age": 25 })
+            .unwrap();
+        collection
+            .insert_one(doc! { "email": "charlie@example.com", "age": 35 })
+            .unwrap();
 
         // Create index on existing data
         let index_name = collection.create_index(doc! { "email": 1 }, None).unwrap();
@@ -3596,7 +3623,10 @@ mod tests {
         // Try to create same index again - should fail
         let result = collection.create_index(doc! { "email": 1 }, None);
         assert!(result.is_err());
-        assert!(matches!(result, Err(CollectionError::IndexAlreadyExists(_))));
+        assert!(matches!(
+            result,
+            Err(CollectionError::IndexAlreadyExists(_))
+        ));
     }
 
     #[test]
@@ -3610,7 +3640,9 @@ mod tests {
         // Create multiple indexes
         collection.create_index(doc! { "email": 1 }, None).unwrap();
         collection.create_index(doc! { "age": 1 }, None).unwrap();
-        collection.create_index(doc! { "name": 1, "age": -1 }, None).unwrap();
+        collection
+            .create_index(doc! { "name": 1, "age": -1 }, None)
+            .unwrap();
 
         // List indexes
         let indexes = collection.list_indexes().unwrap();
@@ -3665,7 +3697,9 @@ mod tests {
         collection.create_index(doc! { "email": 1 }, None).unwrap();
 
         // Insert document
-        collection.insert_one(doc! { "email": "alice@example.com", "name": "Alice" }).unwrap();
+        collection
+            .insert_one(doc! { "email": "alice@example.com", "name": "Alice" })
+            .unwrap();
 
         // Index should be maintained (verified implicitly by successful insert)
         let count = collection.count_documents(None).unwrap();
@@ -3677,19 +3711,26 @@ mod tests {
         let (_temp_dir, collection) = setup_collection();
 
         // Insert document
-        collection.insert_one(doc! { "email": "alice@example.com", "age": 30 }).unwrap();
+        collection
+            .insert_one(doc! { "email": "alice@example.com", "age": 30 })
+            .unwrap();
 
         // Create index
         collection.create_index(doc! { "email": 1 }, None).unwrap();
 
         // Update document
-        collection.update_one(
-            doc! { "email": "alice@example.com" },
-            doc! { "$set": { "age": 31 } }
-        ).unwrap();
+        collection
+            .update_one(
+                doc! { "email": "alice@example.com" },
+                doc! { "$set": { "age": 31 } },
+            )
+            .unwrap();
 
         // Verify update worked
-        let doc = collection.find_one(doc! { "email": "alice@example.com" }).unwrap().unwrap();
+        let doc = collection
+            .find_one(doc! { "email": "alice@example.com" })
+            .unwrap()
+            .unwrap();
         assert_eq!(doc.get_i32("age").unwrap(), 31);
     }
 
@@ -3698,14 +3739,20 @@ mod tests {
         let (_temp_dir, collection) = setup_collection();
 
         // Insert documents
-        collection.insert_one(doc! { "email": "alice@example.com", "name": "Alice" }).unwrap();
-        collection.insert_one(doc! { "email": "bob@example.com", "name": "Bob" }).unwrap();
+        collection
+            .insert_one(doc! { "email": "alice@example.com", "name": "Alice" })
+            .unwrap();
+        collection
+            .insert_one(doc! { "email": "bob@example.com", "name": "Bob" })
+            .unwrap();
 
         // Create index
         collection.create_index(doc! { "email": 1 }, None).unwrap();
 
         // Delete document
-        let result = collection.delete_one(doc! { "email": "alice@example.com" }).unwrap();
+        let result = collection
+            .delete_one(doc! { "email": "alice@example.com" })
+            .unwrap();
         assert_eq!(result.deleted_count, 1);
 
         // Verify document is gone
@@ -3718,8 +3765,12 @@ mod tests {
         let (_temp_dir, collection) = setup_collection();
 
         // Insert documents with duplicate values
-        collection.insert_one(doc! { "email": "alice@example.com", "name": "Alice1" }).unwrap();
-        collection.insert_one(doc! { "email": "alice@example.com", "name": "Alice2" }).unwrap();
+        collection
+            .insert_one(doc! { "email": "alice@example.com", "name": "Alice1" })
+            .unwrap();
+        collection
+            .insert_one(doc! { "email": "alice@example.com", "name": "Alice2" })
+            .unwrap();
 
         // Try to create unique index - should fail
         let result = collection.create_index(
@@ -3727,10 +3778,13 @@ mod tests {
             Some(crate::index::IndexOptions {
                 unique: true,
                 ..Default::default()
-            })
+            }),
         );
         assert!(result.is_err());
-        assert!(matches!(result, Err(CollectionError::UniqueConstraintViolation(_))));
+        assert!(matches!(
+            result,
+            Err(CollectionError::UniqueConstraintViolation(_))
+        ));
     }
 
     #[test]
@@ -3738,25 +3792,34 @@ mod tests {
         let (_temp_dir, collection) = setup_collection();
 
         // Insert documents
-        collection.insert_one(doc! { "email": "alice@example.com", "name": "Alice" }).unwrap();
-        collection.insert_one(doc! { "email": "bob@example.com", "name": "Bob" }).unwrap();
+        collection
+            .insert_one(doc! { "email": "alice@example.com", "name": "Alice" })
+            .unwrap();
+        collection
+            .insert_one(doc! { "email": "bob@example.com", "name": "Bob" })
+            .unwrap();
 
         // Create unique index
-        collection.create_index(
-            doc! { "email": 1 },
-            Some(crate::index::IndexOptions {
-                unique: true,
-                ..Default::default()
-            })
-        ).unwrap();
+        collection
+            .create_index(
+                doc! { "email": 1 },
+                Some(crate::index::IndexOptions {
+                    unique: true,
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
 
         // Try to update to create duplicate - should fail
         let result = collection.update_one(
             doc! { "email": "bob@example.com" },
-            doc! { "$set": { "email": "alice@example.com" } }
+            doc! { "$set": { "email": "alice@example.com" } },
         );
         assert!(result.is_err());
-        assert!(matches!(result, Err(CollectionError::UniqueConstraintViolation(_))));
+        assert!(matches!(
+            result,
+            Err(CollectionError::UniqueConstraintViolation(_))
+        ));
     }
 
     #[test]
@@ -3774,8 +3837,12 @@ mod tests {
         let (_temp_dir, collection) = setup_collection();
 
         // Insert documents
-        collection.insert_one(doc! { "email": "alice@example.com", "age": 30, "status": "active" }).unwrap();
-        collection.insert_one(doc! { "email": "bob@example.com", "age": 25, "status": "inactive" }).unwrap();
+        collection
+            .insert_one(doc! { "email": "alice@example.com", "age": 30, "status": "active" })
+            .unwrap();
+        collection
+            .insert_one(doc! { "email": "bob@example.com", "age": 25, "status": "inactive" })
+            .unwrap();
 
         // Create multiple indexes
         collection.create_index(doc! { "email": 1 }, None).unwrap();
@@ -3787,7 +3854,9 @@ mod tests {
         assert_eq!(indexes.len(), 3);
 
         // All CRUD operations should still work
-        collection.insert_one(doc! { "email": "charlie@example.com", "age": 35, "status": "active" }).unwrap();
+        collection
+            .insert_one(doc! { "email": "charlie@example.com", "age": 35, "status": "active" })
+            .unwrap();
         let count = collection.count_documents(None).unwrap();
         assert_eq!(count, 3);
     }
@@ -3801,15 +3870,23 @@ mod tests {
         let (_temp_dir, collection) = setup_collection();
 
         // Insert test data
-        collection.insert_one(doc! { "email": "alice@example.com", "name": "Alice" }).unwrap();
-        collection.insert_one(doc! { "email": "bob@example.com", "name": "Bob" }).unwrap();
-        collection.insert_one(doc! { "email": "charlie@example.com", "name": "Charlie" }).unwrap();
+        collection
+            .insert_one(doc! { "email": "alice@example.com", "name": "Alice" })
+            .unwrap();
+        collection
+            .insert_one(doc! { "email": "bob@example.com", "name": "Bob" })
+            .unwrap();
+        collection
+            .insert_one(doc! { "email": "charlie@example.com", "name": "Charlie" })
+            .unwrap();
 
         // Create index
         collection.create_index(doc! { "email": 1 }, None).unwrap();
 
         // Query should use index (equality query)
-        let result = collection.find_one(doc! { "email": "bob@example.com" }).unwrap();
+        let result = collection
+            .find_one(doc! { "email": "bob@example.com" })
+            .unwrap();
         assert!(result.is_some());
         assert_eq!(result.unwrap().get_str("name").unwrap(), "Bob");
     }
@@ -3820,7 +3897,9 @@ mod tests {
 
         // Insert test data
         for i in 1..=10 {
-            collection.insert_one(doc! { "age": i * 10, "name": format!("Person{}", i) }).unwrap();
+            collection
+                .insert_one(doc! { "age": i * 10, "name": format!("Person{}", i) })
+                .unwrap();
         }
 
         // Create index on age
@@ -3836,8 +3915,12 @@ mod tests {
         let (_temp_dir, collection) = setup_collection();
 
         // Insert test data (no index)
-        collection.insert_one(doc! { "name": "Alice", "city": "NYC" }).unwrap();
-        collection.insert_one(doc! { "name": "Bob", "city": "SF" }).unwrap();
+        collection
+            .insert_one(doc! { "name": "Alice", "city": "NYC" })
+            .unwrap();
+        collection
+            .insert_one(doc! { "name": "Bob", "city": "SF" })
+            .unwrap();
 
         // Query without index should still work (collection scan)
         let results = collection.find(doc! { "city": "NYC" }).unwrap();
@@ -3850,15 +3933,21 @@ mod tests {
         let (_temp_dir, collection) = setup_collection();
 
         // Insert test data
-        collection.insert_one(doc! { "email": "alice@example.com", "age": 30 }).unwrap();
-        collection.insert_one(doc! { "email": "bob@example.com", "age": 25 }).unwrap();
+        collection
+            .insert_one(doc! { "email": "alice@example.com", "age": 30 })
+            .unwrap();
+        collection
+            .insert_one(doc! { "email": "bob@example.com", "age": 25 })
+            .unwrap();
 
         // Create multiple indexes
         collection.create_index(doc! { "email": 1 }, None).unwrap();
         collection.create_index(doc! { "age": 1 }, None).unwrap();
 
         // Query on email should use email index
-        let result = collection.find_one(doc! { "email": "alice@example.com" }).unwrap();
+        let result = collection
+            .find_one(doc! { "email": "alice@example.com" })
+            .unwrap();
         assert!(result.is_some());
         assert_eq!(result.unwrap().get_i32("age").unwrap(), 30);
     }
@@ -3869,11 +3958,13 @@ mod tests {
 
         // Insert many documents
         for i in 1..=100 {
-            collection.insert_one(doc! {
-                "user_id": i,
-                "email": format!("user{}@example.com", i),
-                "score": i * 10
-            }).unwrap();
+            collection
+                .insert_one(doc! {
+                    "user_id": i,
+                    "email": format!("user{}@example.com", i),
+                    "score": i * 10
+                })
+                .unwrap();
         }
 
         // Create indexes
@@ -3881,7 +3972,9 @@ mod tests {
         collection.create_index(doc! { "score": 1 }, None).unwrap();
 
         // Test equality query with index
-        let result = collection.find_one(doc! { "email": "user50@example.com" }).unwrap();
+        let result = collection
+            .find_one(doc! { "email": "user50@example.com" })
+            .unwrap();
         assert!(result.is_some());
         assert_eq!(result.unwrap().get_i32("user_id").unwrap(), 50);
 
@@ -3895,12 +3988,20 @@ mod tests {
         let (_temp_dir, collection) = setup_collection();
 
         // Insert test data
-        collection.insert_one(doc! { "category": "books", "price": 10 }).unwrap();
-        collection.insert_one(doc! { "category": "books", "price": 20 }).unwrap();
-        collection.insert_one(doc! { "category": "electronics", "price": 100 }).unwrap();
+        collection
+            .insert_one(doc! { "category": "books", "price": 10 })
+            .unwrap();
+        collection
+            .insert_one(doc! { "category": "books", "price": 20 })
+            .unwrap();
+        collection
+            .insert_one(doc! { "category": "electronics", "price": 100 })
+            .unwrap();
 
         // Create compound index
-        collection.create_index(doc! { "category": 1, "price": 1 }, None).unwrap();
+        collection
+            .create_index(doc! { "category": 1, "price": 1 }, None)
+            .unwrap();
 
         // Query on first field should use index
         let results = collection.find(doc! { "category": "books" }).unwrap();
@@ -3916,11 +4017,17 @@ mod tests {
         let (_temp_dir, collection) = setup_collection();
 
         // Insert test data without index
-        collection.insert_one(doc! { "name": "Alice", "age": 30 }).unwrap();
-        collection.insert_one(doc! { "name": "Bob", "age": 25 }).unwrap();
+        collection
+            .insert_one(doc! { "name": "Alice", "age": 30 })
+            .unwrap();
+        collection
+            .insert_one(doc! { "name": "Bob", "age": 25 })
+            .unwrap();
 
         // Explain query without index
-        let explain = collection.explain_find_one(doc! { "name": "Alice" }).unwrap();
+        let explain = collection
+            .explain_find_one(doc! { "name": "Alice" })
+            .unwrap();
 
         // Should use collection scan
         assert!(matches!(
@@ -3937,14 +4044,20 @@ mod tests {
         let (_temp_dir, collection) = setup_collection();
 
         // Insert test data
-        collection.insert_one(doc! { "email": "alice@example.com", "age": 30 }).unwrap();
-        collection.insert_one(doc! { "email": "bob@example.com", "age": 25 }).unwrap();
+        collection
+            .insert_one(doc! { "email": "alice@example.com", "age": 30 })
+            .unwrap();
+        collection
+            .insert_one(doc! { "email": "bob@example.com", "age": 25 })
+            .unwrap();
 
         // Create index
         collection.create_index(doc! { "email": 1 }, None).unwrap();
 
         // Explain equality query with index
-        let explain = collection.explain_find_one(doc! { "email": "alice@example.com" }).unwrap();
+        let explain = collection
+            .explain_find_one(doc! { "email": "alice@example.com" })
+            .unwrap();
 
         // Should use index seek
         assert!(matches!(
@@ -3961,14 +4074,18 @@ mod tests {
 
         // Insert test data
         for i in 1..=10 {
-            collection.insert_one(doc! { "age": i * 10, "name": format!("Person{}", i) }).unwrap();
+            collection
+                .insert_one(doc! { "age": i * 10, "name": format!("Person{}", i) })
+                .unwrap();
         }
 
         // Create index
         collection.create_index(doc! { "age": 1 }, None).unwrap();
 
         // Explain range query
-        let explain = collection.explain_find(doc! { "age": { "$gte": 50 } }).unwrap();
+        let explain = collection
+            .explain_find(doc! { "age": { "$gte": 50 } })
+            .unwrap();
 
         // Should use index scan
         assert!(matches!(
@@ -3985,11 +4102,17 @@ mod tests {
 
         // Insert many documents
         for i in 1..=100 {
-            collection.insert_one(doc! { "value": i, "category": if i % 10 == 0 { "special" } else { "normal" } }).unwrap();
+            collection
+                .insert_one(
+                    doc! { "value": i, "category": if i % 10 == 0 { "special" } else { "normal" } },
+                )
+                .unwrap();
         }
 
         // Explain query that matches 10% of documents
-        let explain = collection.explain_find(doc! { "category": "special" }).unwrap();
+        let explain = collection
+            .explain_find(doc! { "category": "special" })
+            .unwrap();
 
         assert_eq!(explain.execution_stats.documents_examined, 100);
         assert_eq!(explain.execution_stats.documents_returned, 10);
@@ -4002,10 +4125,14 @@ mod tests {
         let (_temp_dir, collection) = setup_collection();
 
         // Insert test data
-        collection.insert_one(doc! { "email": "alice@example.com" }).unwrap();
+        collection
+            .insert_one(doc! { "email": "alice@example.com" })
+            .unwrap();
         collection.create_index(doc! { "email": 1 }, None).unwrap();
 
-        let explain = collection.explain_find_one(doc! { "email": "alice@example.com" }).unwrap();
+        let explain = collection
+            .explain_find_one(doc! { "email": "alice@example.com" })
+            .unwrap();
         let summary = explain.summary();
 
         // Summary should contain key information
@@ -4033,14 +4160,18 @@ mod tests {
         let (_temp_dir, collection) = setup_collection();
 
         // Insert test data
-        collection.insert_one(doc! { "email": "alice@example.com", "age": 30 }).unwrap();
+        collection
+            .insert_one(doc! { "email": "alice@example.com", "age": 30 })
+            .unwrap();
 
         // Create multiple indexes
         collection.create_index(doc! { "email": 1 }, None).unwrap();
         collection.create_index(doc! { "age": 1 }, None).unwrap();
 
         // Explain should select best index
-        let explain = collection.explain_find_one(doc! { "email": "alice@example.com" }).unwrap();
+        let explain = collection
+            .explain_find_one(doc! { "email": "alice@example.com" })
+            .unwrap();
 
         assert_eq!(explain.index_used, Some("email_1".to_string()));
         assert!(matches!(
@@ -4059,7 +4190,9 @@ mod tests {
 
         for i in 0..20 {
             collection
-                .insert_one(doc! { "status": if i % 2 == 0 { "active" } else { "inactive" }, "val": i })
+                .insert_one(
+                    doc! { "status": if i % 2 == 0 { "active" } else { "inactive" }, "val": i },
+                )
                 .unwrap();
         }
 
@@ -4083,9 +4216,15 @@ mod tests {
     fn test_aggregate_merges_consecutive_matches() {
         let (_temp_dir, collection) = setup_collection();
 
-        collection.insert_one(doc! { "status": "active", "age": 30 }).unwrap();
-        collection.insert_one(doc! { "status": "active", "age": 15 }).unwrap();
-        collection.insert_one(doc! { "status": "inactive", "age": 40 }).unwrap();
+        collection
+            .insert_one(doc! { "status": "active", "age": 30 })
+            .unwrap();
+        collection
+            .insert_one(doc! { "status": "active", "age": 15 })
+            .unwrap();
+        collection
+            .insert_one(doc! { "status": "inactive", "age": 40 })
+            .unwrap();
 
         collection.create_index(doc! { "status": 1 }, None).unwrap();
 
@@ -4110,10 +4249,7 @@ mod tests {
         collection.insert_one(doc! { "x": 3 }).unwrap();
 
         let results = collection
-            .aggregate(vec![
-                doc! { "$sort": { "x": -1 } },
-                doc! { "$limit": 2 },
-            ])
+            .aggregate(vec![doc! { "$sort": { "x": -1 } }, doc! { "$limit": 2 }])
             .unwrap();
 
         assert_eq!(results.len(), 2);
@@ -4132,9 +4268,15 @@ mod tests {
     fn test_aggregate_match_not_first_stage_not_pushed_down() {
         let (_temp_dir, collection) = setup_collection();
 
-        collection.insert_one(doc! { "dept": "eng", "salary": 100 }).unwrap();
-        collection.insert_one(doc! { "dept": "eng", "salary": 200 }).unwrap();
-        collection.insert_one(doc! { "dept": "hr", "salary": 150 }).unwrap();
+        collection
+            .insert_one(doc! { "dept": "eng", "salary": 100 })
+            .unwrap();
+        collection
+            .insert_one(doc! { "dept": "eng", "salary": 200 })
+            .unwrap();
+        collection
+            .insert_one(doc! { "dept": "hr", "salary": 150 })
+            .unwrap();
 
         collection.create_index(doc! { "dept": 1 }, None).unwrap();
 
@@ -4165,7 +4307,9 @@ mod tests {
                 .unwrap();
         }
 
-        collection.create_index(doc! { "category": 1 }, None).unwrap();
+        collection
+            .create_index(doc! { "category": 1 }, None)
+            .unwrap();
 
         let results = collection
             .aggregate(vec![
@@ -4212,10 +4356,14 @@ mod tests {
         assert!(explain.plan_reason.contains("No suitable index") || explain.plan_reason.len() > 0);
 
         // With index
-        collection.insert_one(doc! { "email": "test@example.com" }).unwrap();
+        collection
+            .insert_one(doc! { "email": "test@example.com" })
+            .unwrap();
         collection.create_index(doc! { "email": 1 }, None).unwrap();
 
-        let explain = collection.explain_find_one(doc! { "email": "test@example.com" }).unwrap();
+        let explain = collection
+            .explain_find_one(doc! { "email": "test@example.com" })
+            .unwrap();
         assert!(explain.plan_reason.contains("Equality") || explain.plan_reason.contains("email"));
     }
 
@@ -4228,7 +4376,8 @@ mod tests {
         let (_td, col) = setup_collection();
         col.insert_one(doc! { "name": "Alice", "age": 30 }).unwrap();
         col.insert_one(doc! { "name": "Bob", "age": 25 }).unwrap();
-        col.insert_one(doc! { "name": "Charlie", "age": 35 }).unwrap();
+        col.insert_one(doc! { "name": "Charlie", "age": 35 })
+            .unwrap();
 
         let results: Vec<_> = col
             .find_iter(doc! { "age": { "$gte": 30 } })
@@ -4241,8 +4390,10 @@ mod tests {
     #[test]
     fn test_find_iter_with_index() {
         let (_td, col) = setup_collection();
-        col.insert_one(doc! { "email": "a@b.c", "name": "Alice" }).unwrap();
-        col.insert_one(doc! { "email": "b@b.c", "name": "Bob" }).unwrap();
+        col.insert_one(doc! { "email": "a@b.c", "name": "Alice" })
+            .unwrap();
+        col.insert_one(doc! { "email": "b@b.c", "name": "Bob" })
+            .unwrap();
         col.create_index(doc! { "email": 1 }, None).unwrap();
 
         let results: Vec<_> = col

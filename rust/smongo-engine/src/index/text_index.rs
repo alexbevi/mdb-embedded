@@ -19,6 +19,7 @@ use regex::Regex;
 /// `rs_tokenize` in `smongo-py`.  All `$text` evaluation should use this
 /// function so behavior is consistent between indexed and brute-force paths.
 pub fn tokenize(text: &str) -> Vec<String> {
+    #[allow(clippy::expect_used)]
     static WORD_RE: std::sync::LazyLock<Regex> =
         std::sync::LazyLock::new(|| Regex::new(r"\w+").expect("word regex"));
     let lowered = text.to_lowercase();
@@ -95,13 +96,10 @@ impl TextIndex {
             }
         }
         for (token, tf) in term_counts {
-            self.postings
-                .entry(token)
-                .or_default()
-                .push(Posting {
-                    doc_id: doc_id.clone(),
-                    tf,
-                });
+            self.postings.entry(token).or_default().push(Posting {
+                doc_id: doc_id.clone(),
+                tf,
+            });
         }
         self.doc_count += 1;
     }
@@ -212,7 +210,9 @@ impl TextIndex {
             if *pos + len > data.len() {
                 return None;
             }
-            let s = std::str::from_utf8(&data[*pos..*pos + len]).ok()?.to_string();
+            let s = std::str::from_utf8(&data[*pos..*pos + len])
+                .ok()?
+                .to_string();
             *pos += len;
             Some(s)
         };

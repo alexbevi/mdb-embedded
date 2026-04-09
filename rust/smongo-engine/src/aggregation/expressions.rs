@@ -1,10 +1,10 @@
 //! Expression evaluation for aggregation pipeline stages.
 
 use bson::{Bson, Document};
-use chrono::{Datelike, Timelike, TimeZone, Utc};
+use chrono::{Datelike, TimeZone, Timelike, Utc};
 
-use crate::paths::get_value;
 use super::AggregationResult;
+use crate::paths::get_value;
 
 /// Evaluate an aggregation expression against a document.
 ///
@@ -80,7 +80,9 @@ fn evaluate_operator_expression(doc: &Document, op_doc: &Document) -> Aggregatio
         "$hour" => expr_date_part(doc, args, |dt| dt.hour() as i32),
         "$minute" => expr_date_part(doc, args, |dt| dt.minute() as i32),
         "$second" => expr_date_part(doc, args, |dt| dt.second() as i32),
-        "$dayOfWeek" => expr_date_part(doc, args, |dt| dt.weekday().num_days_from_sunday() as i32 + 1),
+        "$dayOfWeek" => expr_date_part(doc, args, |dt| {
+            dt.weekday().num_days_from_sunday() as i32 + 1
+        }),
         "$dayOfYear" => expr_date_part(doc, args, |dt| dt.ordinal() as i32),
         _ => Ok(Bson::Null),
     }
@@ -128,7 +130,10 @@ fn expr_add(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
         match v {
             Bson::Int32(n) => sum += *n as f64,
             Bson::Int64(n) => sum += *n as f64,
-            Bson::Double(n) => { sum += n; has_double = true; }
+            Bson::Double(n) => {
+                sum += n;
+                has_double = true;
+            }
             Bson::Null => return Ok(Bson::Null),
             _ => return Ok(Bson::Null),
         }
@@ -142,7 +147,9 @@ fn expr_add(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
 
 fn expr_subtract(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
     let vals = get_array_args(doc, args)?;
-    if vals.len() != 2 { return Ok(Bson::Null); }
+    if vals.len() != 2 {
+        return Ok(Bson::Null);
+    }
     match (bson_to_f64(&vals[0]), bson_to_f64(&vals[1])) {
         (Some(a), Some(b)) => {
             if matches!(vals[0], Bson::Double(_)) || matches!(vals[1], Bson::Double(_)) {
@@ -163,7 +170,10 @@ fn expr_multiply(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
         match v {
             Bson::Int32(n) => product *= *n as f64,
             Bson::Int64(n) => product *= *n as f64,
-            Bson::Double(n) => { product *= n; has_double = true; }
+            Bson::Double(n) => {
+                product *= n;
+                has_double = true;
+            }
             Bson::Null => return Ok(Bson::Null),
             _ => return Ok(Bson::Null),
         }
@@ -177,7 +187,9 @@ fn expr_multiply(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
 
 fn expr_divide(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
     let vals = get_array_args(doc, args)?;
-    if vals.len() != 2 { return Ok(Bson::Null); }
+    if vals.len() != 2 {
+        return Ok(Bson::Null);
+    }
     match (bson_to_f64(&vals[0]), bson_to_f64(&vals[1])) {
         (Some(a), Some(b)) if b != 0.0 => Ok(Bson::Double(a / b)),
         _ => Ok(Bson::Null),
@@ -186,7 +198,9 @@ fn expr_divide(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
 
 fn expr_mod(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
     let vals = get_array_args(doc, args)?;
-    if vals.len() != 2 { return Ok(Bson::Null); }
+    if vals.len() != 2 {
+        return Ok(Bson::Null);
+    }
     match (bson_to_f64(&vals[0]), bson_to_f64(&vals[1])) {
         (Some(a), Some(b)) if b != 0.0 => {
             if matches!(vals[0], Bson::Double(_)) || matches!(vals[1], Bson::Double(_)) {
@@ -214,12 +228,23 @@ fn expr_concat(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
 
 fn expr_substr(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
     let vals = get_array_args(doc, args)?;
-    if vals.len() != 3 { return Ok(Bson::Null); }
-    let s = match &vals[0] { Bson::String(s) => s.as_str(), _ => return Ok(Bson::String(String::new())) };
+    if vals.len() != 3 {
+        return Ok(Bson::Null);
+    }
+    let s = match &vals[0] {
+        Bson::String(s) => s.as_str(),
+        _ => return Ok(Bson::String(String::new())),
+    };
     let start = bson_to_f64(&vals[1]).unwrap_or(0.0) as usize;
     let len = bson_to_f64(&vals[2]).unwrap_or(-1.0);
-    if start >= s.len() { return Ok(Bson::String(String::new())); }
-    let end = if len < 0.0 { s.len() } else { (start + len as usize).min(s.len()) };
+    if start >= s.len() {
+        return Ok(Bson::String(String::new()));
+    }
+    let end = if len < 0.0 {
+        s.len()
+    } else {
+        (start + len as usize).min(s.len())
+    };
     Ok(Bson::String(s[start..end].to_string()))
 }
 
@@ -302,8 +327,13 @@ fn expr_switch(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
 
 fn expr_array_elem_at(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
     let vals = get_array_args(doc, args)?;
-    if vals.len() != 2 { return Ok(Bson::Null); }
-    let arr = match &vals[0] { Bson::Array(a) => a, _ => return Ok(Bson::Null) };
+    if vals.len() != 2 {
+        return Ok(Bson::Null);
+    }
+    let arr = match &vals[0] {
+        Bson::Array(a) => a,
+        _ => return Ok(Bson::Null),
+    };
     let idx = bson_to_f64(&vals[1]).unwrap_or(0.0) as i64;
     let actual_idx = if idx < 0 { arr.len() as i64 + idx } else { idx } as usize;
     Ok(arr.get(actual_idx).cloned().unwrap_or(Bson::Null))
@@ -326,7 +356,9 @@ fn expr_not(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
 fn expr_and(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
     let vals = get_array_args(doc, args)?;
     for v in &vals {
-        if !is_truthy(v) { return Ok(Bson::Boolean(false)); }
+        if !is_truthy(v) {
+            return Ok(Bson::Boolean(false));
+        }
     }
     Ok(Bson::Boolean(true))
 }
@@ -334,7 +366,9 @@ fn expr_and(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
 fn expr_or(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
     let vals = get_array_args(doc, args)?;
     for v in &vals {
-        if is_truthy(v) { return Ok(Bson::Boolean(true)); }
+        if is_truthy(v) {
+            return Ok(Bson::Boolean(true));
+        }
     }
     Ok(Bson::Boolean(false))
 }
@@ -345,7 +379,9 @@ fn expr_cmp_op(
     pred: fn(std::cmp::Ordering) -> bool,
 ) -> AggregationResult<Bson> {
     let vals = get_array_args(doc, args)?;
-    if vals.len() != 2 { return Ok(Bson::Boolean(false)); }
+    if vals.len() != 2 {
+        return Ok(Bson::Boolean(false));
+    }
     let ord = super::compare_bson(Some(&vals[0]), Some(&vals[1]));
     Ok(Bson::Boolean(pred(ord)))
 }
@@ -361,11 +397,7 @@ fn expr_abs(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
     }
 }
 
-fn expr_unary_f64(
-    doc: &Document,
-    args: &Bson,
-    f: fn(f64) -> f64,
-) -> AggregationResult<Bson> {
+fn expr_unary_f64(doc: &Document, args: &Bson, f: fn(f64) -> f64) -> AggregationResult<Bson> {
     let val = evaluate_expression(doc, args)?;
     match bson_to_f64(&val) {
         Some(n) => Ok(Bson::Double(f(n))),
@@ -425,7 +457,12 @@ fn expr_to_int(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
         Bson::Int32(n) => Ok(Bson::Int32(n)),
         Bson::Int64(n) => Ok(Bson::Int32(n as i32)),
         Bson::Double(n) => Ok(Bson::Int32(n as i32)),
-        Bson::String(s) => s.parse::<i32>().map(Bson::Int32).ok().ok_or_else(|| Bson::Null).or(Ok(Bson::Null)),
+        Bson::String(s) => s
+            .parse::<i32>()
+            .map(Bson::Int32)
+            .ok()
+            .ok_or_else(|| Bson::Null)
+            .or(Ok(Bson::Null)),
         Bson::Boolean(b) => Ok(Bson::Int32(if b { 1 } else { 0 })),
         _ => Ok(Bson::Null),
     }
@@ -450,7 +487,9 @@ fn expr_to_bool(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
 
 fn expr_in(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
     let vals = get_array_args(doc, args)?;
-    if vals.len() != 2 { return Ok(Bson::Boolean(false)); }
+    if vals.len() != 2 {
+        return Ok(Bson::Boolean(false));
+    }
     let needle = &vals[0];
     match &vals[1] {
         Bson::Array(arr) => Ok(Bson::Boolean(arr.contains(needle))),
@@ -541,7 +580,11 @@ fn expr_let(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
             let val = evaluate_expression(doc, var_expr)?;
             let temp_field = format!("__let_{}", var_name);
             scoped_doc.insert(temp_field.clone(), val);
-            in_replaced = replace_var_refs(&in_replaced, &format!("$${}", var_name), &format!("${}", temp_field));
+            in_replaced = replace_var_refs(
+                &in_replaced,
+                &format!("$${}", var_name),
+                &format!("${}", temp_field),
+            );
         }
     }
     evaluate_expression(&scoped_doc, &in_replaced)
@@ -601,14 +644,20 @@ mod tests {
     #[test]
     fn test_field_ref() {
         let doc = doc! { "x": 42 };
-        assert_eq!(evaluate_expression(&doc, &Bson::String("$x".into())).unwrap(), Bson::Int32(42));
+        assert_eq!(
+            evaluate_expression(&doc, &Bson::String("$x".into())).unwrap(),
+            Bson::Int32(42)
+        );
     }
 
     #[test]
     fn test_add() {
         let doc = doc! { "a": 10, "b": 20 };
         let expr = doc! { "$add": ["$a", "$b"] };
-        assert_eq!(evaluate_expression(&doc, &Bson::Document(expr)).unwrap(), Bson::Int64(30));
+        assert_eq!(
+            evaluate_expression(&doc, &Bson::Document(expr)).unwrap(),
+            Bson::Int64(30)
+        );
     }
 
     #[test]
@@ -624,7 +673,8 @@ mod tests {
     #[test]
     fn test_cond() {
         let d = doc! { "age": 20 };
-        let expr = doc! { "$cond": { "if": { "$gte": ["$age", 18] }, "then": "adult", "else": "minor" } };
+        let expr =
+            doc! { "$cond": { "if": { "$gte": ["$age", 18] }, "then": "adult", "else": "minor" } };
         assert_eq!(
             evaluate_expression(&d, &Bson::Document(expr)).unwrap(),
             Bson::String("adult".into())
@@ -646,7 +696,10 @@ mod tests {
         let dt = bson::DateTime::from_millis(1704067200000); // 2024-01-01T00:00:00Z
         let d = doc! { "created": dt };
         let expr = doc! { "$year": "$created" };
-        assert_eq!(evaluate_expression(&d, &Bson::Document(expr)).unwrap(), Bson::Int32(2024));
+        assert_eq!(
+            evaluate_expression(&d, &Bson::Document(expr)).unwrap(),
+            Bson::Int32(2024)
+        );
     }
 
     #[test]
@@ -654,7 +707,10 @@ mod tests {
         let dt = bson::DateTime::from_millis(1711929600000); // 2024-04-01T00:00:00Z
         let d = doc! { "created": dt };
         let expr = doc! { "$month": "$created" };
-        assert_eq!(evaluate_expression(&d, &Bson::Document(expr)).unwrap(), Bson::Int32(4));
+        assert_eq!(
+            evaluate_expression(&d, &Bson::Document(expr)).unwrap(),
+            Bson::Int32(4)
+        );
     }
 
     #[test]
@@ -662,7 +718,10 @@ mod tests {
         let dt = bson::DateTime::from_millis(1705363200000); // 2024-01-16T00:00:00Z
         let d = doc! { "created": dt };
         let expr = doc! { "$dayOfMonth": "$created" };
-        assert_eq!(evaluate_expression(&d, &Bson::Document(expr)).unwrap(), Bson::Int32(16));
+        assert_eq!(
+            evaluate_expression(&d, &Bson::Document(expr)).unwrap(),
+            Bson::Int32(16)
+        );
     }
 
     #[test]
@@ -689,7 +748,10 @@ mod tests {
         let dt = bson::DateTime::from_millis(1704067200000);
         let d = doc! { "ts": dt };
         let expr = doc! { "$dayOfWeek": "$ts" };
-        assert_eq!(evaluate_expression(&d, &Bson::Document(expr)).unwrap(), Bson::Int32(2));
+        assert_eq!(
+            evaluate_expression(&d, &Bson::Document(expr)).unwrap(),
+            Bson::Int32(2)
+        );
     }
 
     #[test]
@@ -698,20 +760,29 @@ mod tests {
         let dt = bson::DateTime::from_millis(1706745600000);
         let d = doc! { "ts": dt };
         let expr = doc! { "$dayOfYear": "$ts" };
-        assert_eq!(evaluate_expression(&d, &Bson::Document(expr)).unwrap(), Bson::Int32(32));
+        assert_eq!(
+            evaluate_expression(&d, &Bson::Document(expr)).unwrap(),
+            Bson::Int32(32)
+        );
     }
 
     #[test]
     fn test_date_null_on_non_date() {
         let d = doc! { "x": 42 };
         let expr = doc! { "$year": "$x" };
-        assert_eq!(evaluate_expression(&d, &Bson::Document(expr)).unwrap(), Bson::Null);
+        assert_eq!(
+            evaluate_expression(&d, &Bson::Document(expr)).unwrap(),
+            Bson::Null
+        );
     }
 
     #[test]
     fn test_date_null_on_missing_field() {
         let d = doc! {};
         let expr = doc! { "$month": "$missing" };
-        assert_eq!(evaluate_expression(&d, &Bson::Document(expr)).unwrap(), Bson::Null);
+        assert_eq!(
+            evaluate_expression(&d, &Bson::Document(expr)).unwrap(),
+            Bson::Null
+        );
     }
 }

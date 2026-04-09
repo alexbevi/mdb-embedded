@@ -22,15 +22,58 @@ from .results import DeleteResult, InsertResult, UpdateResult
 
 
 class _ChangeStreamWrapper:
-    """Thin wrapper around the Rust RedbChangeStream that adds Python protocols."""
+    """Wrapper around the Rust RedbChangeStream with resume tokens and long-polling.
 
-    def __init__(self, inner: Any) -> None:
+    Each change event carries a ``_resumeToken`` containing the oplog
+    timestamp and a monotonic sequence number.  Passing this token as
+    ``resume_after`` to :meth:`RedbCollection.watch` restarts the stream
+    from the event *after* the one identified by the token.
+    """
+
+    def __init__(
+        self,
+        inner: Any,
+        *,
+        resume_after: dict[str, Any] | None = None,
+        max_await_time_ms: int | None = None,
+    ) -> None:
         self._inner = inner
+        self._resume_token: dict[str, Any] | None = resume_after
+        self._seq: int = 0
+        self._closed = False
+        self._max_await_s = (max_await_time_ms or 30_000) / 1000.0
+        self._skipping = resume_after is not None
+        self._resume_ts = (resume_after or {}).get("ts")
+        self._resume_seq = (resume_after or {}).get("seq", 0)
+
+    @property
+    def resume_token(self) -> dict[str, Any] | None:
+        """The resume token of the most recently returned event."""
+        return self._resume_token
 
     def try_next(self) -> dict[str, Any] | None:
-        return self._inner.try_next()
+        """Non-blocking: return the next event or ``None``."""
+        while True:
+            ev = self._inner.try_next()
+            if ev is None:
+                return None
+            if self._skipping:
+                ev_ts = ev.get("_ts") or ev.get("clusterTime")
+                if ev_ts is not None and self._resume_ts is not None:
+                    if ev_ts < self._resume_ts:
+                        continue
+                    if ev_ts == self._resume_ts and self._seq <= self._resume_seq:
+                        self._seq += 1
+                        continue
+                self._skipping = False
+            self._seq += 1
+            token = {"ts": ev.get("_ts") or ev.get("clusterTime"), "seq": self._seq}
+            self._resume_token = token
+            ev["_resumeToken"] = token
+            return ev
 
     def close(self) -> None:
+        self._closed = True
         self._inner.close()
 
     def __enter__(self) -> _ChangeStreamWrapper:
@@ -43,12 +86,16 @@ class _ChangeStreamWrapper:
         return self
 
     def __next__(self) -> dict[str, Any]:
-        import time
-        for _ in range(100):
-            ev = self._inner.try_next()
+        import time as _t
+
+        deadline = _t.monotonic() + self._max_await_s
+        while not self._closed:
+            ev = self.try_next()
             if ev is not None:
                 return ev
-            time.sleep(0.05)
+            if _t.monotonic() >= deadline:
+                raise StopIteration
+            _t.sleep(0.05)
         raise StopIteration
 
 
@@ -61,9 +108,7 @@ def _is_pk_equality_filter(query: dict[str, Any]) -> bool:
     return not isinstance(qid, dict)
 
 
-def _redb_explain_plan_kind(
-    execution_plan: Any, query_filter: dict[str, Any] | None
-) -> str:
+def _redb_explain_plan_kind(execution_plan: Any, query_filter: dict[str, Any] | None) -> str:
     """Map engine ``execution_plan`` BSON shape to a MongoDB-style ``plan`` string."""
     qf = query_filter or {}
     if execution_plan is None:
@@ -252,15 +297,32 @@ class RedbCollection:
                 out.append(doc)
         return out
 
-    def watch(self, pipeline: list[Any] | None = None) -> _ChangeStreamWrapper:
-        """Local change stream over the redb oplog hub."""
-        return _ChangeStreamWrapper(self._rust_coll.watch(pipeline))
+    def watch(
+        self,
+        pipeline: list[Any] | None = None,
+        *,
+        resume_after: dict[str, Any] | None = None,
+        max_await_time_ms: int | None = None,
+    ) -> _ChangeStreamWrapper:
+        """Open a change stream on this collection, optionally resuming from a token.
+
+        Args:
+            pipeline: Optional ``$match`` filter pipeline for server-side filtering.
+            resume_after: Resume token returned by a previous stream (``event["_resumeToken"]``).
+                The stream will skip events up to and including the token, then deliver
+                subsequent events.
+            max_await_time_ms: Maximum time (ms) that :meth:`__next__` blocks waiting
+                for a new event before raising ``StopIteration``.  Defaults to 30 000 ms.
+        """
+        return _ChangeStreamWrapper(
+            self._rust_coll.watch(pipeline),
+            resume_after=resume_after,
+            max_await_time_ms=max_await_time_ms,
+        )
 
     # CRUD operations - delegate directly to Rust
 
-    def insert_one(
-        self, document: dict[str, Any], *, _internal: bool = False
-    ) -> InsertResult:
+    def insert_one(self, document: dict[str, Any], *, _internal: bool = False) -> InsertResult:
         """Insert a single document."""
         doc = dict(document)
         if not _internal and self._validator:
@@ -300,9 +362,7 @@ class RedbCollection:
         query = filter or {}
         return self._rust_coll.find(query, projection)
 
-    def find_streaming(
-        self, query: dict[str, Any] | None = None
-    ) -> Iterator[dict[str, Any]]:
+    def find_streaming(self, query: dict[str, Any] | None = None) -> Iterator[dict[str, Any]]:
         """Iterate matches for *query* (materialized via :meth:`find`; lazy streaming TBD)."""
         return iter(self.find(query or {}))
 
@@ -387,9 +447,7 @@ class RedbCollection:
         _internal: bool = False,
     ) -> UpdateResult:
         """Update a single document."""
-        result = self._rust_coll.update_one(
-            filter, update, internal=_internal, upsert=upsert
-        )
+        result = self._rust_coll.update_one(filter, update, internal=_internal, upsert=upsert)
         return UpdateResult(
             result["matched_count"],
             result["modified_count"],
@@ -405,25 +463,19 @@ class RedbCollection:
         _internal: bool = False,
     ) -> UpdateResult:
         """Update multiple documents."""
-        result = self._rust_coll.update_many(
-            filter, update, internal=_internal, upsert=upsert
-        )
+        result = self._rust_coll.update_many(filter, update, internal=_internal, upsert=upsert)
         return UpdateResult(
             result["matched_count"],
             result["modified_count"],
             result.get("upserted_id"),
         )
 
-    def delete_one(
-        self, filter: dict[str, Any], *, _internal: bool = False
-    ) -> DeleteResult:
+    def delete_one(self, filter: dict[str, Any], *, _internal: bool = False) -> DeleteResult:
         """Delete a single document."""
         result = self._rust_coll.delete_one(filter, internal=_internal)
         return DeleteResult(result["deleted_count"])
 
-    def delete_many(
-        self, filter: dict[str, Any], *, _internal: bool = False
-    ) -> DeleteResult:
+    def delete_many(self, filter: dict[str, Any], *, _internal: bool = False) -> DeleteResult:
         """Delete multiple documents."""
         result = self._rust_coll.delete_many(filter, internal=_internal)
         return DeleteResult(result["deleted_count"])
@@ -441,12 +493,8 @@ class RedbCollection:
     ) -> UpdateResult:
         """Update documents (multi-compatible interface for Collection wrapper)."""
         if multi:
-            return self.update_many(
-                query, update, upsert=upsert, _internal=_internal
-            )
-        return self.update_one(
-            query, update, upsert=upsert, _internal=_internal
-        )
+            return self.update_many(query, update, upsert=upsert, _internal=_internal)
+        return self.update_one(query, update, upsert=upsert, _internal=_internal)
 
     def delete(
         self,
@@ -482,7 +530,7 @@ class RedbCollection:
             keys_doc = {}
             for item in keys:
                 field, direction = item[0], item[1]
-                keys_doc[field] = int(direction) if isinstance(direction, (int, float)) else 1
+                keys_doc[field] = int(direction) if isinstance(direction, int | float) else 1
         else:
             keys_doc = dict(keys)
         opts_doc: dict[str, Any] = {
@@ -572,4 +620,4 @@ class RedbCollection:
         pass
 
 
-__all__ = ["RedbClient", "RedbDB", "RedbCollection"]
+__all__ = ["RedbClient", "RedbCollection", "RedbDB"]

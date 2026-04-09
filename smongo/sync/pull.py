@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from typing import Any
 
 from .._types import Document, Predicate
@@ -95,9 +94,7 @@ class _PullMixin:
             finally:
                 self._record_ns_pull(ns, pulled_before)
 
-    def _detect_remote_deletes(
-        self, ns: str, local_coll: Any, remote_coll: Any
-    ) -> None:
+    def _detect_remote_deletes(self, ns: str, local_coll: Any, remote_coll: Any) -> None:
         """Detect documents deleted on remote by comparing local IDs against the remote.
 
         Queries the remote in batches and removes any local documents whose ``_id``
@@ -164,6 +161,7 @@ class _PullMixin:
             if validator:
                 try:
                     from smongo.storage.redb_engine import validate_document
+
                     validate_document(rdoc, validator)
                 except Exception as exc:
                     log.warning(
@@ -366,9 +364,7 @@ class _PullMixin:
                 if processed == 0:
                     initial_token = getattr(stream, "resume_token", None)
                     if initial_token is not None:
-                        self._set_checkpoint(
-                            token_key, json.dumps(initial_token, default=str)
-                        )
+                        self._set_checkpoint(token_key, json.dumps(initial_token, default=str))
             return True
         except PyMongoError as exc:
             log.warning("Change-stream pull unavailable for %s, falling back: %s", ns, exc)
@@ -387,10 +383,7 @@ class _PullMixin:
         local_hash = self._compute_index_hash(local_indexes)
         remote_hash = self._compute_index_hash(remote_indexes)
         cache_key = f"pull:{ns}"
-        if (
-            local_hash == remote_hash
-            and self._index_hash_cache.get(cache_key) == remote_hash
-        ):
+        if local_hash == remote_hash and self._index_hash_cache.get(cache_key) == remote_hash:
             return
         self._index_hash_cache[cache_key] = remote_hash
 

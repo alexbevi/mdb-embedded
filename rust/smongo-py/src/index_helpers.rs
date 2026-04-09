@@ -12,9 +12,7 @@ pyo3::create_exception!(
 );
 
 fn word_regex() -> Regex {
-    Regex::new(r"\w+").unwrap_or_else(|e| {
-        unreachable!("WORD_RE compile failed: {e}")
-    })
+    Regex::new(r"\w+").unwrap_or_else(|e| unreachable!("WORD_RE compile failed: {e}"))
 }
 
 static WORD_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(word_regex);

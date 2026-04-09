@@ -344,15 +344,11 @@ class TestTwoDsphereRustNear:
                 }
             }
         )
-        assert [d["name"] for d in docs][0] == "Times Square"
+        assert next(d["name"] for d in docs) == "Times Square"
 
     def test_near_legacy_array_with_max(self, local_collection):
-        local_collection.insert_one(
-            {"_id": "a", "location": [-73.9857, 40.7484], "tag": 1}
-        )
-        local_collection.insert_one(
-            {"_id": "b", "location": [-122.4194, 37.7749], "tag": 2}
-        )
+        local_collection.insert_one({"_id": "a", "location": [-73.9857, 40.7484], "tag": 1})
+        local_collection.insert_one({"_id": "b", "location": [-122.4194, 37.7749], "tag": 2})
         local_collection.create_index([("location", "2dsphere")])
         docs = local_collection.find(
             {
@@ -399,12 +395,8 @@ class TestTwoDsphereRustNear:
     def test_sparse_skips_missing_location(self, local_collection):
         local_collection.create_index([("location", "2dsphere")], sparse=True)
         local_collection.insert_one({"_id": "x", "name": "no geo"})
-        local_collection.insert_one(
-            {"_id": "y", "name": "here", "location": NYC}
-        )
-        docs = list(
-            local_collection.find({"location": {"$near": {"$geometry": NYC}}})
-        )
+        local_collection.insert_one({"_id": "y", "name": "here", "location": NYC})
+        docs = list(local_collection.find({"location": {"$near": {"$geometry": NYC}}}))
         assert len(docs) == 1
         assert docs[0]["_id"] == "y"
 
@@ -436,9 +428,7 @@ class TestTwoDsphereGeoWithin:
         r_rad = 50_000 / EARTH_RADIUS_METERS
         center = NYC["coordinates"]
         docs = list(
-            local_collection.find(
-                {"location": {"$geoWithin": {"$centerSphere": [center, r_rad]}}}
-            )
+            local_collection.find({"location": {"$geoWithin": {"$centerSphere": [center, r_rad]}}})
         )
         assert len(docs) == 1
 
@@ -469,9 +459,7 @@ class TestTwoDsphereGeoWithinGeometry:
                 local_collection.find(
                     {
                         "location": {
-                            "$geoWithin": {
-                                "$geometry": {"type": "Polygon", "coordinates": []}
-                            }
+                            "$geoWithin": {"$geometry": {"type": "Polygon", "coordinates": []}}
                         }
                     }
                 )
@@ -536,7 +524,9 @@ class TestTwoDsphereGeoWithinGeometry:
         local_collection.insert_one({"_id": "nyc", "location": NYC})
         local_collection.insert_one({"_id": "sf", "location": SF})
         local_collection.create_index([("location", "2dsphere")])
-        ids = {d["_id"] for d in local_collection.find({"location": {"$geoWithin": {"$geometry": mp}}})}
+        ids = {
+            d["_id"] for d in local_collection.find({"location": {"$geoWithin": {"$geometry": mp}}})
+        }
         assert ids == {"nyc", "sf"}
 
 

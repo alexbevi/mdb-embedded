@@ -67,6 +67,7 @@ pub trait CollectionResolver {
 /// for a matching index and use it instead of brute-force scanning.  Each
 /// method returns `Ok(None)` when no suitable index exists, signalling the
 /// caller to fall back to the default (BinaryHeap / scan) path.
+#[allow(clippy::too_many_arguments)]
 pub trait IndexProvider {
     fn vector_search(
         &self,
@@ -269,10 +270,7 @@ impl<B: StorageBackend> IndexProvider for DatabaseContext<'_, B> {
             crate::planner::ExecutionPlan::SortedIndexScan { .. }
         ) {
             let docs = coll
-                .execute_plan(
-                    &plan.execution_plan,
-                    filter.unwrap_or(&Document::new()),
-                )
+                .execute_plan(&plan.execution_plan, filter.unwrap_or(&Document::new()))
                 .map_err(|e| AggregationError::Other(e.to_string()))?;
             Ok(Some(docs))
         } else {
@@ -449,19 +447,14 @@ pub fn aggregate_stream_with_resolver(
 
         // Peek ahead: $sort followed by $limit → fused stage.
         if i + 1 < pipeline.len() {
-            let is_sort = stage.iter().next().map(|(n, _)| n == "$sort").unwrap_or(false);
-            let next_is_limit = pipeline[i + 1]
-                .iter()
-                .next()
-                .map(|(n, _)| n == "$limit")
-                .unwrap_or(false);
-
-            if is_sort && next_is_limit {
-                let sort_spec = stage.iter().next().unwrap().1;
-                let limit_spec = pipeline[i + 1].iter().next().unwrap().1;
-                stream = stages::stage_sort_limit_stream(stream, sort_spec, limit_spec)?;
-                i += 2;
-                continue;
+            if let (Some((sn, sv)), Some((ln, lv))) =
+                (stage.iter().next(), pipeline[i + 1].iter().next())
+            {
+                if sn == "$sort" && ln == "$limit" {
+                    stream = stages::stage_sort_limit_stream(stream, sv, lv)?;
+                    i += 2;
+                    continue;
+                }
             }
         }
 
@@ -559,9 +552,7 @@ pub fn compare_bson(a: Option<&Bson>, b: Option<&Bson>) -> std::cmp::Ordering {
                 (Bson::Null, Bson::Null) => Ordering::Equal,
                 (na, nb) if as_f64(na).is_some() && as_f64(nb).is_some() => {
                     match (as_f64(na), as_f64(nb)) {
-                        (Some(fa), Some(fb)) => {
-                            fa.partial_cmp(&fb).unwrap_or(Ordering::Equal)
-                        }
+                        (Some(fa), Some(fb)) => fa.partial_cmp(&fb).unwrap_or(Ordering::Equal),
                         _ => Ordering::Equal,
                     }
                 }
@@ -626,11 +617,7 @@ mod tests {
 
     #[test]
     fn test_stage_sort() {
-        let docs = vec![
-            doc! { "age": 30 },
-            doc! { "age": 20 },
-            doc! { "age": 25 },
-        ];
+        let docs = vec![doc! { "age": 30 }, doc! { "age": 20 }, doc! { "age": 25 }];
         let pipeline = vec![doc! { "$sort": { "age": 1 } }];
         let results = aggregate(docs, &pipeline).unwrap();
         assert_eq!(results[0].get_i32("age").unwrap(), 20);
@@ -691,11 +678,7 @@ mod tests {
 
     #[test]
     fn test_group_multiple_accumulators() {
-        let docs = vec![
-            doc! { "x": 10 },
-            doc! { "x": 20 },
-            doc! { "x": 30 },
-        ];
+        let docs = vec![doc! { "x": 10 }, doc! { "x": 20 }, doc! { "x": 30 }];
         let pipeline = vec![doc! {
             "$group": {
                 "_id": bson::Bson::Null,
@@ -731,7 +714,8 @@ mod tests {
             doc! { "name": "Alice", "tags": ["a"] },
             doc! { "name": "Bob" },
         ];
-        let pipeline = vec![doc! { "$unwind": { "path": "$tags", "preserveNullAndEmptyArrays": true } }];
+        let pipeline =
+            vec![doc! { "$unwind": { "path": "$tags", "preserveNullAndEmptyArrays": true } }];
         let results = aggregate(docs, &pipeline).unwrap();
         assert_eq!(results.len(), 2);
     }
@@ -848,11 +832,7 @@ mod tests {
 
     #[test]
     fn test_facet() {
-        let docs = vec![
-            doc! { "x": 1 },
-            doc! { "x": 2 },
-            doc! { "x": 3 },
-        ];
+        let docs = vec![doc! { "x": 1 }, doc! { "x": 2 }, doc! { "x": 3 }];
         let pipeline = vec![doc! { "$facet": {
             "all": [{ "$count": "total" }],
             "top2": [{ "$limit": 2 }],
@@ -927,10 +907,7 @@ mod tests {
 
     #[test]
     fn test_optimize_pipeline_no_match() {
-        let pipeline = vec![
-            doc! { "$sort": { "age": 1 } },
-            doc! { "$limit": 10 },
-        ];
+        let pipeline = vec![doc! { "$sort": { "age": 1 } }, doc! { "$limit": 10 }];
         let (filter, remaining) = optimize_pipeline(&pipeline);
         assert!(filter.is_none());
         assert_eq!(remaining.len(), 2);
@@ -1102,10 +1079,7 @@ mod tests {
 
     #[test]
     fn test_stream_empty_input() {
-        let pipeline = vec![
-            doc! { "$match": { "x": 1 } },
-            doc! { "$sort": { "x": 1 } },
-        ];
+        let pipeline = vec![doc! { "$match": { "x": 1 } }, doc! { "$sort": { "x": 1 } }];
         let results: Vec<Document> = aggregate_stream(vec![], &pipeline)
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
@@ -1182,10 +1156,7 @@ mod tests {
     #[test]
     fn test_stream_skip_and_limit() {
         let docs: Vec<Document> = (0..10).map(|i| doc! { "n": i }).collect();
-        let pipeline = vec![
-            doc! { "$skip": 3 },
-            doc! { "$limit": 4 },
-        ];
+        let pipeline = vec![doc! { "$skip": 3 }, doc! { "$limit": 4 }];
         let results: Vec<Document> = aggregate_stream(docs, &pipeline)
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
@@ -1198,10 +1169,7 @@ mod tests {
     #[test]
     fn test_stream_add_fields_and_unset() {
         let docs = vec![doc! { "x": 10, "y": 20 }];
-        let pipeline = vec![
-            doc! { "$addFields": { "z": 30 } },
-            doc! { "$unset": "y" },
-        ];
+        let pipeline = vec![doc! { "$addFields": { "z": 30 } }, doc! { "$unset": "y" }];
         let results: Vec<Document> = aggregate_stream(docs, &pipeline)
             .unwrap()
             .collect::<Result<Vec<_>, _>>()

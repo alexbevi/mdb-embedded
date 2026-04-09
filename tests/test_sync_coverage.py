@@ -1,7 +1,5 @@
 """Coverage tests for smongo.sync primitives (VectorClock, TombstoneRegistry, etc.)."""
 
-import pytest
-
 from smongo.sync import DEFAULT_TOMBSTONE_TTL_SEC, TombstoneRegistry, VectorClock
 
 

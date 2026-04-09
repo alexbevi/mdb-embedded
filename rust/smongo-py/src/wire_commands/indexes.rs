@@ -72,25 +72,19 @@ fn cmd_list_indexes(
         }
         if let Ok(opts) = idx.get_item("options") {
             if let Ok(opts_dict) = opts.cast::<PyDict>() {
-                if let Ok(pfe) = opts_dict.get_item("partial_filter_expression") {
-                    if let Some(pfe) = pfe {
-                        if !pfe.is_none() {
-                            spec.set_item("partialFilterExpression", pfe)?;
-                        }
+                if let Ok(Some(pfe)) = opts_dict.get_item("partial_filter_expression") {
+                    if !pfe.is_none() {
+                        spec.set_item("partialFilterExpression", pfe)?;
                     }
                 }
-                if let Ok(coll) = opts_dict.get_item("collation") {
-                    if let Some(coll) = coll {
-                        if !coll.is_none() {
-                            spec.set_item("collation", coll)?;
-                        }
+                if let Ok(Some(coll)) = opts_dict.get_item("collation") {
+                    if !coll.is_none() {
+                        spec.set_item("collation", coll)?;
                     }
                 }
-                if let Ok(idx_type) = opts_dict.get_item("index_type") {
-                    if let Some(idx_type) = idx_type {
-                        if !idx_type.is_none() {
-                            spec.set_item("type", idx_type)?;
-                        }
+                if let Ok(Some(idx_type)) = opts_dict.get_item("index_type") {
+                    if !idx_type.is_none() {
+                        spec.set_item("type", idx_type)?;
                     }
                 }
             }

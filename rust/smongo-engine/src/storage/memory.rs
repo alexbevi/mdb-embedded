@@ -169,8 +169,7 @@ impl StorageCursor for MemCursor {
             .current_key
             .as_ref()
             .ok_or_else(|| StorageError::NotFound("cursor not positioned".into()))?;
-        String::from_utf8(b.clone())
-            .map_err(|e| StorageError::Other(format!("key not UTF-8: {e}")))
+        String::from_utf8(b.clone()).map_err(|e| StorageError::Other(format!("key not UTF-8: {e}")))
     }
     fn set_key_raw(&mut self, data: &[u8]) {
         self.pending_key = Some(data.to_vec());
@@ -221,7 +220,10 @@ impl StorageCursor for MemCursor {
         self.entries = None;
         self.materialize()?;
         let seek = self.effective_key()?;
-        let entries = self.entries.as_ref().ok_or(StorageError::Other("not materialized".into()))?;
+        let entries = self
+            .entries
+            .as_ref()
+            .ok_or(StorageError::Other("not materialized".into()))?;
 
         if entries.is_empty() {
             return Err(StorageError::NotFound("table is empty".into()));
@@ -255,7 +257,10 @@ impl StorageCursor for MemCursor {
 
     fn next(&mut self) -> StorageResult<()> {
         self.materialize()?;
-        let entries = self.entries.as_ref().ok_or(StorageError::Other("not materialized".into()))?;
+        let entries = self
+            .entries
+            .as_ref()
+            .ok_or(StorageError::Other("not materialized".into()))?;
         let next_pos = match self.position {
             Some(p) => p + 1,
             None => 0,

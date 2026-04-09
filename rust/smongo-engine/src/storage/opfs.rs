@@ -55,7 +55,9 @@ impl StorageSession for OpfsSession {
 
     fn open_cursor(&self, table_name: &str) -> StorageResult<OpfsCursor> {
         let h = self.handles.lock().unwrap();
-        let handle = h.get(table_name).cloned()
+        let handle = h
+            .get(table_name)
+            .cloned()
             .ok_or_else(|| StorageError::NotFound(table_name.to_string()))?;
 
         let contents = read_sync(&handle)?;
@@ -73,9 +75,15 @@ impl StorageSession for OpfsSession {
         })
     }
 
-    fn begin_transaction(&self) -> StorageResult<()> { Ok(()) }
-    fn commit_transaction(&self) -> StorageResult<()> { Ok(()) }
-    fn rollback_transaction(&self) -> StorageResult<()> { Ok(()) }
+    fn begin_transaction(&self) -> StorageResult<()> {
+        Ok(())
+    }
+    fn commit_transaction(&self) -> StorageResult<()> {
+        Ok(())
+    }
+    fn rollback_transaction(&self) -> StorageResult<()> {
+        Ok(())
+    }
 
     fn open_sibling_session(&self) -> StorageResult<Self> {
         Ok(OpfsSession {
@@ -97,12 +105,18 @@ pub struct OpfsCursor {
 
 impl OpfsCursor {
     fn effective_key(&self) -> StorageResult<Vec<u8>> {
-        self.pending_key.as_ref().or(self.current_key.as_ref()).cloned()
+        self.pending_key
+            .as_ref()
+            .or(self.current_key.as_ref())
+            .cloned()
             .ok_or_else(|| StorageError::Other("no key".into()))
     }
 
     fn effective_value(&self) -> StorageResult<Vec<u8>> {
-        self.pending_value.as_ref().or(self.current_value.as_ref()).cloned()
+        self.pending_value
+            .as_ref()
+            .or(self.current_value.as_ref())
+            .cloned()
             .ok_or_else(|| StorageError::Other("no value".into()))
     }
 }
@@ -112,16 +126,18 @@ impl StorageCursor for OpfsCursor {
         self.pending_key = Some(key.as_bytes().to_vec());
     }
     fn get_key_str(&self) -> StorageResult<String> {
-        let b = self.current_key.as_ref()
+        let b = self
+            .current_key
+            .as_ref()
             .ok_or_else(|| StorageError::NotFound("not positioned".into()))?;
-        String::from_utf8(b.clone())
-            .map_err(|e| StorageError::Other(format!("not UTF-8: {e}")))
+        String::from_utf8(b.clone()).map_err(|e| StorageError::Other(format!("not UTF-8: {e}")))
     }
     fn set_key_raw(&mut self, data: &[u8]) {
         self.pending_key = Some(data.to_vec());
     }
     fn get_key_raw(&self) -> StorageResult<Vec<u8>> {
-        self.current_key.clone()
+        self.current_key
+            .clone()
             .ok_or_else(|| StorageError::NotFound("not positioned".into()))
     }
 
@@ -129,22 +145,26 @@ impl StorageCursor for OpfsCursor {
         self.pending_value = Some(value.as_bytes().to_vec());
     }
     fn get_value_str(&self) -> StorageResult<String> {
-        let b = self.current_value.as_ref()
+        let b = self
+            .current_value
+            .as_ref()
             .ok_or_else(|| StorageError::NotFound("not positioned".into()))?;
-        String::from_utf8(b.clone())
-            .map_err(|e| StorageError::Other(format!("not UTF-8: {e}")))
+        String::from_utf8(b.clone()).map_err(|e| StorageError::Other(format!("not UTF-8: {e}")))
     }
     fn set_value_raw(&mut self, data: &[u8]) {
         self.pending_value = Some(data.to_vec());
     }
     fn get_value_raw(&self) -> StorageResult<Vec<u8>> {
-        self.current_value.clone()
+        self.current_value
+            .clone()
             .ok_or_else(|| StorageError::NotFound("not positioned".into()))
     }
 
     fn search(&mut self) -> StorageResult<()> {
         let key = self.effective_key()?;
-        let entries = self.entries.as_ref()
+        let entries = self
+            .entries
+            .as_ref()
             .ok_or_else(|| StorageError::Other("not materialized".into()))?;
 
         match entries.iter().find(|(k, _)| k == &key) {
@@ -159,7 +179,9 @@ impl StorageCursor for OpfsCursor {
 
     fn search_near(&mut self) -> StorageResult<i32> {
         let seek = self.effective_key()?;
-        let entries = self.entries.as_ref()
+        let entries = self
+            .entries
+            .as_ref()
             .ok_or_else(|| StorageError::Other("not materialized".into()))?;
 
         if entries.is_empty() {
@@ -276,7 +298,9 @@ impl Drop for OpfsCursor {
 }
 
 fn read_sync(handle: &FileSystemSyncAccessHandle) -> StorageResult<Vec<u8>> {
-    let size = handle.get_size().map_err(|_| StorageError::Other("get_size failed".into()))? as usize;
+    let size = handle
+        .get_size()
+        .map_err(|_| StorageError::Other("get_size failed".into()))? as usize;
     if size == 0 {
         return Ok(Vec::new());
     }
@@ -297,7 +321,10 @@ fn read_sync(handle: &FileSystemSyncAccessHandle) -> StorageResult<Vec<u8>> {
     Ok(buf)
 }
 
-fn flush_sync(handle: &FileSystemSyncAccessHandle, entries: &[(Vec<u8>, Vec<u8>)]) -> StorageResult<()> {
+fn flush_sync(
+    handle: &FileSystemSyncAccessHandle,
+    entries: &[(Vec<u8>, Vec<u8>)],
+) -> StorageResult<()> {
     let bytes = serialize_file(entries);
 
     handle
@@ -308,7 +335,8 @@ fn flush_sync(handle: &FileSystemSyncAccessHandle, entries: &[(Vec<u8>, Vec<u8>)
     opts.set_at(0.0);
     let written = handle
         .write_with_u8_array_and_options(&bytes[..], &opts)
-        .map_err(|e| StorageError::Other(format!("OPFS write failed: {:?}", e)))? as usize;
+        .map_err(|e| StorageError::Other(format!("OPFS write failed: {:?}", e)))?
+        as usize;
     if written != bytes.len() {
         return Err(StorageError::Other(format!(
             "OPFS write incomplete: wrote {written}, expected {}",
@@ -332,24 +360,26 @@ fn parse_file(bytes: &[u8]) -> StorageResult<Vec<(Vec<u8>, Vec<u8>)>> {
     let mut entries = Vec::new();
 
     while pos + 4 <= bytes.len() {
-        let klen = u32::from_le_bytes([bytes[pos], bytes[pos+1], bytes[pos+2], bytes[pos+3]]) as usize;
+        let klen = u32::from_le_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]])
+            as usize;
         pos += 4;
 
         if pos + klen + 4 > bytes.len() {
             break;
         }
 
-        let key = bytes[pos..pos+klen].to_vec();
+        let key = bytes[pos..pos + klen].to_vec();
         pos += klen;
 
-        let vlen = u32::from_le_bytes([bytes[pos], bytes[pos+1], bytes[pos+2], bytes[pos+3]]) as usize;
+        let vlen = u32::from_le_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]])
+            as usize;
         pos += 4;
 
         if pos + vlen > bytes.len() {
             break;
         }
 
-        let value = bytes[pos..pos+vlen].to_vec();
+        let value = bytes[pos..pos + vlen].to_vec();
         pos += vlen;
 
         entries.push((key, value));

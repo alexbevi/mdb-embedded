@@ -104,12 +104,7 @@ impl GeoQueryShape {
             level_mod: 1,
             max_cells: 512,
         };
-        coverer
-            .covering(&rect)
-            .0
-            .into_iter()
-            .map(|c| c.0)
-            .collect()
+        coverer.covering(&rect).0.into_iter().map(|c| c.0).collect()
     }
 
     pub fn contains_point_lonlat(&self, lon_deg: f64, lat_deg: f64) -> bool {
