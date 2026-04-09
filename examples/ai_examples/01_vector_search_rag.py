@@ -60,7 +60,7 @@ class TinyVectorizer:
 # Knowledge base
 # ---------------------------------------------------------------------------
 KNOWLEDGE = [
-    "WiredTiger is a high-performance storage engine that uses B-tree indexes and supports MVCC concurrency.",
+    "redb is an embedded key-value store used by smongo for B-tree-backed collections and indexes.",
     "smongo supports full ACID transactions with snapshot isolation across multiple collections.",
     "The $vectorSearch aggregation stage performs in-memory cosine similarity search with no external database.",
     "Change streams let you watch a collection for real-time insert, update, and delete events.",

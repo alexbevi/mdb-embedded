@@ -130,7 +130,7 @@ fn cmd_build_info(
     resp.set_item("sysInfo", sys_info)?;
     resp.set_item("versionArray", (7, 0, 0, 0))?;
     resp.set_item("bits", 64)?;
-    let modules = PyList::new(py, ["embedded", "wiredtiger"])?;
+    let modules = PyList::new(py, ["embedded", "redb"])?;
     resp.set_item("modules", modules)?;
     resp.set_item("allocator", "system")?;
     resp.set_item("javascriptEngine", "none")?;

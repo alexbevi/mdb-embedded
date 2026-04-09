@@ -2,7 +2,7 @@
 
 **27 benchmarks across writes, reads, aggregation, and streaming.**
 
-All benchmarks run against 1,000- or 10,000-document collections backed by WiredTiger on local disk, using pytest-benchmark with GC disabled. Times are per-operation unless noted. Results below are from a single machine (Apple Silicon, Python 3.11); your absolute numbers will differ, but the **relative relationships** between operations are the point.
+All benchmarks run against 1,000- or 10,000-document collections backed by **redb** (`smongo-engine`) on local disk, using pytest-benchmark with GC disabled. Times are per-operation unless noted. Results below are from a single machine (Apple Silicon, Python 3.11); your absolute numbers will differ, but the **relative relationships** between operations are the point.
 
 ```bash
 make perf   # or: pytest tests/performance/ -m performance -v --benchmark-disable-gc
@@ -42,26 +42,26 @@ make perf   # or: pytest tests/performance/ -m performance -v --benchmark-disabl
 
 ## Write Path
 
-Every write -- insert, update, delete -- is wrapped in a **WiredTiger transaction** that atomically commits data, indexes, and oplog. The cost includes BSON encoding, index key maintenance, and oplog append.
+Every write -- insert, update, delete -- is wrapped in an **engine transaction** that atomically commits data, indexes, and oplog. The cost includes BSON encoding, index key maintenance, and oplog append.
 
 | Benchmark | What it measures | Mean | Rounds |
 |---|---|---:|---:|
-| `test_insert_one_throughput` | Single-doc insert (BSON encode + WT write + oplog) | 26.6 us | 7,971 |
+| `test_insert_one_throughput` | Single-doc insert (BSON encode + redb write + oplog) | 26.6 us | 7,971 |
 | `test_insert_many_1000` | Batch insert 1,000 docs (includes delete_many cleanup) | 42.0 ms | 37 |
 | `test_update_many_with_index` | Update 200/1K docs via `dept_1` index scan | 6.5 ms | 145 |
 | `test_update_many_without_index` | Update 200/1K docs via collection scan | 8.4 ms | 109 |
 | `test_delete_many_1000` | Delete all 1K docs (includes re-insert for each round) | 42.0 ms | 22 |
 
 **Key observations**:
-- Single inserts sustain ~37K ops/sec -- each one is a full WiredTiger transaction with BSON encode, index maintenance, and oplog append.
+- Single inserts sustain ~37K ops/sec -- each one is a full engine transaction with BSON encode, index maintenance, and oplog append.
 - Indexed updates are ~23% faster than unindexed updates because the query planner narrows the candidate set before mutating.
-- Batch operations (insert_many, delete_many) are dominated by per-doc WiredTiger cursor writes; the transaction wraps the entire batch.
+- Batch operations (insert_many, delete_many) are dominated by per-document writes; the transaction wraps the entire batch.
 
 ---
 
 ## Read Path (Materialized)
 
-These benchmarks use `Collection.find()` (backed by `RustLocalCollection`) which materializes all matching documents into a Python list. This is the baseline for comparison with the streaming path.
+These benchmarks use `Collection.find()` (backed by `RedbLocalCollection` / engine `find`) which materializes all matching documents into a Python list. This is the baseline for comparison with the streaming path.
 
 | Benchmark | What it measures | Mean | Rounds |
 |---|---|---:|---:|
@@ -72,7 +72,7 @@ These benchmarks use `Collection.find()` (backed by `RustLocalCollection`) which
 | `test_compile_query_complex` | `compile_query()` with `$and`, `$in`, `$elemMatch`, `$regex` | 0.6 us | 83,626 |
 
 **Key observations**:
-- PK lookup is **~3,100x faster** than a collection scan. WiredTiger's B-tree seek is O(log n).
+- PK lookup is **~3,100x faster** than a collection scan. B-tree seek is O(log n).
 - Index scans are **~40x faster** than collection scans on the same data. The planner computes tight bounds and fetches only matching IDs from the index B-tree.
 - Query compilation is essentially free (~0.6 us). The compiled predicate is a closure that avoids re-parsing on each document.
 
@@ -92,7 +92,7 @@ All aggregation benchmarks use the client-level `aggregate()` API, which feeds d
 
 **Key observations**:
 - The pipeline processes ~250K docs/sec for `$match` + `$group` (10K input docs, hash-based grouping with accumulator updates).
-- `$sort` on 10K docs takes ~38ms (Python's `list.sort` with a custom key function).
+- `$sort` on 10K docs takes ~38ms (Rust-engine sort with BSON-aware comparison).
 - `$lookup` is fast when the foreign collection is small (20 docs) -- each join is a hash lookup, not a nested scan.
 - A 4-stage pipeline adds negligible overhead beyond its constituent stages -- the pipeline dispatch loop is thin.
 
@@ -100,7 +100,7 @@ All aggregation benchmarks use the client-level `aggregate()` API, which feeds d
 
 ## Streaming Architecture
 
-The streaming benchmarks measure the lazy read path introduced in v0.2.0. At the `MongoClient` level, `Collection.find()` uses `StreamingCursor` (Python) which delegates to the Rust query planner and BSON decoding. When using `RustLocalClient` directly, `RustStreamingCursor` yields documents one at a time from WiredTiger with zero Python overhead. Both paths apply `skip`/`limit` via `itertools.islice` when no sorting is needed.
+The streaming benchmarks measure the lazy read path introduced in v0.2.0. At the `MongoClient` level, `Collection.find()` uses `StreamingCursor` (Python) which delegates to the engine. The wire server materializes via typed `RedbLocalCollection` paths. Both paths apply `skip`/`limit` via `itertools.islice` when no sorting is needed.
 
 ### Client-Level API
 
@@ -115,9 +115,9 @@ The streaming benchmarks measure the lazy read path introduced in v0.2.0. At the
 
 | Benchmark | What it measures | Mean | Rounds |
 |---|---|---:|---:|
-| `test_streaming_find_one` | `RustLocalCollection.find_one({"city": "city_3"})` (indexed) | 1.92 ms | 488 |
-| `test_streaming_count_empty` | `RustLocalCollection.count({})` (fast path, no BSON decode) | 2.60 ms | 378 |
-| `test_streaming_count_filtered` | `RustLocalCollection.count({"age": {"$gt": 50}})` | 26.3 ms | 40 |
+| `test_streaming_find_one` | `RedbLocalCollection.find_one({"city": "city_3"})` (indexed) | 1.92 ms | 488 |
+| `test_streaming_count_empty` | `RedbLocalCollection.count({})` (fast path, no BSON decode) | 2.60 ms | 378 |
+| `test_streaming_count_filtered` | `RedbLocalCollection.count({"age": {"$gt": 50}})` | 26.3 ms | 40 |
 | `test_streaming_limit_10` | `find_streaming({}).limit(10)` via Cursor | 36.8 us | 13,209 |
 | `test_streaming_index_scan` | `find_streaming({"city": "city_5"})` (1K matches) | 7.0 ms | 142 |
 | `test_streaming_pk_lookup` | `find_streaming({"_id": target})` (single doc) | 11.7 us | 12,739 |
@@ -132,8 +132,8 @@ The streaming benchmarks measure the lazy read path introduced in v0.2.0. At the
 | **PK lookup** | 11.7 us | 11.2 us | ~1x | Both paths do a single B-tree seek; streaming adds negligible generator overhead |
 | **Index scan** (1K matches) | 7.0 ms | 0.87 ms (125 matches) | N/A (different cardinality) | Streaming iterates per-doc; materialized batches all IDs then fetches |
 | **Collection scan** (6.8K matches) | 35.7 ms | 34.9 ms | ~1x | Full scan is full scan -- streaming doesn't help when you consume everything |
-| **find_one** (indexed, 10K docs) | **1.92 ms** | N/A | -- | Only 1 doc deserialized from WiredTiger instead of all matches |
-| **count({})** (10K docs) | **2.60 ms** | N/A | -- | `count_fast` uses WiredTiger cursor walk, no BSON decode |
+| **find_one** (indexed, 10K docs) | **1.92 ms** | N/A | -- | Only 1 doc deserialized instead of all matches |
+| **count({})** (10K docs) | **2.60 ms** | N/A | -- | `count_fast` uses engine cursor walk, no BSON decode |
 
 **Key insight**: Streaming shines when you **don't need all results**. `find({}).limit(10)` is ~950x faster than materializing the entire collection. `find_one()` deserializes exactly 1 document. `count({})` never touches BSON at all. When you consume every result (full collection scan, no limit), streaming adds negligible overhead (~2%) compared to the materialized path.
 
@@ -171,7 +171,7 @@ These benchmarks isolate the Rust/Python dispatch path: command parsing, handler
 
 | Benchmark | What it measures | Mean | Ops/sec |
 |---|---|---:|---:|
-| `test_dispatch_findandmodify` | `findAndModify` with `$inc` (dispatch + WT round-trip) | 64 us | 15,600 |
+| `test_dispatch_findandmodify` | `findAndModify` with `$inc` (dispatch + engine round-trip) | 64 us | 15,600 |
 | `test_dispatch_insert_delete_cycle` | `insert_one` + `delete_one` pair | 91 us | 11,000 |
 | `test_dispatch_find_simple` | `find` with filter + `limit(10)` | 287 us | 3,490 |
 | `test_dispatch_find_all` | `find({})` materializing 200 docs | 361 us | 2,770 |
@@ -179,7 +179,7 @@ These benchmarks isolate the Rust/Python dispatch path: command parsing, handler
 | `test_dispatch_aggregate_small` | 3-stage pipeline (`$match` + `$group` + `$sort`) | 457 us | 2,190 |
 
 **Key observations**:
-- Single-doc write commands (`findAndModify`, `insert_one`) complete in ~60-90 us end-to-end, including WiredTiger I/O.
+- Single-doc write commands (`findAndModify`, `insert_one`) complete in ~60-90 us end-to-end, including redb I/O.
 - The per-dispatch overhead (command lookup, context access, cursor registration) is <20 us -- dominated by the actual data operation.
 - All module lookups, handler resolution, and cursor registration use Rust-native paths (no `py.import()`, no Python method dispatch for `CursorRegistry`).
 
@@ -208,24 +208,23 @@ pytest tests/performance/ -m performance --benchmark-compare=baseline
 - **Framework**: [pytest-benchmark](https://pytest-benchmark.readthedocs.io/) with `--benchmark-disable-gc`
 - **Timer**: `time.perf_counter` (default, nanosecond resolution)
 - **Calibration**: Automatic -- pytest-benchmark calibrates rounds to achieve statistical significance (minimum 5 rounds, minimum 5us per round, up to 1s total)
-- **Isolation**: Each benchmark uses a fresh WiredTiger directory via `tmp_path` fixtures. No shared state between benchmarks.
+- **Isolation**: Each benchmark uses a fresh redb data directory via `tmp_path` fixtures. No shared state between benchmarks.
 - **Dataset**: Synthetic documents with 7 fields each (string `_id`, string `name`, int `age`, string `city`, string `dept`, array `tags`, int `salary`). Cities cycle through 10 values, departments through 5, ages through 80.
 - **Index setup**: Benchmarks that test indexed paths create indexes in the fixture, ensuring index build time is not measured.
 - **What's measured**: Only the query/write operation itself. Document generation, index creation, and collection cleanup happen outside the timed region.
 
 ---
 
-## Where Python Is Still the Bottleneck
+## Where Python Remains in the Pipeline
 
-BSON serialization, query compilation, index operations, wire compression, and most CRUD are now handled entirely in Rust via `_smongo_core`. All hot-path module imports are cached (`PyOnceLock` for Python objects, `OnceLock` for Rust-only data), the handler signature is fully typed (`ConnectionContext`), and `CursorRegistry` operations are called directly from Rust. The remaining Python-bound costs are:
+BSON serialization, query compilation, index operations, wire compression, CRUD, and the full aggregation pipeline are now handled entirely in Rust via `_smongo_core` and `smongo-engine`. All hot-path module imports are cached (`PyOnceLock` for Python objects, `OnceLock` for Rust-only data), the handler signature is fully typed (`ConnectionContext`), and `CursorRegistry` operations are called directly from Rust. All 27 aggregation stages run in the Rust engine with zero FFI round-trips per stage (see [ZERO-FFI-STATUS.md](ZERO-FFI-STATUS.md)).
 
-1. **Aggregation accumulators** (~40ms for `$group` on 10K): Hash-based grouping with per-doc field access via Python dicts. Rust pipeline stages exist for many operators but the fallback Python path is still used for some complex expressions.
-2. **Pipeline materialization**: Each aggregation stage produces a full `list[Document]`. A fully Rust pipeline could use zero-copy iterators between stages.
-3. **PyO3 boundary crossings**: Callbacks from Rust into Python (e.g. oplog writes, aggregation accumulator dispatch) add per-call overhead that would disappear with pure-Rust equivalents.
-4. **User-facing `Cursor` only on the Python API**: Wire protocol `find` and `aggregate` no longer route through the Python `Cursor` class. For wire `find`, sort, skip, limit, and projection are applied in Rust before batches are returned. Wire `aggregate` calls `aggregate_pipeline` directly. The Python `Cursor` remains only for the user-facing Python API (`Collection.find()` and chained `.sort()` / `.skip()` / `.limit()` / projection there).
-5. **Oplog and admin WiredTiger paths**: Oplog and admin/metadata WiredTiger operations are fully typed at the Rust boundary (no Python dispatch for WT cursor operations in those hot paths).
+The remaining Python-bound costs are:
 
-See [ROADMAP.md](ROADMAP.md) (Part 5 — Python wire path) for the roadmap on eliminating the remaining Python-bound stages.
+1. **PyO3 boundary crossings**: A single FFI crossing enters the Rust engine per `aggregate()` call; results are converted back to Python dicts on return. This is a fixed per-call cost, not per-stage.
+2. **User-facing `Cursor` on the Python API**: Wire protocol `find` and `aggregate` no longer route through the Python `Cursor` class. For wire `find`, sort, skip, limit, and projection are applied in Rust before batches are returned. Wire `aggregate` calls `aggregate_pipeline` directly. The Python `Cursor` remains only for the user-facing Python API (`Collection.find()` and chained `.sort()` / `.skip()` / `.limit()` / projection there).
+3. **SyncManager orchestration**: The sync layer's push/pull logic, conflict resolution, and PyMongo transport remain in Python.
+4. **Oplog and admin paths**: Oplog and admin/metadata operations are handled in Rust on the redb engine boundary where possible.
 
 ---
 

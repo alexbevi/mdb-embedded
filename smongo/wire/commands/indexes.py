@@ -23,7 +23,7 @@ def _cmd_list_indexes(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequence
     for idx in indexes:
         spec: dict[str, Any] = {
             "v": 2,
-            "key": {k: d for k, d in idx.get("keys", [])},
+            "key": dict(idx.get("keys", {})),
             "name": idx.get("name", ""),
             "ns": ns,
         }
@@ -98,7 +98,7 @@ def _cmd_drop_indexes(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequence
     elif isinstance(index, dict):
         target_keys = set(index.keys())
         for idx in list(coll.list_indexes()):
-            idx_keys = set(k for k, _ in idx.get("keys", []))
+            idx_keys = set(idx.get("keys", {}).keys())
             if idx_keys == target_keys:
                 coll.drop_index(idx["name"])
                 break

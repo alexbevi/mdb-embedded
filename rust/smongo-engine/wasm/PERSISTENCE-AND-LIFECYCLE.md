@@ -112,4 +112,4 @@ flowchart LR
 
 - [OPFS-ARCHITECTURE.md](OPFS-ARCHITECTURE.md) — constraints and design rationale
 - [README.md](README.md) — build, demos, API snippets
-- [ROADMAP.md](../../ROADMAP.md) (Part 2 — WASM) — engine vs JS persistence split
+- [ARCHITECTURE.md](../../../ARCHITECTURE.md) — overall project architecture

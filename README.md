@@ -2,7 +2,7 @@
 
 **SQLite for the MongoDB world.**
 
-`pip install smongo` -- an embedded, local-first MongoDB engine built on WiredTiger and Rust. Same document model, same MQL, same wire protocol. No `mongod`, no Docker, no network. Just `import` and go.
+`pip install smongo` -- an embedded, local-first MongoDB engine built on **[redb](https://github.com/cberner/redb)** and Rust (**smongo-engine**). Same document model, same MQL, same wire protocol. No `mongod`, no Docker, no network. Just `import` and go.
 
 The same ecological niche as SQLite -- embedded, zero-config, in-process -- but for the document model instead of relational. It's not a replacement for `mongod` in production. For local-first apps, dev/test without Docker, edge computing, AI/RAG pipelines, and "same MQL everywhere" architectures, it fills a gap that nothing else quite does.
 
@@ -16,8 +16,7 @@ thing, with no translation layer in between.
 from smongo import MongoClient
 
 # Flip the URI -- same code, different backend
-client = MongoClient("local://data")                              # embedded (redb by default)
-# client = MongoClient("local+wt://data")                          # explicit WiredTiger
+client = MongoClient("local://data")                              # embedded redb
 # client = MongoClient("mongodb+srv://...")                        # Atlas / any mongod
 # client = MongoClient("local://data", sync="mongodb+srv://...")   # local-first + auto sync
 
@@ -40,7 +39,7 @@ results = users.aggregate([
 
 ## Documentation
 
-**Roadmap and design notes:** everything lives in one place — **[ROADMAP.md](ROADMAP.md)** (engine, WASM/browser, geospatial / time series / graph, Python sync, wire-path interop). **Browser / WASM demos:** [rust/smongo-engine/wasm/README.md](rust/smongo-engine/wasm/README.md).
+**Design notes:** [ARCHITECTURE.md](ARCHITECTURE.md), [WIRE-PROTOCOL.md](WIRE-PROTOCOL.md), [AGGREGATION.md](AGGREGATION.md), [RUST-PY.md](RUST-PY.md), [ACID-TRANSACTIONS.md](ACID-TRANSACTIONS.md), [QUERY-PLANNER.md](QUERY-PLANNER.md), [MQL-COMPILER.md](MQL-COMPILER.md), [LOCAL-FIRST.md](LOCAL-FIRST.md), [SYNC-NOTES.md](SYNC-NOTES.md), [BYE-BYE-GIL.md](BYE-BYE-GIL.md), [PERF.md](PERF.md). **Zero-FFI pipeline:** [ZERO-FFI-STATUS.md](ZERO-FFI-STATUS.md), [ZERO-FFI-AGGREGATION.md](ZERO-FFI-AGGREGATION.md). **Browser / WASM demos:** [rust/smongo-engine/wasm/README.md](rust/smongo-engine/wasm/README.md).
 
 ---
 
@@ -48,12 +47,12 @@ results = users.aggregate([
 
 | Problem | How smongo fixes it |
 |---|---|
-| Local dev requires a running `mongod` or Docker container | Embedded WiredTiger -- Rust extension with direct WiredTiger FFI. No `mongod` required |
+| Local dev requires a running `mongod` or Docker container | Embedded **redb** + **smongo-engine** in a Rust extension. No `mongod` required |
 | `mongomock` doesn't support real aggregation pipelines | Full pipeline engine: 25+ stages incl. `$facet`, `$merge`, `$out`, `$vectorSearch`, `$lookup` with 17 group accumulators |
 | Edge / offline-first apps need a different DB and query language | Same MQL everywhere -- one codebase, portable across environments |
 | Syncing local state to the cloud is a custom nightmare | Built-in oplog-driven bidirectional sync with metrics, backoff, selective filters, and conflict resolution |
 | Mock databases don't have indexes or query planners | Real B-Tree indexes with a heuristic prefix-scoring query planner that accelerates reads *and* writes |
-| Embedded databases lack ACID writes or thread safety | WiredTiger transactions wrap every write (data + indexes + oplog), per-collection ReadWriteLock allows concurrent reads while serializing writes |
+| Embedded databases lack ACID writes or thread safety | **redb** transactions wrap engine writes (data + indexes + oplog); the stack is thread-safe for typical app use |
 
 ---
 
@@ -137,13 +136,13 @@ See the [`examples/ai_examples/`](examples/ai_examples/) directory for complete 
    │  └───┬───┘  │
    │      │      │
    │  ┌───┴───┐  │
-   │  │B-Tree │  │  ◄── RustIndexManager: WiredTiger tables
-   │  │Indexes│  │      single, compound, unique, sparse
+   │  │B-Tree │  │  ◄── smongo-engine indexes on redb
+   │  │Indexes│  │      single, compound, unique, sparse, TTL
    │  └───┬───┘  │
    │      │      │
    │  ┌───┴───┐  │
-   │  │WiredTi│  │  ◄── Direct C FFI via wiredtiger-sys
-   │  │  ger  │  │      key=_id, value=BSON (transactional)
+   │  │ redb  │  │  ◄── Pure Rust storage (ACID, single-file)
+   │  │ store │  │      key=_id, value=BSON (transactional)
    │  └───┬───┘  │
    │      │      │
    │  ┌───┴───┐  │       ┌──────────────┐
@@ -155,19 +154,19 @@ See the [`examples/ai_examples/`](examples/ai_examples/) directory for complete 
 
 ### Rust-Powered Engine (Required)
 
-The compiled Rust extension (`_smongo_core`) is **required** and provides all performance-critical paths via [PyO3](https://pyo3.rs/). `MongoClient("local://...")` creates a Python `LocalClient` that delegates all storage operations, query compilation, expression evaluation, and update application to Rust:
+The compiled Rust extension (`_smongo_core`) is **required** and provides all performance-critical paths via [PyO3](https://pyo3.rs/). `MongoClient("local://...")` uses **`RedbClient`** / **`RedbLocalClient`** and **`smongo-engine`** for storage, query compilation, expression evaluation, and updates:
 
-- **Storage Engine** -- `RustLocalClient`, `RustLocalDB`, `RustLocalCollection` with direct WiredTiger C FFI (`wiredtiger-sys` sub-crate, `dlopen`). Every insert, find, update, delete, and index operation flows through Rust.
-- **B-Tree Indexes & Query Planner** -- `RustIndexManager` and `RustQueryPlanner` manage all index types (single, compound, unique, sparse, text, hashed, wildcard) with Rust-native key encoding and plan scoring.
-- **Streaming Cursors** -- `RustStreamingCursor` lazily iterates WiredTiger cursors for collection scan, PK lookup, index-backed, and OR-union paths.
-- **ACID Transactions** -- `RustTransactionSession` with thread-local session override ensures all operations within a transaction route through the same WiredTiger session.
+- **Storage engine** -- **`RedbLocalClient`**, **`RedbLocalDB`**, **`RedbLocalCollection`** on **`smongo-engine`** with the **`redb`** backend. Every insert, find, update, delete, and index operation flows through Rust.
+- **B-Tree indexes & query planner** -- same engine as **Node** (`smongo-node`): real indexes and plans on the embedded store.
+- **Streaming cursors** -- lazy iteration over matching documents (engine-backed); hot paths avoid materializing full result sets.
+- **ACID transactions** -- multi-document transactions use the engine session model (wire / API).
 - **BSON Serialization** -- encode/decode documents using the Rust `bson` crate, eliminating Python tree walks (~60% of write time eliminated)
 - **MQL Query Compiler** -- `compile_query` with all 18 query operators, compiled predicate evaluation
 - **Expression Engine** -- `resolve_expr` with all 72 aggregation expression operators
 - **Update Engine** -- `apply_update` with all 14 update operators, positional operators, and pipeline updates
-- **Aggregation Pipeline** -- Full pipeline dispatch in Rust via `aggregate_pipeline`. All 25+ stages including `$group` (17 accumulators), `$lookup` (equality + sub-pipeline), `$graphLookup`, `$facet`. I/O-dominated stages (`$out`, `$merge`, `$unionWith`) and `$vectorSearch` delegate to Python.
-- **Wire Protocol** -- Tokio-based async TCP server with Rust command handlers for all ~77 commands. BSON boundary normalization, cursor registry, session management, and profiler all in Rust. On the wire, `find` applies sort, skip, limit, and projection in Rust; `aggregate` dispatches straight into the Rust pipeline (`aggregate_pipeline`). Oplog and admin/metadata WiredTiger work uses typed Rust session/cursor borrow (no Python dispatch on those WT hot paths).
-- **Schema Validation** -- `$jsonSchema` document validation runs entirely in Rust (`schema.rs`). Supports `required`, `properties`, `type`/`bsonType`, numeric/string/array constraints, `enum`, `pattern`, `additionalProperties`, and nested objects with ReDoS-safe regex matching.
+- **Aggregation Pipeline** -- Full pipeline dispatch in Rust via `aggregate_pipeline`. All 27 stages run in **`smongo-engine`** with zero FFI round-trips per stage: `$group` (17 accumulators), `$lookup` (equality + sub-pipeline), `$graphLookup`, `$facet`, `$out`, `$merge`, `$unionWith`, `$vectorSearch`, and more. A single FFI crossing enters the engine; all stage execution stays in Rust.
+- **Wire protocol** -- Tokio-based async TCP server (`RustWireServer`) with Rust command handlers for core commands; Python `WireServer` for the default loop. BSON handling, cursor registry, session management, and profiler integrate across both paths. `find` / `aggregate` delegate to the engine where applicable.
+- **Schema validation** -- `$jsonSchema` document validation runs in Rust (`rust/smongo-py/src/schema.rs`). Supports `required`, `properties`, `type`/`bsonType`, numeric/string/array constraints, `enum`, `pattern`, `additionalProperties`, and nested objects with ReDoS-safe regex matching.
 
 The Python modules that remain are high-level orchestration (aggregation `Cursor` for the Python API, `SyncManager`) that calls *into* the Rust storage layer. See [BYE-BYE-GIL.md](BYE-BYE-GIL.md) for the full story.
 
@@ -177,16 +176,16 @@ The Python modules that remain are high-level orchestration (aggregation `Cursor
 
 ## Features
 
-### Storage -- WiredTiger B-Trees with Streaming Reads
-MongoDB acquired WiredTiger in 2014 and made it the default storage engine. smongo uses the same technology locally: documents are stored as **native BSON bytes** in WiredTiger B-Tree tables keyed by `_id`. Every write is wrapped in a **WiredTiger transaction** (data + indexes + oplog in a single atomic unit), a **per-collection ReadWriteLock** ensures thread safety with concurrent reader access, and the **query planner accelerates writes** (update/delete by `_id` or indexed field are O(log n), not O(n)). ACID atomicity, crash recovery, and efficient disk I/O -- for free.
+### Storage -- redb + engine B-trees with streaming reads
+Documents are stored as **native BSON bytes** in **smongo-engine** collections backed by **[redb](https://github.com/cberner/redb)** on disk. Writes are **ACID** at the engine layer (data + indexes + oplog where enabled). The **query planner** accelerates reads and indexed writes (e.g. update/delete by `_id` or indexed fields) without scanning the whole collection.
 
-**Reads are lazy.** `Collection.find()` returns a chainable `Cursor` backed by a `RustStreamingCursor` that pulls documents from WiredTiger one at a time. The streaming cursor consults the query planner and executes the optimal strategy (PK lookup, index scan, `$in` multi-point scan, `$or`-union, or collection scan) -- all lazily. Chained `.limit(10)` without `.sort()` deserializes only 10 documents from BSON regardless of how many match. `find_one()` and `count_documents()` use the same streaming path so they never build intermediate lists.
+**Reads are lazy where possible.** `Collection.find()` returns a chainable `Cursor` that pulls matches from the engine without building huge intermediate lists unnecessarily. Chained `.limit(10)` avoids pulling unbounded results. `find_one()` and `count_documents()` use planner-backed paths.
 
 ### MQL Compiler
 A Rust-accelerated compiler translates MongoDB query dictionaries into executable predicates. Supported query operators: `$gt`, `$lt`, `$gte`, `$lte`, `$eq`, `$ne`, `$in`, `$nin`, `$exists`, `$regex`, `$not`, `$nor`, `$all`, `$elemMatch`, `$size`, `$type`, `$or`, `$and`. Update operators: `$set`, `$inc`, `$push`, `$unset`, `$addToSet`, `$pull`, `$pop`, `$min`, `$max`, `$rename`, `$currentDate`, `$mul`. Dot-notation paths work everywhere (`"address.city"`).
 
 ### Aggregation Pipeline
-In-memory pipeline execution with 25+ stages: `$match`, `$group`, `$project`, `$sort`, `$limit`, `$skip`, `$unwind`, `$lookup`, `$graphLookup`, `$unionWith`, `$addFields`/`$set`, `$count`, `$replaceRoot`/`$replaceWith`, `$sample`, `$bucket`, `$bucketAuto`, `$sortByCount`, `$redact`, `$setWindowFields`, `$unset`, `$vectorSearch`, `$facet`, `$out`, `$merge`. Memory-bounded with spill-to-disk for `$sort` and `$group` when `allowDiskUse=True`. Group accumulators: `$sum`, `$avg`, `$min`, `$max`, `$push`, `$addToSet`, `$first`, `$last`, `$firstN`, `$lastN`, `$stdDevPop`, `$stdDevSamp`, `$mergeObjects`, `$top`, `$bottom`, `$topN`, `$bottomN`.
+Pipeline execution with 27 stages (all running in Rust via `smongo-engine`): `$match`, `$group`, `$project`, `$sort`, `$limit`, `$skip`, `$unwind`, `$lookup`, `$graphLookup`, `$unionWith`, `$addFields`/`$set`, `$count`, `$replaceRoot`/`$replaceWith`, `$sample`, `$bucket`, `$bucketAuto`, `$sortByCount`, `$redact`, `$setWindowFields`, `$unset`, `$vectorSearch`, `$facet`, `$out`, `$merge`. Memory-bounded with spill-to-disk for `$sort` and `$group` when `allowDiskUse=True`. Group accumulators: `$sum`, `$avg`, `$min`, `$max`, `$push`, `$addToSet`, `$first`, `$last`, `$firstN`, `$lastN`, `$stdDevPop`, `$stdDevSamp`, `$mergeObjects`, `$top`, `$bottom`, `$topN`, `$bottomN`.
 
 `$vectorSearch` runs fully in memory with:
 - **USearch** (`usearch`) for fast RAM-native vector indexing/search
@@ -196,8 +195,8 @@ In-memory pipeline execution with 25+ stages: `$match`, `$group`, `$project`, `$
 
 Build analytics and similarity queries that run locally with no external vector DB.
 
-### B-Tree Indexes & Query Planner
-Create single-field, compound, unique, and sparse indexes backed by dedicated WiredTiger tables. The query planner scores candidate indexes and picks the optimal execution path:
+### B-Tree indexes & query planner
+Create single-field, compound, unique, sparse, and TTL indexes backed by the engine’s index tables on **redb**. The query planner scores candidate indexes and picks the optimal execution path:
 - **Index Scan** -- range or equality scan on the best-matching index
 - **PK Lookup** -- O(log n) direct `_id` fetch
 - **Collection Scan** -- fallback full-table scan
@@ -205,7 +204,7 @@ Create single-field, compound, unique, and sparse indexes backed by dedicated Wi
 Sortable key encoding (IEEE 754 bit-flipping for numbers, hex inversion for descending fields) ensures correct lexicographic ordering across mixed types.
 
 ### Oplog (Operations Log)
-Every mutation (insert, update, delete, index create/drop) is append-logged to a dedicated WiredTiger table with timestamps, version counters, and checksums. The oplog supports **compaction** (`compact_oplog(keep=N)`) to bound growth in long-running deployments, and auto-compacts after successful sync push cycles.
+Every mutation (insert, update, delete, index create/drop) is append-logged to a dedicated **per-collection oplog table** in the engine with timestamps, version counters, and checksums. The oplog supports **compaction** (`compact_oplog(keep=N)`) to bound growth in long-running deployments, and auto-compacts after successful sync push cycles.
 
 ### Bidirectional Sync
 `SyncManager` syncs local state to any MongoDB-compatible remote:
@@ -214,7 +213,7 @@ Every mutation (insert, update, delete, index create/drop) is append-logged to a
 - **Index sync**: index definitions flow both directions
 - **Conflict resolution**: Last-Write-Wins, local-wins, remote-wins, field-level merge, or a custom callable
 - **Vector clocks**: per-document causal ordering across replicas -- concurrent conflicts invoke the resolver, causal updates apply automatically
-- **Checkpointing**: survives crashes and restarts via a WiredTiger checkpoint table
+- **Checkpointing**: survives crashes and restarts via persisted sync checkpoint keys in the local store
 - **Auto-sync**: background thread with configurable interval
 - **Hybrid mode**: `MongoClient("local://...", sync="mongodb+srv://...")` auto-registers and starts sync
 - **Exponential backoff**: on consecutive failures, backoff doubles up to 300s
@@ -279,8 +278,8 @@ sync_config = {
 }
 ```
 
-### Local-First Architecture
-All reads and writes hit local WiredTiger -- zero network latency, works fully offline. The oplog accumulates mutations while disconnected; nothing is lost. When connectivity returns, the sync thread picks up from its last checkpoint and pushes/pulls everything that was missed. The wire protocol server means local clients (other apps, mongosh, Compass, LangChain) can connect over TCP without knowing it's not a "real" MongoDB.
+### Local-first architecture
+All reads and writes hit **local redb** (via **smongo-engine**) — zero network latency, works fully offline. The oplog accumulates mutations while disconnected; nothing is lost. When connectivity returns, the sync thread picks up from its last checkpoint and pushes/pulls everything that was missed. The wire protocol server means local clients (other apps, mongosh, Compass, LangChain) can connect over TCP without knowing it's not a "real" MongoDB.
 
 ### Edge Computing
 smongo turns any device into a MongoDB-compatible edge node. Each device runs its own embedded engine, writes locally at full speed, and syncs to a central Atlas cluster with MQL-scoped filters. The central hub aggregates data from the entire fleet; each device sees only its own data.
@@ -289,7 +288,7 @@ smongo turns any device into a MongoDB-compatible edge node. Each device runs it
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
 │ sensor-north │     │ sensor-south │     │ sensor-east  │
 │  smongo +    │     │  smongo +    │     │  smongo +    │
-│  WiredTiger  │     │  WiredTiger  │     │  WiredTiger  │
+│  redb local  │     │  redb local  │     │  redb local  │
 └──────┬───────┘     └──────┬───────┘     └──────┬───────┘
        │  push/pull          │  push/pull          │  push/pull
        │  device_id=self     │  device_id=self     │  device_id=self
@@ -389,7 +388,7 @@ with WireServer("./data", port=27017) as srv:
 
 **Security features (Rust wire server):**
 - **TLS** via [rustls](https://github.com/rustls/rustls) -- available when using the Rust-native `RustWireServer`
-- **SCRAM-SHA-256** authentication (RFC 7677) -- PBKDF2-hashed credentials persisted in WiredTiger (`table:__users`)
+- **SCRAM-SHA-256** authentication (RFC 7677) -- PBKDF2-hashed credentials persisted in the local engine (`__users` KV table)
 - **Auth gate** enforces authentication on all commands (handshake commands exempted)
 
 > **Note:** TLS and SCRAM authentication are implemented in the Rust wire server (`RustWireServer`). The default Python `WireServer` provides plain TCP without auth. See [WIRE-PROTOCOL.md](WIRE-PROTOCOL.md) for details on both server paths.
@@ -406,11 +405,11 @@ smongo/
   _smongo_core/      Compiled Rust extension (PyO3) -- the actual engine
   client.py          URI-based routing, bulk_write, find_one_and_* facade
   storage/           Storage layer (Python + Rust bridge)
-    engine.py          LocalClient/LocalDB (Python interface; delegates to Rust)
-    collection.py      TTLReaper (used by RustLocalCollection)
+    redb_engine.py     RedbClient / RedbCollection (default `local://`)
+    collection.py      TTLReaper helper + shared constants (CRUD lives in `redb_engine.py`)
     locking.py         ReadWriteLock (Python fallback; runtime uses Rust)
     results.py         InsertResult, UpdateResult, DeleteResult
-    streaming.py       StreamingCursor (Python fallback; runtime uses RustStreamingCursor)
+    streaming.py       StreamingCursor (Python API; engine-backed reads on redb)
     helpers.py         BSON encode/decode helpers
   query/             MQL compiler package (Rust-accelerated)
     compiler.py        compile_query, query operators
@@ -423,7 +422,7 @@ smongo/
     joins.py           $lookup, $graphLookup, $unionWith
     output.py          $facet, $out, $merge
     vector.py          $vectorSearch (NumPy / USearch)
-  index.py           Index key encoding, helpers, DuplicateKeyError (runtime: RustIndexManager, RustQueryPlanner)
+  index.py           Index key encoding, helpers, DuplicateKeyError (engine-backed indexes on redb)
   oplog.py           Append-only operations log with compaction
   sync.py            Bidirectional sync with MQL rules, variable substitution, vector clocks
   objectid.py        MongoDB-style ObjectId implementation
@@ -434,23 +433,11 @@ smongo/
     transactions.py    Transaction state, undo journal
     profiler.py        Profiler, OpTracker, TopStats
 
-rust/                Rust crate (smongo-core) -- the engine
-  src/
-    storage_engine.rs    RustLocalClient, RustLocalDB
-    local_collection.rs  RustLocalCollection (CRUD, txns, streaming)
-    index_manager.rs     RustIndexManager, RustQueryPlanner
-    streaming_cursor.rs  RustStreamingCursor (lazy WiredTiger iteration)
-    transaction.rs       RustTransactionSession (thread-local session override)
-    wt_bridge.rs         PyO3 bridge for WiredTiger FFI types
-    wt_safe.rs           Safe RAII wrappers for WiredTiger C API
-    wire_commands/       Rust command handlers (~77 commands, typed HandlerFn)
-    wire_dispatch.rs     Single-downcast command dispatch (ConnectionContext)
-    wire_server.rs       Tokio async TCP server (TLS via rustls)
-    wire_context.rs      ConnectionContext, CachedImports (Arc-shared, OnceLock modules)
-    cached_modules.rs    Process-wide OnceLock cache for stdlib Python modules
-    schema.rs            $jsonSchema validation engine (ValidationError, validate_document)
-    scram.rs             SCRAM-SHA-256 authentication (RFC 7677)
-  wiredtiger-sys/      Raw FFI bindings for WiredTiger C API (dlopen)
+rust/                Rust workspace
+  smongo-engine/     Core engine: redb (native), Mem/OPFS (WASM), MQL, indexes, geo
+  smongo-py/         PyO3 `_smongo_core`: RedbLocalClient, wire server, query, schema, wire_commands/
+  smongo-node/       napi-rs bindings (same engine as Python local)
+  smongo-c/          C API / cbindgen surface
 
 web_app.py           Flask API + shell endpoint
 templates/
@@ -480,7 +467,7 @@ examples/
     edge_fleet_sync.py   Edge fleet: MQL sync rules, device scoping, time windows
 
 demo.py              Standalone CLI demo (no Docker needed)
-Dockerfile           Python 3.11 + WiredTiger build deps
+Dockerfile           Python 3.11 + Rust toolchain for the extension
 docker-compose.yml   App + MongoDB for the full sync experience
 ```
 

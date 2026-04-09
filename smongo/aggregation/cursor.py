@@ -253,6 +253,7 @@ class Cursor:
             elif op == "$geoNear":
                 docs = geo_near_stage(docs, spec)
             elif op == "$facet":
+                _check_limit(docs)
                 docs = facet_stage(
                     docs, spec, self._collection_getter, max_pipeline_docs=max_pipeline_docs
                 )

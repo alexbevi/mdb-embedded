@@ -8,7 +8,7 @@
 
 A naive embedded database scans every document in a collection for every query. That's O(n) per read and O(n) per write. For 10 documents it doesn't matter. For 10,000 it's sluggish. For 100,000 it's unusable.
 
-MongoDB solves this with a query planner that evaluates candidate indexes and picks the cheapest execution path. smongo does the same thing -- backed by real WiredTiger B-Tree indexes, not in-memory hash maps.
+MongoDB solves this with a query planner that evaluates candidate indexes and picks the cheapest execution path. smongo does the same thing — backed by **real B-tree indexes** in **`smongo-engine`** (persisted with **redb** on native targets), not in-memory hash maps.
 
 ---
 
@@ -33,7 +33,7 @@ The planner chooses one of three strategies for every query:
 
 ### 1. PK Lookup -- O(log n)
 
-When the query includes a direct `_id` equality match like `{"_id": "abc123"}`, the planner bypasses all secondary indexes entirely. WiredTiger's primary B-Tree is keyed by `_id`, so this is a single `cursor.search()` call -- one seek down the tree, one document back.
+When the query includes a direct `_id` equality match like `{"_id": "abc123"}`, the planner bypasses all secondary indexes entirely. The **primary document table** is keyed by `_id`, so this is a single `cursor.search()` — one seek, one document back.
 
 This is the same optimization that makes `findOne({_id: ...})` fast in production MongoDB.
 
@@ -47,7 +47,7 @@ The key insight: `{"_id": "abc123"}` triggers PK lookup, but `{"_id": {"$in": [.
 
 ### 2. Index Scan -- O(log n + k)
 
-When secondary indexes exist, the planner scores each one and picks the best. An index scan uses WiredTiger's `search_near()` to find the starting position, then advances the cursor forward, collecting `_id` values until it exceeds the upper bound. Those IDs are then fetched from the primary table and re-filtered with the full query predicate.
+When secondary indexes exist, the planner scores each one and picks the best. An index scan uses **`search_near()`** on the index cursor to find the starting position, then walks forward, collecting `_id` values until it exceeds the upper bound. Those IDs are then fetched from the primary table and re-filtered with the full query predicate.
 
 ```
 Index B-Tree: city_1_age_-1
@@ -135,7 +135,7 @@ Given indexes: `city_1`, `city_1_age_-1`, `age_1`
 
 ## Bound Computation
 
-Once the winning index is chosen, the planner computes WiredTiger-domain lower and upper bound keys. This is where the real complexity lives.
+Once the winning index is chosen, the planner computes **encoded** lower and upper bound keys for the storage layer. This is where the real complexity lives.
 
 ### Ascending Fields
 
@@ -152,10 +152,10 @@ Descending indexes require **inverted encoding and swapped bounds**. When a fiel
 ```python
 if direction == -1:
     # Descending: invert encoding and swap bounds
-    wt_low = _invert_encoded(_sortable_encode(high_val))   # high becomes low
-    wt_high = _invert_encoded(_sortable_encode(low_val))    # low becomes high
-    lower_segments.append((wt_low, high_inc))
-    upper_segments.append((wt_high, low_inc))
+    enc_low = _invert_encoded(_sortable_encode(high_val))   # high becomes low
+    enc_high = _invert_encoded(_sortable_encode(low_val))    # low becomes high
+    lower_segments.append((enc_low, high_inc))
+    upper_segments.append((enc_high, low_inc))
 ```
 
 This ensures that a query like `{"age": {"$gt": 30}}` on an index `{age: -1}` correctly scans from the largest age downward to 30.
@@ -170,7 +170,7 @@ When a bound is unbounded (e.g., `$gt: 30` with no upper limit), the planner use
 
 ## The Cursor Walk
 
-`execute_index_scan()` translates the computed bounds into WiredTiger cursor operations:
+`execute_index_scan()` translates the computed bounds into **storage cursor** operations:
 
 ```
 1. Open cursor on the index table
@@ -189,9 +189,9 @@ Step 8 is important: the index provides **acceleration**, not **full pushdown**.
 
 ## Streaming Reads Use the Planner
 
-The `RustStreamingCursor` -- the lazy iterator behind `Collection.find()`, `find_one()`, and `count_documents()` -- consults the `RustQueryPlanner` on every call. Its `__iter__` branches on `plan.plan_type`:
+The **streaming cursor** (Rust-backed on hot paths) — the lazy iterator behind `Collection.find()`, `find_one()`, and `count_documents()` — consults the query planner. Iteration branches on `plan.plan_type`:
 
-| Plan Type | RustStreamingCursor Behavior |
+| Plan Type | Streaming cursor behavior |
 |---|---|
 | **`pk_lookup`** | Single `cursor.search()`, yield 0 or 1 doc |
 | **`index_scan`** | Walk index B-tree, look up each doc by `_id` one at a time, yield those passing the MQL filter |
@@ -199,7 +199,7 @@ The `RustStreamingCursor` -- the lazy iterator behind `Collection.find()`, `find
 | **`or_union`** | Execute each subplan, deduplicate candidate `_id`s, yield per-doc |
 | **`collection_scan`** | `cursor.next()` loop with per-doc filter and yield |
 
-Because the streaming cursor *yields* rather than *collects*, callers that stop early (`.limit(10)`, `find_one()`) avoid touching the remaining documents. The WiredTiger read lock is held for the lifetime of the generator and released automatically when iteration completes or the generator is garbage-collected.
+Because the streaming cursor *yields* rather than *collects*, callers that stop early (`.limit(10)`, `find_one()`) avoid touching the remaining documents. A **read transaction** (or snapshot) covers the iteration and ends when the cursor is exhausted or dropped.
 
 This means `find({}).limit(10)` on a million-document collection deserializes exactly 10 BSON documents. `find_one()` deserializes exactly 1.
 
@@ -219,7 +219,7 @@ In production MongoDB, updates by `_id` are always fast because of the primary i
 
 ## Lexicographic Key Encoding
 
-WiredTiger B-Trees compare keys as byte strings. To get correct ordering, we need MongoDB's type-aware comparison semantics to map cleanly onto lexicographic byte ordering. The solution is a type-prefix encoding scheme:
+Index B-trees compare keys as **byte strings**. To get correct ordering, MongoDB's type-aware comparison semantics must map cleanly onto lexicographic byte ordering. The solution is a type-prefix encoding scheme:
 
 ```
 Type Prefix Hierarchy:

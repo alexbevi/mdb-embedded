@@ -40,7 +40,7 @@ setup: install-dev ## Full dev setup: deps + pre-commit hooks
 # ---------------------------------------------------------------------------
 # Build
 # ---------------------------------------------------------------------------
-.PHONY: build build-rust build-debug
+.PHONY: build build-rust build-debug ensure-extension
 
 build: build-rust install ## Full build: Rust workspace tests + editable Python package
 
@@ -50,6 +50,9 @@ build-rust: ## Build and lint the Rust workspace
 
 build-debug: ## Rebuild only the PyO3 extension (debug, fast iteration)
 	cd $(ROOT) && $(PYTHON) -m maturin develop --manifest-path rust/smongo-py/Cargo.toml
+
+ensure-extension: ## Verify native extension is present and version-matched
+	cd $(ROOT) && $(PYTHON) -c "from smongo._smongo_core import __build_version__; import smongo; v=__build_version__(); assert v==smongo.__version__, f'extension {v} != package {smongo.__version__}'; print(f'OK: native extension v{v}')"
 
 # ---------------------------------------------------------------------------
 # Quality
@@ -66,6 +69,15 @@ typecheck: ## Run mypy strict type checking
 	cd $(ROOT) && $(PYTHON) -m mypy smongo/ web_app.py
 
 check: lint typecheck build-rust ## Run all static checks (lint + types + Rust)
+
+# ---------------------------------------------------------------------------
+# Security
+# ---------------------------------------------------------------------------
+.PHONY: audit
+
+audit: ## Run dependency vulnerability scanning (cargo-audit + pip-audit)
+	cd $(ROOT) && cargo audit --file rust/Cargo.lock
+	cd $(ROOT) && $(PYTHON) -m pip_audit -r requirements.txt
 
 # ---------------------------------------------------------------------------
 # Test

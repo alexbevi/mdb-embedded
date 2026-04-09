@@ -112,4 +112,4 @@ Playwright serves this directory and loads `tests/opfs-multitab-harness.html`.
 - `pkg/` — `wasm-pack` output (not committed in some setups)
 - `docker-compose.yml` — static `nginx:alpine` on port 8080
 
-See `../../ROADMAP.md` (Part 2 — WASM) for WASM planning notes.
+See [PERSISTENCE-AND-LIFECYCLE.md](PERSISTENCE-AND-LIFECYCLE.md) for WASM persistence design and [ARCHITECTURE.md](../../../ARCHITECTURE.md) for the overall project architecture.

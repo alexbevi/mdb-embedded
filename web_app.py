@@ -119,7 +119,7 @@ def _json_body() -> dict[str, Any]:
 MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
 DB_NAME = "sync_demo"
 
-client = MongoClient("local://local_wt_data")
+client = MongoClient("local://local_redb_data")
 remote: PyMongoClient[dict[str, Any]] = PyMongoClient(MONGO_URI)
 
 sync_mgr = SyncManager(
@@ -752,7 +752,7 @@ _wire_server: WireServer | None = None
 
 
 def _start_wire_server() -> None:
-    """Start the wire protocol server in the same process, sharing the WiredTiger connection.
+    """Start the wire protocol server in the same process, sharing the embedded MongoClient.
 
     Controlled by environment variables:
       WIRE_PORT  -- TCP port (0 or unset = disabled)

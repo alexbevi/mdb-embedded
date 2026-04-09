@@ -1,15 +1,13 @@
 """
-Connection Layer -- the magic switch between remote MongoDB, redb, and WiredTiger.
+Connection Layer -- remote MongoDB (PyMongo) or embedded redb (local URIs).
 
-MongoClient("mongodb://...")   -> real PyMongo
-MongoClient("local://./path")  -> embedded redb engine (NEW DEFAULT)
-MongoClient("local+wt://path") -> embedded WiredTiger engine (legacy)
+MongoClient("mongodb://...")  -> real PyMongo
+MongoClient("local://./path") -> embedded smongo-engine + redb (only ``local://``; other ``*://`` schemes are rejected)
 """
 
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any, cast
 
 try:
@@ -17,18 +15,12 @@ try:
 except ImportError:
     _PyMongoClient = None  # type: ignore[misc, assignment]
 
-from ._compat import WTError as _WTError
+from ._compat import StorageError as _StorageError
 from ._types import Document, Filter, IndexKeys, Pipeline, Projection, UpdateSpec
 from .aggregation import Cursor
 from .index import DuplicateKeyError
 from .schema import ValidationError
-from .storage import (
-    DeleteResult,
-    InsertResult,
-    LocalClient,
-    LocalCollection,
-    UpdateResult,
-)
+from .storage import DeleteResult, InsertResult, UpdateResult
 from .storage.redb_engine import RedbClient, RedbCollection
 from .sync import SyncManager
 
@@ -126,13 +118,14 @@ class MongoClient:
 
         Args:
             uri: Connection URI. Supported formats:
-                - "mongodb://" or "mongodb+srv://" - Remote MongoDB
-                - "local://path" - Embedded redb (default)
-                - "local+wt://path" - Embedded WiredTiger (legacy)
+                - "mongodb://" or "mongodb+srv://" — remote MongoDB (PyMongo)
+                - "local://<path>" — embedded redb (smongo-engine). Schemes other
+                  than exactly ``local`` (e.g. ``local+bad://``) are rejected.
+                - A bare filesystem path with no ``://`` — same as ``local://`` with that path
             sync: Remote MongoDB URI for hybrid sync mode
             sync_config: Configuration for sync manager
-            durable: Enable durable writes (default: True)
-            backend: Force backend ("redb" or "wiredtiger"). If None, determined from URI.
+            durable: Hint for durability (redb is always durable on disk; kept for API compatibility)
+            backend: Must be ``None`` or ``\"redb\"`` for local URIs.
         """
         self.uri = uri
         self._sync_mgr: SyncManager | None = None
@@ -146,34 +139,29 @@ class MongoClient:
         else:
             self.mode = "hybrid" if sync else "local"
 
-            # Determine backend from URI or parameter or env var
-            if backend is None:
-                if uri.startswith("local+wt://"):
-                    backend = "wiredtiger"
-                elif os.environ.get("SMONGO_BACKEND", "").lower() == "wiredtiger":
-                    backend = "wiredtiger"
-                    log.info("Using WiredTiger backend (SMONGO_BACKEND=wiredtiger)")
-                else:
-                    backend = "redb"
+            if backend is not None and str(backend).lower() not in ("redb", ""):
+                raise ValueError(
+                    f"Unsupported backend {backend!r}; local embedded mode uses redb only."
+                )
 
-            # Extract path
+            # Embedded mode: only `local://` is a valid scheme (avoid silent mis-parsing
+            # of mistyped URIs such as `local+foo://...`).
             if "://" in uri:
-                db_path = uri.split("://", 1)[1]
+                scheme, _, rest = uri.partition("://")
+                if scheme.lower() != "local":
+                    raise ValueError(
+                        f"Unsupported URI scheme {scheme!r} for embedded mode. "
+                        "Use local://<path> for the embedded engine, or "
+                        "mongodb:// or mongodb+srv:// for a remote server."
+                    )
+                db_path = rest
             else:
                 db_path = uri
             db_path = db_path or "local_data"
 
-            # Create backend client
-            if backend == "wiredtiger":
-                log.info("Creating WiredTiger client at %s", db_path)
-                self.client = LocalClient(db_path, durable=durable)
-            elif backend == "redb":
-                log.info("Creating redb client at %s", db_path)
-                self.client = RedbClient(db_path, durable=durable)
-            else:
-                raise ValueError(f"Unknown backend: {backend}")
-
-            self.backend = backend
+            log.info("Creating redb client at %s", db_path)
+            self.client = RedbClient(db_path, durable=durable)
+            self.backend = "redb"
 
             if sync:
                 self._sync_mgr = SyncManager(self, sync, sync_config=sync_config)
@@ -189,7 +177,7 @@ class MongoClient:
         self._databases[db_name] = db
         return db
 
-    def get_local_client(self) -> LocalClient | RedbClient:
+    def get_local_client(self) -> RedbClient:
         """Return the underlying local client (only available in local mode)."""
         if self.mode not in ("local", "hybrid"):
             raise RuntimeError("get_local_client() only available in local mode")
@@ -310,7 +298,7 @@ InsertOneResult = InsertResult
 
 
 class Collection:
-    """Unified collection API -- delegates to either PyMongo or LocalCollection."""
+    """Unified collection API -- delegates to PyMongo or :class:`RedbCollection`."""
 
     def __init__(self, backend: Any, mode: str, db: Database | None = None) -> None:
         self.backend = backend
@@ -328,8 +316,8 @@ class Collection:
     def find(self, query: Filter | None = None, projection: Projection | None = None) -> Any:
         """Return a cursor over documents matching *query*, optionally applying *projection*.
 
-        In local mode the cursor wraps a lazy :class:`StreamingCursor` so
-        documents are deserialized from WiredTiger only as they are consumed.
+        In local mode with redb, results are materialized for the cursor API; the
+        public ``Collection`` API matches PyMongo.
         """
         query = query or {}
         if self.mode == "remote":
@@ -353,7 +341,7 @@ class Collection:
         """Return the first document matching *query*, or ``None``.
 
         *projection* is supported for remote PyMongo and for :class:`~smongo.storage.redb_engine.RedbCollection`
-        (WiredTiger :class:`~smongo.storage.collection.LocalCollection` ignores it today).
+        (projection is applied in Python for non-redb legacy paths).
         """
         query = query or {}
         if self.mode == "remote":
@@ -363,9 +351,15 @@ class Collection:
         return self.backend.find_one(query)  # type: ignore[no-any-return]
 
     def aggregate(self, pipeline: Pipeline) -> list[Document] | Any:
-        """Run an aggregation *pipeline* and return the result documents."""
+        """Run an aggregation *pipeline* and return the result documents.
+
+        In local mode with redb, the pipeline runs entirely in the Rust engine
+        via ``DatabaseContext`` — no FFI round-trips for cross-collection stages.
+        """
         if self.mode == "remote":
             return list(self.backend.aggregate(pipeline))
+        if isinstance(self.backend, RedbCollection) and hasattr(self.backend, "_rust_coll"):
+            return self.backend._rust_coll.aggregate_engine(pipeline)
         docs = self.backend.find_streaming()
         coll_getter = self._make_collection_getter()
         return Cursor(docs, collection_getter=coll_getter).aggregate(pipeline)
@@ -520,7 +514,7 @@ class Collection:
             except (
                 DuplicateKeyError,
                 ValidationError,
-                _WTError,
+                _StorageError,
                 KeyError,
                 TypeError,
                 ValueError,
@@ -568,8 +562,8 @@ class Collection:
             return self.backend.get_oplog()  # type: ignore[no-any-return]
         return []
 
-    def get_local_collection(self) -> LocalCollection:
-        """Return the underlying LocalCollection (local mode only)."""
+    def get_local_collection(self) -> RedbCollection:
+        """Return the underlying :class:`RedbCollection` (local mode only)."""
         if self.mode not in ("local", "hybrid"):
             raise RuntimeError("get_local_collection() only available in local mode")
         return self.backend  # type: ignore[no-any-return]

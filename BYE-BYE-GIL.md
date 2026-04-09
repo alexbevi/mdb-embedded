@@ -1,7 +1,7 @@
 # BYE-BYE, GIL
 
-> **Status: COMPLETE.** `RustLocalClient` is the sole storage backend.
-> `MongoClient("local://...")` routes directly to Rust -- no Python fallback, no parity layer.
+> **Status: COMPLETE.** Local mode uses **`RedbLocalClient` / `RedbClient`** over **`smongo-engine` + redb**.
+> `MongoClient("local://...")` routes to the PyO3 extension — no Python storage fallback.
 
 **How we eliminated Python method dispatch from the hot path of an embedded MongoDB engine.**
 
@@ -85,8 +85,8 @@ We systematically replaced every Python method dispatch in the hot path with **d
           │ direct Rust fn call, no MRO walk, no boxing
           ▼
   ┌────────────────┐
-  │  WiredTiger     │   C FFI through typed RAII wrappers
-  │  Storage        │
+  │ smongo-engine   │   redb + typed `RedbLocalCollection` paths
+  │ + redb          │
   └───────┬────────┘
           │ release GIL
           ▼
@@ -113,29 +113,28 @@ The GIL is still acquired (Python objects like `PyDict` documents require it), b
 ```
 ConnectionContext          (Rust #[pyclass])
     │
-    ├── dbs: HashMap<String, Py<RustLocalDB>>      ← typed, not Py<PyAny>
+    ├── dbs: HashMap<String, Py<RedbLocalDB>>      ← typed, not Py<PyAny>
     │
     └── cursor_registry: Py<CursorRegistry>         ← typed
 
-RustLocalDB                (Rust #[pyclass])
+RedbLocalDB                (Rust #[pyclass])
     │
-    └── collections: HashMap<String, Py<RustLocalCollection>>  ← typed
+    └── collections: Mutex<HashMap<String, Py<RedbLocalCollection>>>
 
-RustLocalCollection        (Rust #[pyclass])
+RedbLocalCollection        (Rust #[pyclass])
     │
-    ├── session_py: Py<RustWtSession>               ← typed, raw WT_SESSION*
-    ├── index_mgr: Py<RustIndexManager>             ← typed, not Py<PyAny>
-    ├── rwlock: Py<ReadWriteLock>                    ← typed
-    └── planner: Py<RustQueryPlanner>                ← typed
+    ├── db: Arc<Database<RedbBackend>>               ← shared engine database
+    ├── oplog_writer: Py<RedbOplogWriterBridge>
+    └── txn_slot: RedbTxnSlot                        ← multi-doc txn routing
 
 CursorRegistry             (Rust #[pyclass])
     │
     └── inner: parking_lot::Mutex<HashMap<i64, CursorState>>
 
-RustStreamingCursor        (Rust #[pyclass])
+Wire CRUD hot path         (Rust)
     │
-    ├── Direct WtCursor access (no Python session wrapper)
-    └── from_collection() bypasses 5 getattr lookups
+    └── RedbLocalCollection::find_streaming_typed / typed update helpers
+        (no Python getattr chain per document)
 ```
 
 ### The pub(crate) / #[pymethods] Split
@@ -214,10 +213,10 @@ This gives us **two call paths**:
 
 ### Also eliminated
 
-- **`oplog.rs`**: All 47 `call_method` sites → typed `RustWtSession` / `RustWtCursor` borrow
-- **`admin.rs` / `handshake.rs`**: WiredTiger cursor operations (metadata walks, statistics, user persistence, checkpoint, fsync) → typed borrow; platform/OS info cached in `CachedSystemInfo`; `get_collection` `call_method` (4 sites) → typed `RustLocalDB.get_collection_typed()`
+- **`oplog.rs`**: `call_method` elimination → typed engine / session borrow on redb-backed paths.
+- **`admin.rs` / `handshake.rs`**: Admin/diagnostic handlers → typed `RedbLocalCollection` / Rust helpers where applicable; platform/OS info cached in `CachedSystemInfo`.
 - **`wire_codec.rs` / `query_expressions.rs`**: BSON class attributes (`ObjectId`, `Decimal128`, `Regex`) and builtins (`int`, `float`, `round`) cached via `OnceLock` macros
-- **`local_collection.rs`**: 5 `dict.copy()` calls → Rust-native `shallow_copy_dict`
+- **`redb_client.rs`** (was `local_collection.rs`): 5 `dict.copy()` calls → Rust-native `shallow_copy_dict`
 - **`aggregate.rs`**: Python `Cursor.aggregate()` call → direct Rust `aggregate_pipeline`
 - **`indexes.rs`**: All `list_indexes`, `create_index`, `drop_index`, `rebuild_all_indexes` → typed dispatch
 - **`CursorRegistry`**: All 5 methods (`create`, `get_more`, `kill`, `is_tailable`, `get_more_change_stream`) → typed dispatch
@@ -273,9 +272,9 @@ These intentionally remain as Python dispatch:
 |-----------|--------|
 | `smongo.aggregation.Cursor` (sort/skip/limit/proj/to_list) | **Python API only** — wire protocol `find` no longer uses this class; lazy evaluation for embedded Python callers; underlying doc source is still `RustStreamingCursor` where applicable |
 | `coll.watch()` (change streams) | Pub/sub infrastructure; `OplogHub` listener registration is now typed (`Py<ChangeStream>` instead of `Py<PyAny>`) |
-| `SyncManager` orchestration | Deeply coupled to PyMongo + WT sessions on both ends |
+| `SyncManager` orchestration | Deeply coupled to PyMongo + embedded KV on the local side |
 
-> **Note:** `apply_update` was ported to Rust (`rust/src/query_update.rs`) and exposed as `_rs_apply_update`; the Python module rebinds to the Rust implementation at import time. It is no longer a "Python-only" component. Similarly, `$jsonSchema` validation was ported to Rust (`rust/src/schema.rs`); `smongo/schema.py` now delegates to the Rust implementation.
+> **Note:** `apply_update` was ported to Rust (`rust/smongo-py/src/query_update.rs`) and exposed as `_rs_apply_update`; the Python module rebinds to the Rust implementation at import time. It is no longer a "Python-only" component. Similarly, `$jsonSchema` validation was ported to Rust (`rust/smongo-py/src/schema.rs`); `smongo/schema.py` now delegates to the Rust implementation.
 
 Admin operations (`create_collection`, `drop_collection`, `verify`, `compact`) are Rust `#[pymethods]` on `RustLocalDB` / `RustLocalCollection` -- they go through PyO3 but execute native Rust code, not Python dispatch.
 
@@ -330,17 +329,17 @@ self.child.bind(py).borrow().do_work(py, arg)?;
 
 ## Files Changed
 
-| File | Changes |
-|------|---------|
-| `rust/src/local_collection.rs` | 17 methods extracted to `pub(crate)` |
-| `rust/src/streaming.rs` | `from_collection()` typed constructor |
-| `rust/src/wire_cursors.rs` | 5 methods extracted to `pub(crate)` |
-| `rust/src/wire_commands/crud.rs` | 32 `call_method` → typed dispatch |
-| `rust/src/wire_commands/admin.rs` | 4 `get_collection` + CursorRegistry + storage_stats → typed |
-| `rust/src/wire_commands/indexes.rs` | All collection + CursorRegistry calls → typed |
-| `rust/src/wire_context.rs` | Typed `get_db_typed()` / `get_collection_typed()` |
-| `rust/src/storage_engine.rs` | `get_collection_typed()` on `RustLocalDB` |
-| `rust/src/query_planner.rs` | New module: `RustQueryPlanner` with `plan`, `execute_index_scan`, `execute_in_scan` |
+> **Note:** Several modules listed below were later consolidated into other files during the redb/smongo-engine migration. The techniques and patterns are unchanged; the code now lives in different locations.
+
+| File | Changes | Current location |
+|------|---------|-----------------|
+| `rust/smongo-py/src/redb_client.rs` | `RedbLocalCollection` methods extracted to `pub(crate)` (was `local_collection.rs`) | `redb_client.rs` |
+| `rust/smongo-py/src/wire_cursors.rs` | 5 methods extracted to `pub(crate)` | `wire_cursors.rs` |
+| `rust/smongo-py/src/wire_commands/crud.rs` | 32 `call_method` → typed dispatch | `wire_commands/crud.rs` |
+| `rust/smongo-py/src/wire_commands/admin.rs` | 4 `get_collection` + CursorRegistry + storage_stats → typed | `wire_commands/admin.rs` |
+| `rust/smongo-py/src/wire_commands/indexes.rs` | All collection + CursorRegistry calls → typed | `wire_commands/indexes.rs` |
+| `rust/smongo-py/src/wire_context.rs` | Typed `get_db_typed()` / `get_collection_typed()` | `wire_context.rs` |
+| `rust/smongo-py/src/storage.rs` | `get_collection_typed()` on `RedbLocalDB` (was `storage_engine.rs`) | `storage.rs` |
 
 ---
 
@@ -392,6 +391,6 @@ smongo declares `#[pymodule(gil_used = false)]`, telling the free-threaded inter
 The architecture was designed for this from the start:
 
 1. **Rust-native synchronization** -- `InlineRwLock` (reader-writer) and `parking_lot::Mutex` protect all mutable state. These are GIL-agnostic.
-2. **Single-owner types** -- `RustWtCursor`, `RustStreamingCursor`, and `RustTransactionSession` are never shared across threads. PyO3's `RefCell`-like borrow checking enforces this at runtime.
+2. **Single-owner types** -- wire cursors, per-connection context, and transaction slots are not shared across threads unsafely. PyO3’s `RefCell`-like borrow checking and Rust mutexes enforce this at runtime.
 3. **No `GILProtected`** -- smongo never used `pyo3::sync::GILProtected` (removed in PyO3 0.28). All shared state uses proper Mutex or atomic types.
 4. **`py.detach()` on blocking paths** -- Lock acquisition in `ReadWriteLock`, `MutexForceGuard`, and `ChangeStream.__next__` already detaches from the runtime, preventing deadlocks with the interpreter's stop-the-world pauses.

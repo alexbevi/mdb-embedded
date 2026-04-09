@@ -106,6 +106,9 @@ def vector_search_stage(docs: list[Document], spec: dict[str, Any]) -> list[Docu
     vectors = _np.vstack(vec_rows)
     search_k = min(max(1, num_candidates), len(doc_rows))
 
+    if metric == "cosine" and float(_np.linalg.norm(query_arr)) == 0.0:
+        return []
+
     if _USearchIndex is not None:
         ranked = _vector_search_usearch(vectors, query_arr, search_k, metric)
     else:

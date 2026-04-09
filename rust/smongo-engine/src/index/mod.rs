@@ -1,42 +1,62 @@
 //! MongoDB-compatible index support for query optimization.
 //!
-//! This module provides index creation, maintenance, and query optimization
-//! for the embedded database engine.
-//!
-//! # Features
-//!
-//! - **Single-field indexes**: Index on one field
-//! - **Compound indexes**: Index on multiple fields
-//! - **Unique constraints**: Enforce uniqueness
-//! - **Query optimization**: Use indexes for faster queries
-//!
-//! # Example
-//!
-//! ```ignore
-//! use smongo_engine::database::Database;
-//! use bson::doc;
-//!
-//! let db = Database::open("./data/mydb")?;
-//! let users = db.collection("users")?;
-//!
-//! // Create single-field index
-//! users.create_index(doc! { "email": 1 }, None)?;
-//!
-//! // Create compound index
-//! users.create_index(doc! { "age": 1, "name": -1 }, None)?;
-//!
-//! // Create unique index
-//! users.create_index(
-//!     doc! { "username": 1 },
-//!     Some(IndexOptions { unique: true, ..Default::default() })
-//! )?;
-//!
-//! // Queries now use indexes automatically
-//! let result = users.find_one(doc! { "email": "alice@example.com" })?;
-//! ```
+//! Supports B-tree, `2dsphere`, text, vector search, bitmap, and prefix
+//! index types through a unified [`IndexType`] enum.  The planner, storage,
+//! and write-maintenance code dispatch via exhaustive `match` on this enum
+//! so that adding a new type is a compile error until every path is handled.
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod bitmap_index;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod text_index;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod vector_index;
+pub mod prefix_index;
 
 use bson::{Bson, Document};
 use serde::{Deserialize, Serialize};
+
+// ---------------------------------------------------------------------------
+// IndexType — the single discriminator for all index kinds
+// ---------------------------------------------------------------------------
+
+/// Discriminator for all supported index types.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum IndexType {
+    /// Standard B-tree index (default).  Keys use integer directions (1 / -1).
+    BTree,
+    /// Spherical geo index.  Keys use `"2dsphere"` or `"2d"` string values.
+    TwoDSphere,
+    /// Full-text inverted index.  Keys use `"text"` string values.
+    Text,
+    /// HNSW approximate nearest-neighbor index for vector similarity search.
+    VectorSearch,
+    /// Roaring-bitmap index for low-cardinality fields.
+    Bitmap,
+    /// Prefix-truncated B-tree index for long string keys.
+    Prefix,
+}
+
+/// Resolve the effective [`IndexType`] from key definitions and options.
+///
+/// Priority: explicit `opts.index_type` > key-string detection > `BTree` default.
+pub fn resolve_index_type(keys: &Document, opts: &IndexOptions) -> IndexType {
+    if let Some(ref explicit) = opts.index_type {
+        return explicit.clone();
+    }
+    if is_2dsphere_keys(keys) {
+        return IndexType::TwoDSphere;
+    }
+    if is_text_keys(keys) {
+        return IndexType::Text;
+    }
+    IndexType::BTree
+}
+
+// ---------------------------------------------------------------------------
+// Key-pattern helpers
+// ---------------------------------------------------------------------------
 
 /// `true` if keys are `{ "field": "2dsphere" }` or `{ "field": "2d" }` (single-field spherical geo).
 pub fn is_2dsphere_keys(keys: &Document) -> bool {
@@ -55,6 +75,33 @@ pub fn twodsphere_field(keys: &Document) -> Option<String> {
     }
     keys.keys().next().cloned()
 }
+
+/// `true` if any key value is the string `"text"`.
+pub fn is_text_keys(keys: &Document) -> bool {
+    keys.values()
+        .any(|v| matches!(v, Bson::String(s) if s == "text"))
+}
+
+/// Return all field names whose direction is `"text"`.
+pub fn text_fields(keys: &Document) -> Vec<String> {
+    keys.iter()
+        .filter(|(_, v)| matches!(v, Bson::String(s) if s == "text"))
+        .map(|(k, _)| k.clone())
+        .collect()
+}
+
+/// Return the single vector field name from a vector index key document.
+pub fn vector_field(keys: &Document) -> Option<String> {
+    if keys.len() == 1 {
+        keys.keys().next().cloned()
+    } else {
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
+// IndexSpec / IndexOptions
+// ---------------------------------------------------------------------------
 
 /// Index specification
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,7 +130,72 @@ pub struct IndexOptions {
     /// Only valid on single-field indexes over a DateTime field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expire_after_seconds: Option<u64>,
+    /// Partial filter expression — only index documents matching this filter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partial_filter_expression: Option<Document>,
+    /// Collation options for string comparison in the index.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collation: Option<Document>,
+    /// Explicit index type override. When `None`, the type is inferred from the
+    /// key document (e.g. `"2dsphere"` string -> [`IndexType::TwoDSphere`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index_type: Option<IndexType>,
+    /// Options specific to vector search indexes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vector_options: Option<VectorIndexOptions>,
+    /// Options specific to full-text indexes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_options: Option<TextIndexOptions>,
+    /// Options specific to prefix indexes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix_options: Option<PrefixOptions>,
 }
+
+// ---------------------------------------------------------------------------
+// Per-type option structs
+// ---------------------------------------------------------------------------
+
+/// Configuration for HNSW vector search indexes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VectorIndexOptions {
+    /// Number of dimensions in each vector.
+    pub dimensions: usize,
+    /// Similarity metric: `"cosine"`, `"euclidean"`, or `"dotProduct"`.
+    #[serde(default = "default_vector_metric")]
+    pub metric: String,
+    /// HNSW construction-time expansion factor (default 200).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ef_construction: Option<usize>,
+    /// HNSW max connections per layer (default 16).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub m: Option<usize>,
+}
+
+fn default_vector_metric() -> String {
+    "cosine".to_string()
+}
+
+/// Configuration for full-text indexes.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TextIndexOptions {
+    /// Default language for stemming (future).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_language: Option<String>,
+    /// Per-field weights for relevance scoring.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weights: Option<Document>,
+}
+
+/// Configuration for prefix-truncated indexes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrefixOptions {
+    /// Maximum number of bytes stored per key field.
+    pub prefix_length: usize,
+}
+
+// ---------------------------------------------------------------------------
+// IndexDirection
+// ---------------------------------------------------------------------------
 
 /// Index direction
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,12 +232,12 @@ pub fn extract_index_key(doc: &Document, keys: &Document) -> Vec<u8> {
 
     let mut key_parts = Vec::new();
 
-    for (field, _direction) in keys {
+    for (field, direction) in keys {
         let value = get_value(doc, field);
+        let descending = IndexDirection::from_bson(direction) == Some(IndexDirection::Descending);
 
-        // Serialize the value
-        let serialized = match value {
-            Some(Bson::Null) => vec![0x00], // Null
+        let mut serialized = match value {
+            Some(Bson::Null) => vec![0x00],
             Some(Bson::Int32(n)) => n.to_be_bytes().to_vec(),
             Some(Bson::Int64(n)) => n.to_be_bytes().to_vec(),
             Some(Bson::Double(n)) => n.to_be_bytes().to_vec(),
@@ -134,24 +246,118 @@ pub fn extract_index_key(doc: &Document, keys: &Document) -> Vec<u8> {
             Some(Bson::Boolean(b)) => vec![if *b { 0x01 } else { 0x00 }],
             Some(Bson::DateTime(dt)) => dt.timestamp_millis().to_be_bytes().to_vec(),
             Some(_other) => {
-                vec![0x02] // Placeholder for complex types
+                vec![0x02]
             }
-            None => vec![0xFF], // Missing field
+            None => vec![0xFF],
         };
+
+        // For descending fields, XOR every byte with 0xFF so B-tree order
+        // naturally reverses the logical sort order.
+        if descending {
+            invert_bytes(&mut serialized);
+        }
 
         key_parts.push(serialized);
     }
 
-    // Concatenate all parts with separators
     let mut result = Vec::new();
     for (i, part) in key_parts.iter().enumerate() {
         if i > 0 {
-            result.push(0xFE); // Separator
+            result.push(0xFE);
         }
         result.extend_from_slice(part);
     }
 
     result
+}
+
+/// XOR every byte with 0xFF, reversing the sort order of a byte string.
+fn invert_bytes(bytes: &mut [u8]) {
+    for b in bytes.iter_mut() {
+        *b ^= 0xFF;
+    }
+}
+
+/// Decode index key bytes back into field values for covering index queries
+///
+/// Note: Index keys are stored as: field1|field2|...|fieldN|_id_str
+/// We only decode the indexed fields, not the trailing _id.
+pub fn decode_index_key(key_bytes: &[u8], index_keys: &Document) -> Option<Document> {
+    let mut result = Document::new();
+    let parts: Vec<&[u8]> = key_bytes.split(|&b| b == 0xFE).collect();
+
+    if parts.len() < index_keys.len() {
+        return None;
+    }
+
+    for (i, (field, direction)) in index_keys.iter().enumerate() {
+        if i >= parts.len() {
+            break;
+        }
+        let descending = IndexDirection::from_bson(direction) == Some(IndexDirection::Descending);
+        let mut part = parts[i].to_vec();
+        if descending {
+            invert_bytes(&mut part);
+        }
+        let value = decode_index_value_part(&part)?;
+        result.insert(field.clone(), value);
+    }
+
+    Some(result)
+}
+
+/// Decode a single field value from index key bytes
+fn decode_index_value_part(bytes: &[u8]) -> Option<Bson> {
+    if bytes.is_empty() {
+        return None;
+    }
+
+    // Check for special markers first
+    if bytes[0] == 0xFF {
+        return None; // Missing field
+    }
+
+    if bytes[0] == 0x01 && bytes.len() == 1 {
+        return Some(Bson::Boolean(true));
+    }
+
+    if bytes[0] == 0x00 && bytes.len() == 1 {
+        return Some(Bson::Boolean(false));
+    }
+
+    // Try to decode as UTF-8 string first (most common for text fields)
+    if let Ok(s) = std::str::from_utf8(bytes) {
+        // If it's all printable ASCII or valid UTF-8, it's probably a string
+        if !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c.is_whitespace() || "_-./".contains(c)) {
+            return Some(Bson::String(s.to_string()));
+        }
+    }
+
+    // Try fixed-width numeric types
+    // For the last field before _id, we may have extra bytes appended (the _id)
+    if bytes.len() >= 4 {
+        // Check if first 4 bytes could be Int32
+        if bytes.len() == 4 || (bytes.len() > 4 && bytes[4..].iter().all(|&b| b >= 32 && b <= 126)) {
+            // Either exactly 4 bytes, or 4 bytes followed by ASCII (the _id)
+            let arr: [u8; 4] = bytes[0..4].try_into().ok()?;
+            return Some(Bson::Int32(i32::from_be_bytes(arr)));
+        }
+    }
+
+    if bytes.len() == 8 {
+        let arr: [u8; 8] = bytes.try_into().ok()?;
+        return Some(Bson::Int64(i64::from_be_bytes(arr)));
+    }
+
+    if bytes.len() == 12 {
+        let arr: [u8; 12] = bytes.try_into().ok()?;
+        return Some(Bson::ObjectId(bson::oid::ObjectId::from_bytes(arr)));
+    }
+
+    // Fallback: treat as string even if not all printable
+    std::str::from_utf8(bytes)
+        .ok()
+        .map(|s| Bson::String(s.to_string()))
 }
 
 /// `2dsphere` index key bytes, or `None` if the document has no indexed point (sparse skip).

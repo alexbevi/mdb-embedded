@@ -347,7 +347,7 @@ fn map_handler_error<'py>(
     let txn_err_type = exception_types.get_item("TransactionError")?;
     let dup_err_type = exception_types.get_item("DuplicateKeyError")?;
     let val_err_type = exception_types.get_item("ValidationError")?;
-    let wt_err_type = exception_types.get_item("WTError")?;
+    let storage_err_type = exception_types.get_item("StorageError")?;
 
     if let Some(ty) = ns_err_type {
         if err.is_instance(py, ty.cast()?) {
@@ -380,8 +380,8 @@ fn map_handler_error<'py>(
         return make_error_fn.call1(("CommandNotSupported", &msg));
     }
 
-    // WTError (storage engine)
-    if let Some(ty) = wt_err_type {
+    // StorageError (embedded engine / I/O)
+    if let Some(ty) = storage_err_type {
         if err.is_instance(py, ty.cast()?) {
             let log_mod = crate::cached_modules::logging_mod(py)?;
             let logger = log_mod.call_method1("getLogger", ("smongo.wire.commands",))?;

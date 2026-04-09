@@ -85,18 +85,6 @@ pub(crate) fn dict_get_or_none<'py>(
     dict.get_item(key)
 }
 
-/// Extract a required `PyDict` value from `dict[key]`, with a clear error message.
-#[allow(dead_code)]
-pub(crate) fn dict_get_dict<'py>(
-    dict: &Bound<'py, PyDict>,
-    key: &str,
-) -> PyResult<Bound<'py, PyDict>> {
-    let v = dict.get_item(key)?.ok_or_else(|| {
-        pyo3::exceptions::PyKeyError::new_err(format!("missing required key: {key}"))
-    })?;
-    Ok(v.cast_into::<PyDict>()?)
-}
-
 /// Extract a required `PyList` value from `dict[key]`, with a clear error message.
 pub(crate) fn dict_get_list<'py>(
     dict: &Bound<'py, PyDict>,
@@ -121,13 +109,12 @@ pub(crate) fn get_collection<'py>(
         .into_bound(py))
 }
 
-/// Typed collection accessor -- returns a typed `Py<RustLocalCollection>`
-/// without any Python dispatch.
+/// Typed collection accessor -- returns a typed `Py<RedbLocalCollection>`.
 pub(crate) fn get_collection_typed(
     ctx: &Bound<'_, ConnectionContext>,
     db_name: &str,
     coll_name: &str,
-) -> PyResult<Py<crate::local_collection::RustLocalCollection>> {
+) -> PyResult<Py<crate::redb_client::RedbLocalCollection>> {
     let py = ctx.py();
     let ctx_ref = ctx.borrow();
     ctx_ref.get_collection_typed(py, db_name, coll_name)
@@ -149,7 +136,7 @@ pub(crate) fn classify_write_error(
     validation_err: &Bound<'_, PyAny>,
 ) -> PyResult<(i32, String)> {
     let msg = err.value(py).str()?.to_string();
-    if err.is_instance_of::<crate::index_manager::DuplicateKeyError>(py) {
+    if err.is_instance_of::<crate::index_helpers::DuplicateKeyError>(py) {
         return Ok((11000, msg));
     }
     if err.is_instance(py, validation_err.cast()?) {

@@ -18,7 +18,7 @@ import time
 import pymongo
 import pytest
 
-from smongo._smongo_core import RustLocalClient
+from smongo._smongo_core import RedbLocalClient
 from smongo.wire.server import WireServer
 
 
@@ -55,7 +55,7 @@ class TestRBAC:
         db_path = str(tmp_path_factory.mktemp("rbac"))
         port = _find_free_port()
 
-        lc = RustLocalClient(db_path)
+        lc = RedbLocalClient(db_path)
         server1 = WireServer(db_path, "127.0.0.1", port, auth_required=False, local_client=lc)
         server1.start()
         _wait_for_port("127.0.0.1", port)
@@ -186,7 +186,7 @@ class TestGrantRevoke:
         db_path = str(tmp_path_factory.mktemp("grant"))
         port = _find_free_port()
 
-        lc = RustLocalClient(db_path)
+        lc = RedbLocalClient(db_path)
         server1 = WireServer(db_path, "127.0.0.1", port, auth_required=False, local_client=lc)
         server1.start()
         _wait_for_port("127.0.0.1", port)

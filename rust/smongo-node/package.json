@@ -1,7 +1,7 @@
 {
   "name": "@smongo/embedded",
   "version": "0.1.0",
-  "description": "Embedded MongoDB-compatible database engine for Node.js — powered by WiredTiger",
+  "description": "Embedded MongoDB-compatible database engine for Node.js (smongo-engine / redb)",
   "main": "index.js",
   "types": "index.d.ts",
   "napi": {

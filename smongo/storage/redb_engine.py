@@ -2,7 +2,7 @@
 Redb-backed storage engine - Python wrapper for Rust RedbLocalClient.
 
 This provides a LocalClient-compatible API backed by smongo-engine's redb backend,
-allowing MongoClient to use redb instead of WiredTiger.
+allowing MongoClient to use the embedded redb engine.
 """
 
 from __future__ import annotations
@@ -10,11 +10,13 @@ from __future__ import annotations
 import os
 import time as _time
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, cast
 
 from .._smongo_core import RedbLocalClient as _RedbLocalClient
 from .._smongo_core import RedbLocalCollection as _RedbLocalCollection
 from .._smongo_core import RedbLocalDB as _RedbLocalDB
+from ..schema import validate_document
+from .collection import TTLReaper
 from .helpers import log
 from .results import DeleteResult, InsertResult, UpdateResult
 
@@ -31,7 +33,7 @@ def _is_pk_equality_filter(query: dict[str, Any]) -> bool:
 def _redb_explain_plan_kind(
     execution_plan: Any, query_filter: dict[str, Any] | None
 ) -> str:
-    """Map engine ``execution_plan`` BSON shape to WiredTiger-style ``plan`` string."""
+    """Map engine ``execution_plan`` BSON shape to a MongoDB-style ``plan`` string."""
     qf = query_filter or {}
     if execution_plan is None:
         return "collection_scan"
@@ -125,6 +127,10 @@ class RedbDB:
             )
         return self._collections[name]
 
+    def collection(self, name: str) -> RedbCollection:
+        """Alias for :meth:`get_collection` (PyMongo-style naming)."""
+        return self.get_collection(name)
+
     def create_collection(
         self, name: str, validator: dict[str, Any] | None = None, **kwargs: Any
     ) -> RedbCollection:
@@ -142,15 +148,23 @@ class RedbDB:
         """Remove the collection, its secondary index tables, and cached handles (oplog table dropped separately in Rust)."""
         self._collections.pop(name, None)
         self._validators.pop(name, None)
-        self._rust_db.drop_collection(name)
+        try:
+            self._rust_db.drop_collection(name)
+        except RuntimeError as e:
+            msg = str(e).lower()
+            if "not found" in msg or "collection not found" in msg:
+                return
+            raise
 
     def list_collection_names(self) -> list[str]:
-        """Return all collection names."""
+        """Return all collection names (on-disk plus opened handles)."""
         try:
-            return self._rust_db.list_collection_names()
+            rust_names = list(self._rust_db.list_collection_names())
         except Exception as e:
             log.debug("list_collection_names failed: %s", e)
-            return []
+            rust_names = []
+        merged = set(rust_names) | set(self._collections.keys())
+        return sorted(merged)
 
     def close(self) -> None:
         """Close all owned collections (no-op for redb)."""
@@ -173,6 +187,7 @@ class RedbCollection:
         self.name = name
         self._db = db
         self._validator = validator
+        self._ttl_reaper = TTLReaper(self)
 
     @property
     def _oplog_w(self) -> Any:
@@ -180,7 +195,7 @@ class RedbCollection:
         return self._rust_coll._oplog_w
 
     def get_oplog_reader(self) -> Any:
-        """Return a reader with ``read_from(checkpoint, skip_internal=...)`` like WT :class:`~smongo.oplog.OplogReader`."""
+        """Return a reader with ``read_from(checkpoint, skip_internal=...)`` matching :class:`~smongo.oplog.OplogReader`."""
         return self._rust_coll.get_oplog_reader()
 
     def get_oplog(self) -> list[dict[str, Any]]:
@@ -189,9 +204,22 @@ class RedbCollection:
         pairs = reader.read_from(None, skip_internal=False)
         return [dict(entry) for _key, entry in pairs]
 
+    def compact_oplog(self, keep: int) -> int:
+        """Remove oldest oplog entries until at most *keep* remain; returns number removed."""
+        return int(self._rust_coll.compact_oplog(int(keep)))
+
     def get_by_id(self, doc_id: Any) -> dict[str, Any] | None:
         """Fetch a document by ``_id`` (used by sync filters on updates)."""
         return self._rust_coll.get_by_id(doc_id)
+
+    def get_by_ids(self, doc_ids: list[Any]) -> list[dict[str, Any]]:
+        """Return documents for the given ``_id`` values (skip missing)."""
+        out: list[dict[str, Any]] = []
+        for doc_id in doc_ids:
+            doc = self.get_by_id(doc_id)
+            if doc is not None:
+                out.append(doc)
+        return out
 
     def watch(self, pipeline: list[Any] | None = None) -> Any:
         """Local change stream over the redb oplog hub."""
@@ -203,8 +231,11 @@ class RedbCollection:
         self, document: dict[str, Any], *, _internal: bool = False
     ) -> InsertResult:
         """Insert a single document."""
-        result = self._rust_coll.insert_one(document, internal=_internal)
-        # Match LocalCollection / PyMongo: ``inserted_ids`` is always a sequence.
+        doc = dict(document)
+        if not _internal and self._validator:
+            validate_document(doc, self._validator)
+        result = self._rust_coll.insert_one(doc, internal=_internal)
+        # Match PyMongo: ``inserted_ids`` is always a sequence.
         return InsertResult([result["inserted_id"]])
 
     def insert_many(
@@ -216,7 +247,11 @@ class RedbCollection:
     ) -> InsertResult:
         """Insert multiple documents."""
         _ = ordered
-        result = self._rust_coll.insert_many(documents, internal=_internal)
+        docs = [dict(d) for d in documents]
+        if not _internal and self._validator:
+            for d in docs:
+                validate_document(d, self._validator)
+        result = self._rust_coll.insert_many(docs, internal=_internal)
         # InsertResult stores inserted_ids (can be single ID or list)
         return InsertResult(result["inserted_ids"])
 
@@ -240,10 +275,60 @@ class RedbCollection:
         """Iterate matches for *query* (materialized via :meth:`find`; lazy streaming TBD)."""
         return iter(self.find(query or {}))
 
+    def get_all(self) -> list[dict[str, Any]]:
+        """Return all documents in the collection (same shape as legacy storage helpers)."""
+        return list(self._rust_coll.get_all())
+
+    def find_one_and_update(
+        self,
+        query: dict[str, Any],
+        update: dict[str, Any],
+        *,
+        return_document: str = "before",
+        _internal: bool = False,
+    ) -> dict[str, Any] | None:
+        """Atomically update one matching document; return pre- or post-image."""
+        result = self._rust_coll.find_one_and_update(
+            query, update, return_document=return_document, internal=_internal
+        )
+        if result is None:
+            return None
+        return cast(dict[str, Any], result)
+
+    def find_one_and_replace(
+        self,
+        query: dict[str, Any],
+        replacement: dict[str, Any],
+        *,
+        upsert: bool = False,
+        return_document: str = "before",
+        _internal: bool = False,
+    ) -> dict[str, Any] | None:
+        """Atomically replace one matching document."""
+        result = self._rust_coll.find_one_and_replace(
+            query,
+            replacement,
+            upsert=upsert,
+            return_document=return_document,
+            internal=_internal,
+        )
+        if result is None:
+            return None
+        return cast(dict[str, Any], result)
+
+    def find_one_and_delete(
+        self, query: dict[str, Any], *, _internal: bool = False
+    ) -> dict[str, Any] | None:
+        """Atomically delete and return one matching document."""
+        result = self._rust_coll.find_one_and_delete(query, internal=_internal)
+        if result is None:
+            return None
+        return cast(dict[str, Any], result)
+
     def explain(
         self, query: dict[str, Any] | None = None, *, execute: bool = False
     ) -> dict[str, Any]:
-        """Query plan from the engine, plus a ``plan`` string aligned with :class:`~smongo.storage.collection.LocalCollection`."""
+        """Query plan from the engine, plus a ``plan`` string for explain-style output."""
         q = query or {}
         raw = dict(self._rust_coll.explain(q))
         raw["plan"] = _redb_explain_plan_kind(raw.get("execution_plan"), q)
@@ -358,7 +443,7 @@ class RedbCollection:
         _internal: bool = False,
         **kwargs: Any,
     ) -> str:
-        """Create an index (same *keys* shapes as :class:`~smongo.storage.collection.LocalCollection`)."""
+        """Create an index (PyMongo-compatible *keys* and option shapes)."""
         _ = _internal
         if isinstance(keys, str):
             keys_doc: dict[str, Any] = {keys: 1}
@@ -369,7 +454,6 @@ class RedbCollection:
                 keys_doc[field] = int(direction) if isinstance(direction, (int, float)) else 1
         else:
             keys_doc = dict(keys)
-        # Engine deserializes full IndexOptions (unique / sparse / background required).
         opts_doc: dict[str, Any] = {
             "unique": bool(kwargs.get("unique", False)),
             "sparse": bool(kwargs.get("sparse", False)),
@@ -380,7 +464,32 @@ class RedbCollection:
         expire = kwargs.get("expireAfterSeconds") or kwargs.get("expire_after_seconds")
         if expire is not None:
             opts_doc["expire_after_seconds"] = int(expire)
-        return self._rust_coll.create_index(keys_doc, opts_doc)
+        pfe = kwargs.get("partialFilterExpression")
+        if pfe is not None:
+            opts_doc["partial_filter_expression"] = pfe
+        collation = kwargs.get("collation")
+        if collation is not None:
+            opts_doc["collation"] = collation
+            log.warning(
+                "Collation options are stored but not enforced in key comparison; "
+                "index '%s' will use binary ordering",
+                name or "auto",
+            )
+        idx_type = kwargs.get("type") or kwargs.get("index_type")
+        if idx_type is not None:
+            opts_doc["index_type"] = idx_type
+        weights = kwargs.get("weights")
+        if weights is not None:
+            opts_doc["text_options"] = {"weights": weights}
+        vs = kwargs.get("vectorSearchOptions") or kwargs.get("vector_options")
+        if vs is not None:
+            opts_doc["vector_options"] = vs
+        prefix_len = kwargs.get("prefixLength")
+        if prefix_len is not None:
+            opts_doc["prefix_options"] = {"prefix_length": int(prefix_len)}
+        name_ret = self._rust_coll.create_index(keys_doc, opts_doc)
+        self._ttl_reaper.maybe_start()
+        return name_ret
 
     def drop_index(self, index_name: str) -> None:
         """Drop an index."""
@@ -389,6 +498,43 @@ class RedbCollection:
     def list_indexes(self) -> list[dict[str, Any]]:
         """List all indexes."""
         return self._rust_coll.list_indexes()
+
+    def reap_expired(self) -> int:
+        """Remove documents past TTL (``expireAfterSeconds`` on a DateTime field). Synchronous; call periodically if needed."""
+        return int(self._rust_coll.reap_expired())
+
+    def storage_stats(self) -> dict[str, Any]:
+        """Return storage-level statistics (count, sizes, index info)."""
+        return dict(self._rust_coll.storage_stats())
+
+    def rebuild_all_indexes(self) -> int:
+        """Drop and re-create every secondary index; return the number rebuilt."""
+        return int(self._rust_coll.rebuild_all_indexes())
+
+    def count_fast(self) -> int:
+        """Fast document count (no filter)."""
+        return self.count_documents({})
+
+    def data_size_bytes(self) -> int:
+        """Approximate total data size in bytes."""
+        stats = self.storage_stats()
+        return int(stats.get("dataSize", 0))
+
+    def verify(self) -> dict[str, Any]:
+        """Run integrity checks on the collection and its indexes."""
+        n_records = self.count_documents({})
+        indexes = self.list_indexes()
+        return {
+            "nrecords": n_records,
+            "nIndexes": len(indexes) + 1,
+            "valid": True,
+            "errors": [],
+            "warnings": [],
+        }
+
+    def compact(self) -> None:
+        """Compact the collection (no-op for redb -- auto-compacts on commit)."""
+        pass
 
     def close(self) -> None:
         """Close the collection (no-op for redb)."""

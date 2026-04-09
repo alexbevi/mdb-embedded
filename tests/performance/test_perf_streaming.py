@@ -12,7 +12,7 @@ import random
 
 import pytest
 
-from smongo._smongo_core import RustLocalClient
+from smongo._smongo_core import RedbLocalClient
 from smongo.aggregation import Cursor
 
 pytestmark = pytest.mark.performance
@@ -20,7 +20,7 @@ pytestmark = pytest.mark.performance
 
 @pytest.fixture
 def local_client(tmp_path):
-    return RustLocalClient(str(tmp_path / "stream_wt"))
+    return RedbLocalClient(str(tmp_path / "stream_redb"))
 
 
 @pytest.fixture
@@ -96,7 +96,7 @@ def test_streaming_count_filtered(benchmark, indexed_local_coll):
 
 
 def test_streaming_limit_10(benchmark, populated_local_coll):
-    """StreamingCursor + Cursor.limit(10) -- only 10 docs from WiredTiger."""
+    """StreamingCursor + Cursor.limit(10) -- only 10 docs decoded from storage."""
 
     def run():
         sc = populated_local_coll.find_streaming({})

@@ -70,6 +70,31 @@ fn cmd_list_indexes(
                 spec.set_item("expireAfterSeconds", eas)?;
             }
         }
+        if let Ok(opts) = idx.get_item("options") {
+            if let Ok(opts_dict) = opts.cast::<PyDict>() {
+                if let Ok(pfe) = opts_dict.get_item("partial_filter_expression") {
+                    if let Some(pfe) = pfe {
+                        if !pfe.is_none() {
+                            spec.set_item("partialFilterExpression", pfe)?;
+                        }
+                    }
+                }
+                if let Ok(coll) = opts_dict.get_item("collation") {
+                    if let Some(coll) = coll {
+                        if !coll.is_none() {
+                            spec.set_item("collation", coll)?;
+                        }
+                    }
+                }
+                if let Ok(idx_type) = opts_dict.get_item("index_type") {
+                    if let Some(idx_type) = idx_type {
+                        if !idx_type.is_none() {
+                            spec.set_item("type", idx_type)?;
+                        }
+                    }
+                }
+            }
+        }
         formatted.append(spec)?;
     }
 
@@ -117,7 +142,7 @@ fn cmd_create_indexes(
         .extract()?;
     let coll_py = get_collection_typed(ctx, &db_name, &coll_name)?;
 
-    let before: i64 = coll_py.bind(py).borrow().list_indexes(py)?.bind(py).len()? as i64 + 1;
+    let before: i64 = coll_py.bind(py).borrow().list_indexes(py)?.bind(py).len() as i64 + 1;
 
     let indexes = cmd
         .get_item("indexes")?
@@ -126,11 +151,6 @@ fn cmd_create_indexes(
         let idx_spec = idx_spec?;
         let key = idx_spec.get_item("key")?;
         let key_dict = key.cast::<PyDict>()?;
-        let keys_list = PyList::empty(py);
-        for (k, v) in key_dict.iter() {
-            let pair = (k, v);
-            keys_list.append(pair)?;
-        }
         let kwargs = PyDict::new(py);
         if let Ok(name) = idx_spec.get_item("name") {
             kwargs.set_item("name", name)?;
@@ -148,13 +168,31 @@ fn cmd_create_indexes(
         if let Ok(eas) = idx_spec.get_item("expireAfterSeconds") {
             kwargs.set_item("expireAfterSeconds", eas)?;
         }
+        if let Ok(pfe) = idx_spec.get_item("partialFilterExpression") {
+            kwargs.set_item("partialFilterExpression", pfe)?;
+        }
+        if let Ok(coll) = idx_spec.get_item("collation") {
+            kwargs.set_item("collation", coll)?;
+        }
+        if let Ok(vs_opts) = idx_spec.get_item("vectorSearchOptions") {
+            kwargs.set_item("vectorSearchOptions", vs_opts)?;
+        }
+        if let Ok(idx_type) = idx_spec.get_item("type") {
+            kwargs.set_item("type", idx_type)?;
+        }
+        if let Ok(weights) = idx_spec.get_item("weights") {
+            kwargs.set_item("weights", weights)?;
+        }
+        if let Ok(prefix_len) = idx_spec.get_item("prefixLength") {
+            kwargs.set_item("prefixLength", prefix_len)?;
+        }
         coll_py
             .bind(py)
             .borrow()
-            .create_index(py, keys_list.as_any(), false, Some(&kwargs))?;
+            .create_index(py, key_dict, Some(&kwargs))?;
     }
 
-    let after: i64 = coll_py.bind(py).borrow().list_indexes(py)?.bind(py).len()? as i64 + 1;
+    let after: i64 = coll_py.bind(py).borrow().list_indexes(py)?.bind(py).len() as i64 + 1;
 
     let resp = PyDict::new(py);
     resp.set_item("numIndexesBefore", before)?;
@@ -176,7 +214,7 @@ fn cmd_drop_indexes(
         .extract()?;
     let coll_py = get_collection_typed(ctx, &db_name, &coll_name)?;
 
-    let n_before: i64 = coll_py.bind(py).borrow().list_indexes(py)?.bind(py).len()? as i64 + 1;
+    let n_before: i64 = coll_py.bind(py).borrow().list_indexes(py)?.bind(py).len() as i64 + 1;
     let index = cmd.get_item("index")?;
 
     if let Some(ref idx) = index {
@@ -188,15 +226,15 @@ fn cmd_drop_indexes(
                     indexes.try_iter()?.collect::<PyResult<_>>()?;
                 for entry in index_list {
                     let name: String = entry.get_item("name")?.extract()?;
-                    let _ = coll_py.bind(py).borrow().drop_index(py, &name, false);
+                    let _ = coll_py.bind(py).borrow().drop_index(&name);
                 }
             } else {
-                coll_py.bind(py).borrow().drop_index(py, &s, false)?;
+                coll_py.bind(py).borrow().drop_index(&s)?;
             }
         } else if let Ok(list) = idx.cast::<PyList>() {
             for item in list.iter() {
                 if let Ok(name) = item.extract::<String>() {
-                    coll_py.bind(py).borrow().drop_index(py, &name, false)?;
+                    coll_py.bind(py).borrow().drop_index(&name)?;
                 }
             }
         } else if let Ok(dict) = idx.cast::<PyDict>() {
@@ -221,7 +259,7 @@ fn cmd_drop_indexes(
                     idx_sorted.sort();
                     if target_sorted == idx_sorted {
                         let name: String = entry.get_item("name")?.extract()?;
-                        coll_py.bind(py).borrow().drop_index(py, &name, false)?;
+                        coll_py.bind(py).borrow().drop_index(&name)?;
                         break;
                     }
                 }

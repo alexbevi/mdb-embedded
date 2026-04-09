@@ -1,4 +1,4 @@
-//! Index-key encoding helpers for WiredTiger sort-order inversion.
+//! Index-key encoding helpers for sort-order inversion (index key collation).
 use pyo3::prelude::*;
 use pyo3::types::{IntoPyDict, PyList};
 
@@ -88,11 +88,7 @@ pub(crate) fn sortable_encode_impl(py: Python<'_>, value: &Bound<'_, PyAny>) -> 
 }
 
 pub(crate) fn invert_encoded_impl(s: &str) -> String {
-    let mut out = Vec::with_capacity(s.len());
-    for &b in s.as_bytes() {
-        out.push(HEX_INVERT[b as usize]);
-    }
-    unsafe { String::from_utf8_unchecked(out) }
+    s.bytes().map(|b| HEX_INVERT[b as usize] as char).collect()
 }
 
 #[pyfunction]

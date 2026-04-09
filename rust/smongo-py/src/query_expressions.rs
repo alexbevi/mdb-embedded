@@ -174,7 +174,7 @@ fn resolve_inner<'py>(
 // Operator dispatch
 // ---------------------------------------------------------------------------
 
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines)] // 80+ operator dispatch table — each arm is small
 fn eval_expr_op<'py>(
     py: Python<'py>,
     op: &str,

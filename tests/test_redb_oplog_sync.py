@@ -1,4 +1,4 @@
-"""Redb oplog, sync KV helpers, and hybrid SyncManager (no WiredTiger session)."""
+"""Redb oplog, sync KV helpers, and hybrid SyncManager."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ def test_redb_oplog_reader_after_insert() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         client = RedbClient(os.path.join(tmp, "db"))
         db = client.get_db("mydb")
-        coll = db.get_collection("items")
+        coll = db.collection("items")
         coll.insert_one({"_id": "a", "x": 1})
         reader = coll.get_oplog_reader()
         rows = reader.read_from(None, skip_internal=True)
@@ -31,7 +31,7 @@ def test_redb_internal_insert_skipped_in_sync_tail() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         client = RedbClient(os.path.join(tmp, "db"))
         db = client.get_db("mydb")
-        coll = db.get_collection("items")
+        coll = db.collection("items")
         coll.insert_one({"_id": "u1"}, _internal=True)
         reader = coll.get_oplog_reader()
         public = reader.read_from(None, skip_internal=True)
@@ -47,7 +47,7 @@ def test_redb_sync_kv_and_atomic_checkpoint() -> None:
         assert rust.sync_kv_get("table:__sync_checkpoint", "push:mydb.items") == "k0"
 
         db = client.get_db("mydb")
-        coll = db.get_collection("items")
+        coll = db.collection("items")
         coll.insert_one({"_id": 1})
         uri = coll._oplog_w.oplog_uri
         reader = coll.get_oplog_reader()
@@ -82,7 +82,7 @@ def test_redb_drop_collection_removes_data() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         client = RedbClient(os.path.join(tmp, "db"))
         db = client.get_db("mydb")
-        coll = db.get_collection("items")
+        coll = db.collection("items")
         coll.insert_one({"_id": "a", "email": "x@y.z"})
         coll.create_index([("email", 1)], name="synced_idx_from_remote")
         assert coll.count_documents({}) == 1
@@ -90,13 +90,13 @@ def test_redb_drop_collection_removes_data() -> None:
             idx["name"] == "synced_idx_from_remote" for idx in coll.list_indexes()
         )
         db.drop_collection("items")
-        fresh = db.get_collection("items")
+        fresh = db.collection("items")
         assert fresh.count_documents({}) == 0
         index_names = {idx["name"] for idx in fresh.list_indexes()}
         assert "synced_idx_from_remote" not in index_names
 
 
-def test_sync_manager_redb_has_no_wt_session() -> None:
+def test_sync_manager_uses_redb_kv() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         db_path = os.path.join(tmp, "hybrid")
         mc = MongoClient(
@@ -106,8 +106,6 @@ def test_sync_manager_redb_has_no_wt_session() -> None:
         )
         try:
             assert mc.sync is not None
-            assert mc.sync._redb_sync is True
-            assert mc.sync._ck_session is None
             assert mc.sync._rust is not None
         finally:
             mc.close()

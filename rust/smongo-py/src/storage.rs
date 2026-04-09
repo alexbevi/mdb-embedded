@@ -1,8 +1,8 @@
 //! Rust-accelerated storage helpers.
 //!
 //! Provides optimized batch operations that keep BSON encode/decode, query
-//! matching, and update application in compiled Rust code.  WiredTiger cursor
-//! calls are delegated to the Python SWIG objects via PyO3.
+//! matching, and update application in compiled Rust code. Storage cursor
+//! calls are delegated through PyO3 when the hot path uses Python-owned cursors.
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -16,7 +16,7 @@ use crate::query_update;
 // scan_and_filter: the hot inner loop of collection scan
 // ---------------------------------------------------------------------------
 
-/// Open a WT cursor, iterate with `next()`, decode BSON in Rust, match
+/// Open a storage cursor, iterate with `next()`, decode BSON in Rust, match
 /// against the compiled query predicate in Rust, and collect matching docs.
 ///
 /// This replaces the Python `_iter_collection_scan` hot loop.
@@ -150,7 +150,7 @@ pub fn cursor_get_doc<'py>(
     bson_helpers::from_bson(py, raw_bytes)
 }
 
-/// Encode a Python dict to BSON bytes for WT storage.
+/// Encode a Python dict to BSON bytes for engine storage.
 #[pyfunction]
 pub fn doc_to_bson(doc: &Bound<'_, PyDict>) -> PyResult<Py<PyBytes>> {
     bson_helpers::to_bson(doc)

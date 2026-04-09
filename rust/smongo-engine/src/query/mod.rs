@@ -297,7 +297,7 @@ fn eval_geo_within(value: Option<&Bson>, cond_doc: &Document) -> Result<bool, St
         .get("$geometry")
         .and_then(|b| b.as_document())
         .ok_or_else(|| "$geoWithin requires $centerSphere or $geometry".to_string())?;
-    let shape = GeoQueryShape::from_geometry_doc(g).map_err(|e| e)?;
+    let shape = GeoQueryShape::from_geometry_doc(g)?;
     let Some((dlon, dlat)) = extract_lon_lat(value) else {
         return Ok(false);
     };
@@ -313,7 +313,7 @@ fn eval_geo_intersects(value: Option<&Bson>, cond_doc: &Document) -> Result<bool
         .get("$geometry")
         .and_then(|b| b.as_document())
         .ok_or_else(|| "$geoIntersects requires $geometry".to_string())?;
-    let shape = GeoQueryShape::from_geometry_doc(g).map_err(|e| e)?;
+    let shape = GeoQueryShape::from_geometry_doc(g)?;
     let Some((dlon, dlat)) = extract_lon_lat(value) else {
         return Ok(false);
     };

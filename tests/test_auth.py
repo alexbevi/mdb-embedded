@@ -19,7 +19,7 @@ import time
 import pymongo
 import pytest
 
-from smongo._smongo_core import RustLocalClient
+from smongo._smongo_core import RedbLocalClient
 from smongo.wire.server import WireServer
 
 # ---------------------------------------------------------------------------
@@ -84,12 +84,12 @@ def _generate_self_signed_cert(tmpdir: str) -> tuple[str, str]:
 
 @pytest.fixture()
 def tmp_data(tmp_path):
-    db_path = str(tmp_path / "wt_data")
+    db_path = str(tmp_path / "redb_data")
     yield db_path
 
 
 def _stop_server(server):
-    """Stop server and properly close the WiredTiger connection."""
+    """Stop server and properly close the embedded client."""
     server.stop()
     if hasattr(server, "_local_client") and hasattr(server._local_client, "close"):
         try:
@@ -183,7 +183,7 @@ class TestScramFullFlow:
         db_path = str(tmp_path_factory.mktemp("scram_flow"))
         port = _find_free_port()
         # Phase 1: no auth, create user
-        lc = RustLocalClient(db_path)
+        lc = RedbLocalClient(db_path)
         server1 = WireServer(db_path, "127.0.0.1", port, auth_required=False, local_client=lc)
         server1.start()
         _wait_for_port("127.0.0.1", port)
@@ -280,7 +280,7 @@ class TestTLSWithAuth:
         port = _find_free_port()
 
         # Phase 1: no auth, create user over TLS
-        lc = RustLocalClient(tmp_data)
+        lc = RedbLocalClient(tmp_data)
         server1 = WireServer(
             tmp_data,
             "127.0.0.1",

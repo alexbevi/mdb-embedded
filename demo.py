@@ -19,14 +19,14 @@ def main():
     print()
     print("  ╔══════════════════════════════════════════════════╗")
     print("  ║   smongo  ·  Small MongoDB, big ambitions        ║")
-    print("  ║   WiredTiger B-Trees  ·  MQL  ·  Zero network   ║")
+    print("  ║   redb + Rust engine  ·  MQL  ·  Zero network   ║")
     print("  ╚══════════════════════════════════════════════════╝")
 
     sync_uri = os.environ.get("MDB_SYNC_URI")
     client = (
-        MongoClient("local://demo_wt_data", sync=sync_uri)
+        MongoClient("local://demo_redb_data", sync=sync_uri)
         if sync_uri
-        else MongoClient("local://demo_wt_data")
+        else MongoClient("local://demo_redb_data")
     )
     db = client["demo"]
     try:
@@ -63,7 +63,7 @@ def main():
         print(f"    {idx['name']:25s} keys={idx['keys']}{flag}")
         index_count += 1
 
-    print(f"\n    {index_count} indexes created on WiredTiger B-Trees")
+    print(f"\n    {index_count} indexes created on the embedded engine")
 
     # ── 2. Insert ─────────────────────────────────────────────
     banner(2, "INSERT  (same API as PyMongo)")
@@ -151,7 +151,7 @@ def main():
         },
     ]
     users.insert_many(docs)
-    print(f"    Inserted {users.count_documents({})} documents into WiredTiger\n")
+    print(f"    Inserted {users.count_documents({})} documents into local storage\n")
     try:
         users.insert_one({"name": "X", "age": 14, "dept": "intern"})
     except ValidationError as exc:
@@ -360,7 +360,7 @@ def main():
     for e in oplog:
         ops[e["op"]] = ops.get(e["op"], 0) + 1
 
-    print(f"    {len(oplog)} operations recorded in WiredTiger oplog:\n")
+    print(f"    {len(oplog)} operations recorded in the oplog:\n")
     for op, count in sorted(ops.items()):
         print(f"      {op:18s}  {count}")
 
@@ -380,7 +380,7 @@ def main():
     print(f"\n{'─' * 60}")
     print("  Small MongoDB. Big ambitions. Zero compromises.")
     print()
-    print("  This entire demo ran against a local WiredTiger B-Tree.")
+    print("  This entire demo ran against the embedded redb engine.")
     print("  Change the URI to mongodb+srv:// and every line above")
     print("  runs against Atlas instead. Zero code changes.")
     if sync_uri:

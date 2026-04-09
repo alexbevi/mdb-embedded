@@ -3,7 +3,8 @@
 //! Supports stages: `$match`, `$project`, `$limit`, `$skip`, `$sort`, `$group`,
 //! `$count`, `$unwind`, `$addFields`/`$set`, `$unset`, `$replaceRoot`/`$replaceWith`,
 //! `$sample`, `$redact`, `$sortByCount`, `$bucket`, `$bucketAuto`, `$lookup`,
-//! `$graphLookup`, `$facet`, `$setWindowFields`.
+//! `$graphLookup`, `$facet`, `$setWindowFields`, `$unionWith`, `$out`, `$merge`,
+//! `$vectorSearch`, `$geoNear`.
 //!
 //! Group accumulators: `$sum`, `$avg`, `$count`, `$min`, `$max`, `$first`, `$last`,
 //! `$push`, `$addToSet`, `$mergeObjects`, `$stdDevPop`, `$stdDevSamp`, `$top`,
@@ -12,8 +13,13 @@
 pub mod accumulators;
 pub mod expressions;
 pub mod stages;
+pub mod total_ord;
+pub mod vector;
 
 use bson::{Bson, Document};
+
+use crate::database::Database;
+use crate::storage::StorageBackend;
 
 pub type AggregationResult<T> = Result<T, AggregationError>;
 
@@ -52,6 +58,237 @@ impl std::error::Error for AggregationError {}
 /// other collections. Pass `None` for pipelines that don't use join stages.
 pub trait CollectionResolver {
     fn resolve(&self, name: &str, filter: Option<&Document>) -> AggregationResult<Vec<Document>>;
+}
+
+/// Read-only trait for index-accelerated operations in aggregation stages.
+///
+/// When an `IndexProvider` is available, stages like `$vectorSearch`,
+/// `$geoNear`, `$sort`+`$limit`, and `$text`-inside-`$match` can check
+/// for a matching index and use it instead of brute-force scanning.  Each
+/// method returns `Ok(None)` when no suitable index exists, signalling the
+/// caller to fall back to the default (BinaryHeap / scan) path.
+pub trait IndexProvider {
+    fn vector_search(
+        &self,
+        collection: &str,
+        field: &str,
+        query_vec: &[f32],
+        limit: usize,
+        num_candidates: usize,
+        metric: &str,
+        filter: Option<&Document>,
+    ) -> AggregationResult<Option<Vec<(Document, f32)>>>;
+
+    fn geo_near_indexed(
+        &self,
+        collection: &str,
+        field: &str,
+        lon: f64,
+        lat: f64,
+        limit: Option<usize>,
+        max_distance: Option<f64>,
+        query: Option<&Document>,
+    ) -> AggregationResult<Option<Vec<(Document, f64)>>>;
+
+    fn sorted_scan(
+        &self,
+        collection: &str,
+        sort_keys: &Document,
+        limit: usize,
+        filter: Option<&Document>,
+    ) -> AggregationResult<Option<Vec<Document>>>;
+
+    fn text_search(
+        &self,
+        collection: &str,
+        search_str: &str,
+        filter: Option<&Document>,
+    ) -> AggregationResult<Option<Vec<Document>>>;
+}
+
+/// Trait for write access to collections from aggregation stages (`$out`, `$merge`).
+pub trait DatabaseMutator {
+    fn drop_and_insert(&self, name: &str, docs: &[Document]) -> AggregationResult<()>;
+    fn upsert(
+        &self,
+        name: &str,
+        on_fields: &[String],
+        docs: &[Document],
+        when_matched: &str,
+    ) -> AggregationResult<()>;
+}
+
+/// Aggregation context backed by a real [`Database`], enabling cross-collection
+/// reads (`$lookup`, `$graphLookup`, `$unionWith`) and writes (`$out`, `$merge`)
+/// without leaving Rust.
+pub struct DatabaseContext<'a, B: StorageBackend> {
+    db: &'a Database<B>,
+}
+
+impl<'a, B: StorageBackend> DatabaseContext<'a, B> {
+    pub fn new(db: &'a Database<B>) -> Self {
+        Self { db }
+    }
+}
+
+impl<B: StorageBackend> CollectionResolver for DatabaseContext<'_, B> {
+    fn resolve(&self, name: &str, filter: Option<&Document>) -> AggregationResult<Vec<Document>> {
+        let coll = self
+            .db
+            .collection(name)
+            .map_err(|e| AggregationError::Other(e.to_string()))?;
+        let query = filter.cloned().unwrap_or_default();
+        coll.find(query)
+            .map_err(|e| AggregationError::Other(e.to_string()))
+    }
+}
+
+impl<B: StorageBackend> DatabaseMutator for DatabaseContext<'_, B> {
+    fn drop_and_insert(&self, name: &str, docs: &[Document]) -> AggregationResult<()> {
+        let coll = self
+            .db
+            .collection(name)
+            .map_err(|e| AggregationError::Other(e.to_string()))?;
+        coll.delete_many(Document::new())
+            .map_err(|e| AggregationError::Other(e.to_string()))?;
+        if !docs.is_empty() {
+            coll.insert_many(docs.to_vec())
+                .map_err(|e| AggregationError::Other(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    fn upsert(
+        &self,
+        name: &str,
+        on_fields: &[String],
+        docs: &[Document],
+        when_matched: &str,
+    ) -> AggregationResult<()> {
+        let coll = self
+            .db
+            .collection(name)
+            .map_err(|e| AggregationError::Other(e.to_string()))?;
+        for doc in docs {
+            let mut filter = Document::new();
+            for field in on_fields {
+                if let Some(val) = doc.get(field) {
+                    filter.insert(field.clone(), val.clone());
+                }
+            }
+            let existing = coll
+                .find_one(filter.clone())
+                .map_err(|e| AggregationError::Other(e.to_string()))?;
+            if existing.is_some() {
+                match when_matched {
+                    "replace" => {
+                        let update = bson::doc! { "$set": doc.clone() };
+                        coll.update_one(filter, update)
+                            .map_err(|e| AggregationError::Other(e.to_string()))?;
+                    }
+                    "keepExisting" => {}
+                    "fail" => {
+                        return Err(AggregationError::Other(
+                            "$merge: document matched whenMatched=fail".into(),
+                        ));
+                    }
+                    _ => {
+                        let update = bson::doc! { "$set": doc.clone() };
+                        coll.update_one(filter, update)
+                            .map_err(|e| AggregationError::Other(e.to_string()))?;
+                    }
+                }
+            } else {
+                coll.insert_one(doc.clone())
+                    .map_err(|e| AggregationError::Other(e.to_string()))?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<B: StorageBackend> IndexProvider for DatabaseContext<'_, B> {
+    fn vector_search(
+        &self,
+        collection: &str,
+        _field: &str,
+        _query_vec: &[f32],
+        _limit: usize,
+        _num_candidates: usize,
+        _metric: &str,
+        _filter: Option<&Document>,
+    ) -> AggregationResult<Option<Vec<(Document, f32)>>> {
+        let _coll = self
+            .db
+            .collection(collection)
+            .map_err(|e| AggregationError::Other(e.to_string()))?;
+        // TODO: check for VectorSearch index and use it
+        Ok(None)
+    }
+
+    fn geo_near_indexed(
+        &self,
+        collection: &str,
+        _field: &str,
+        _lon: f64,
+        _lat: f64,
+        _limit: Option<usize>,
+        _max_distance: Option<f64>,
+        _query: Option<&Document>,
+    ) -> AggregationResult<Option<Vec<(Document, f64)>>> {
+        let _coll = self
+            .db
+            .collection(collection)
+            .map_err(|e| AggregationError::Other(e.to_string()))?;
+        Ok(None)
+    }
+
+    fn sorted_scan(
+        &self,
+        collection: &str,
+        sort_keys: &Document,
+        limit: usize,
+        filter: Option<&Document>,
+    ) -> AggregationResult<Option<Vec<Document>>> {
+        let coll = self
+            .db
+            .collection(collection)
+            .map_err(|e| AggregationError::Other(e.to_string()))?;
+        let indexes = coll
+            .list_indexes()
+            .map_err(|e| AggregationError::Other(e.to_string()))?;
+        let plan = crate::planner::plan_query_full(
+            filter.unwrap_or(&Document::new()),
+            &indexes,
+            None,
+            Some(sort_keys),
+            Some(limit as i64),
+        );
+        if matches!(
+            plan.execution_plan,
+            crate::planner::ExecutionPlan::SortedIndexScan { .. }
+        ) {
+            let docs = coll
+                .execute_plan(
+                    &plan.execution_plan,
+                    filter.unwrap_or(&Document::new()),
+                )
+                .map_err(|e| AggregationError::Other(e.to_string()))?;
+            Ok(Some(docs))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn text_search(
+        &self,
+        _collection: &str,
+        _search_str: &str,
+        _filter: Option<&Document>,
+    ) -> AggregationResult<Option<Vec<Document>>> {
+        // TODO: check for Text index and use inverted index
+        Ok(None)
+    }
 }
 
 /// Extract and merge consecutive leading `$match` stages from a pipeline.
@@ -131,6 +368,52 @@ pub fn aggregate_with_resolver(
     stream.collect()
 }
 
+/// Execute a full aggregation pipeline with a [`DatabaseContext`] providing
+/// both cross-collection reads and writes. This is the "zero-FFI" path:
+/// `$lookup`, `$graphLookup`, `$facet`, `$unionWith`, `$out`, `$merge`,
+/// `$vectorSearch`, and `$geoNear` all resolve entirely inside the engine.
+pub fn aggregate_with_db<B: StorageBackend>(
+    docs: Vec<Document>,
+    pipeline: &[Document],
+    ctx: &DatabaseContext<'_, B>,
+) -> AggregationResult<Vec<Document>> {
+    let resolver: &dyn CollectionResolver = ctx;
+
+    let (main_pipeline, write_stage) = split_write_stage(pipeline);
+
+    let stream = aggregate_stream_with_resolver(docs, &main_pipeline, Some(resolver))?;
+    let results: Vec<Document> = stream.collect::<AggregationResult<Vec<_>>>()?;
+
+    if let Some(stage) = write_stage {
+        let (stage_name, stage_value) = stage
+            .iter()
+            .next()
+            .ok_or_else(|| AggregationError::InvalidStage("empty write stage".into()))?;
+        match stage_name.as_str() {
+            "$out" => stages::execute_out(stage_value, &results, ctx)?,
+            "$merge" => stages::execute_merge(stage_value, &results, ctx)?,
+            _ => {}
+        }
+    }
+
+    Ok(results)
+}
+
+/// Split a trailing `$out` or `$merge` from the rest of the pipeline.
+fn split_write_stage(pipeline: &[Document]) -> (Vec<Document>, Option<Document>) {
+    if let Some(last) = pipeline.last() {
+        let is_write = last
+            .iter()
+            .next()
+            .map(|(name, _)| name == "$out" || name == "$merge")
+            .unwrap_or(false);
+        if is_write {
+            return (pipeline[..pipeline.len() - 1].to_vec(), Some(last.clone()));
+        }
+    }
+    (pipeline.to_vec(), None)
+}
+
 /// Execute an aggregation pipeline as a streaming iterator.
 ///
 /// Returns a lazy iterator that processes documents through the pipeline
@@ -149,15 +432,41 @@ pub fn aggregate_stream(
 }
 
 /// Execute a streaming aggregation pipeline with optional cross-collection support.
+///
+/// Includes a **sort+limit fusion** optimisation: when a `$sort` is
+/// immediately followed by `$limit`, both stages are merged into a single
+/// BinaryHeap top-k pass (O(n log k) instead of O(n log n)).
 pub fn aggregate_stream_with_resolver(
     docs: Vec<Document>,
     pipeline: &[Document],
     resolver: Option<&dyn CollectionResolver>,
 ) -> AggregationResult<DocStream> {
     let mut stream: DocStream = Box::new(docs.into_iter().map(Ok));
+    let mut i = 0;
 
-    for stage in pipeline {
+    while i < pipeline.len() {
+        let stage = &pipeline[i];
+
+        // Peek ahead: $sort followed by $limit → fused stage.
+        if i + 1 < pipeline.len() {
+            let is_sort = stage.iter().next().map(|(n, _)| n == "$sort").unwrap_or(false);
+            let next_is_limit = pipeline[i + 1]
+                .iter()
+                .next()
+                .map(|(n, _)| n == "$limit")
+                .unwrap_or(false);
+
+            if is_sort && next_is_limit {
+                let sort_spec = stage.iter().next().unwrap().1;
+                let limit_spec = pipeline[i + 1].iter().next().unwrap().1;
+                stream = stages::stage_sort_limit_stream(stream, sort_spec, limit_spec)?;
+                i += 2;
+                continue;
+            }
+        }
+
         stream = execute_stage_stream(stream, stage, resolver)?;
+        i += 1;
     }
 
     Ok(stream)
@@ -194,6 +503,11 @@ fn execute_stage_stream(
         "$graphLookup" => stages::stage_graph_lookup_stream(input, stage_value, resolver),
         "$facet" => stages::stage_facet_stream(input, stage_value, resolver),
         "$setWindowFields" => stages::stage_set_window_fields_stream(input, stage_value),
+        "$unionWith" => stages::stage_union_with_stream(input, stage_value, resolver),
+        "$out" => stages::stage_out_stream(input, stage_value),
+        "$merge" => stages::stage_merge_stream(input, stage_value),
+        "$vectorSearch" => stages::stage_vector_search_stream(input, stage_value),
+        "$geoNear" => stages::stage_geo_near_stream(input, stage_value),
         _ => Err(AggregationError::InvalidStage(format!(
             "Unknown stage: {}",
             stage_name

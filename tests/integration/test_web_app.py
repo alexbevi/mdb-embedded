@@ -17,7 +17,7 @@ def web_client(mongo_uri, tmp_path):
     web_app = importlib.import_module("web_app")
     # Rebind globals so each test gets isolated local/remote stores.
     web_app.DB_NAME = f"web_{int(time.time() * 1000)}"
-    web_app.client = EmbeddedClient(f"local+wt://{tmp_path}/web_wt")
+    web_app.client = EmbeddedClient(f"local://{tmp_path}/web_redb")
     web_app.remote = PyMongoClient(mongo_uri)
     web_app.sync_mgr = SyncManager(
         web_app.client,

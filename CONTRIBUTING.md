@@ -24,13 +24,13 @@ pre-commit install
 
 | Module | Purpose |
 |--------|---------|
-| `rust/` | **The engine.** `RustLocalClient`, `RustLocalDB`, `RustLocalCollection`, `RustIndexManager`, `RustQueryPlanner`, `RustStreamingCursor`, wire command handlers, Tokio TCP server. Direct WiredTiger C FFI. |
-| `smongo/_smongo_core` | Compiled Rust extension (PyO3) -- built from `rust/` via maturin |
-| `smongo/client.py` | `MongoClient`, `Database`, `Collection` -- the public API. Routes `local://` to `LocalClient`. |
-| `smongo/storage/` | Storage layer: `LocalClient`/`LocalDB` (Python, delegates to Rust), `TTLReaper`, result types, locking, transaction session, BSON helpers |
+| `rust/` | **Engine + bindings.** `smongo-engine` (redb, WASM backends), `smongo-py` (`RedbLocalClient`, `RedbLocalCollection`, wire handlers, Tokio TCP server). |
+| `smongo/_smongo_core` | Compiled Rust extension (PyO3) — built via maturin from `rust/smongo-py` |
+| `smongo/client.py` | `MongoClient`, `Database`, `Collection`. Routes `local://` to `RedbClient` / `RedbCollection`. |
+| `smongo/storage/` | `redb_engine` (`RedbClient`, `RedbCollection`), `TTLReaper`, result types, locking, transaction session, BSON helpers |
 | `smongo/query/` | MQL compiler, update operators, expression engine (Rust-accelerated) |
 | `smongo/aggregation/` | Aggregation pipeline (25+ stages, Rust-accelerated), `Cursor` (Python lazy wrapper) |
-| `smongo/index.py` | Index key encoding, helpers, `DuplicateKeyError` (`IndexManager`/`QueryPlanner` classes removed; runtime: `RustIndexManager`, `RustQueryPlanner`) |
+| `smongo/index.py` | Index key encoding, helpers, `DuplicateKeyError`; legacy `IndexManager` for tooling; runtime indexes live in the engine |
 | `smongo/wire/` | MongoDB wire protocol server (OP_MSG), 80+ commands (Rust-accelerated) |
 | `smongo/sync.py` | Bidirectional Atlas sync with MQL rules, variable substitution, vector clocks |
 | `smongo/oplog.py` | Oplog writer, reader, change streams |
@@ -39,8 +39,23 @@ pre-commit install
 ## Running Tests
 
 ```bash
-# Full suite
+# Rebuild the PyO3 extension after Rust changes (fast iteration)
+make build-debug
+
+# Python unit tests (no Docker, no network)
 make test
+
+# Rust workspace tests + clippy (same as part of `make build-rust`)
+make test-rust
+
+# Static checks: ruff, mypy, Rust tests + clippy
+make check
+
+# Integration tests (needs Docker — starts real MongoDB; see tests/integration)
+make test-integration
+
+# Everything CI-like: Rust + unit + integration
+make test-all
 
 # Single file
 pytest tests/test_query.py -v
@@ -48,6 +63,17 @@ pytest tests/test_query.py -v
 # With coverage
 pytest --cov=smongo --cov-report=term-missing
 ```
+
+### Verifying a clean tree
+
+From a fresh clone, a typical full pass is:
+
+1. `pip install -e ".[dev]"` (or `make install-dev`) and ensure `maturin` can build the extension.
+2. `make check` — lint, types, Rust tests + clippy.
+3. `make test` — full `pytest tests`.
+4. With Docker available: `make test-integration`.
+
+If `pytest` fails with import errors from `_smongo_core`, run `make build-debug` or `pip install -e .` again from the repo root.
 
 All tests must pass before a PR can be merged. Target: 100% of new code covered.
 
@@ -62,21 +88,25 @@ All tests must pass before a PR can be merged. Target: 100% of new code covered.
 
 ## Adding a New Query/Update Operator
 
-1. Implement in `rust/src/query_compiler.rs` (`eval_query` for query ops) or `rust/src/query_update.rs` (`apply_update` for update ops). The Python modules in `smongo/query/` are thin shims that delegate to the Rust extension.
+1. Implement in `rust/smongo-py/src/query_compiler.rs` (`eval_query` for query ops) or `rust/smongo-py/src/query_update.rs` (`apply_update` for update ops). The Python modules in `smongo/query/` are thin shims that delegate to the Rust extension.
 2. Add tests in `tests/test_query.py`
-3. If the operator is also an aggregation expression, add it to `rust/src/query_expressions.rs` (`eval_expr_op`)
+3. If the operator is also an aggregation expression, add it to `rust/smongo-py/src/query_expressions.rs` (`eval_expr_op`)
 
 ## Adding a New Aggregation Stage
 
-1. Implement the stage function in `smongo/aggregation/stages.py` (core stages), `smongo/aggregation/joins.py` (join stages), or `smongo/aggregation/output.py` (terminal stages)
-2. Wire it into `Cursor.aggregate`'s dispatch in `smongo/aggregation/cursor.py`
-3. Add tests in `tests/test_aggregation.py`
+All 27 pipeline stages now run in the Rust engine (`smongo-engine`). To add a new stage:
+
+1. Implement the stage in `rust/smongo-engine/src/aggregation/stages.rs` (or a new sub-module)
+2. Wire it into the pipeline dispatch in `rust/smongo-engine/src/aggregation/mod.rs`
+3. If the stage needs PyO3 bridging, update `rust/smongo-py/src/aggregation.rs`
+4. Update the Python reference in `smongo/aggregation/stages.py` (or `joins.py` / `output.py`) for documentation parity
+5. Add tests in `tests/test_aggregation.py` and `rust/smongo-engine/src/aggregation/` (Rust unit tests)
 
 ## Adding a New Wire Protocol Command
 
 **Python fallback path:** Add a handler in `smongo/wire/commands/` using the `@_register` decorator. The Python `WireServer` dispatches via the `_HANDLERS` dict.
 
-**Rust hot path:** Add a handler function in the appropriate `rust/src/wire_commands/` module (e.g. `crud.rs`, `admin.rs`). The handler must match the `HandlerFn` signature:
+**Rust hot path:** Add a handler function in the appropriate `rust/smongo-py/src/wire_commands/` module (e.g. `crud.rs`, `admin.rs`). The handler must match the `HandlerFn` signature:
 
 ```rust
 fn cmd_my_command(

@@ -1,14 +1,14 @@
 # Architecture: smongo
 
-**A true MongoDB experience running locally on WiredTiger, with bidirectional sync to the real cloud.**
+**A MongoDB-compatible experience locally on `smongo-engine` + redb, with bidirectional sync to Atlas when configured.**
 
 ---
 
 ## The Core Thesis
 
-MongoDB's power was never just the query language or the document model — it was the **storage engine underneath** and the **protocol that speaks to it**. This project takes those two pillars and brings them to the edge: a fully embedded MongoDB-compatible engine backed by **WiredTiger's B-tree tables**, speaking the **real MongoDB wire protocol (OP_MSG)**, and maintaining a **persistent oplog** that enables bidirectional synchronization with **MongoDB Atlas**.
+MongoDB's power was never just the query language or the document model — it was the **storage engine underneath** and the **protocol that speaks to it**. This project takes those two pillars and brings them to the edge: an embedded engine backed by **`smongo-engine` on redb** (pure Rust, WASM-friendly), speaking the **real MongoDB wire protocol (OP_MSG)**, and maintaining a **persistent oplog** for **sync** with **MongoDB Atlas** or other remotes.
 
-The result is not a mock. It is not SQLite pretending to be Mongo. It is **WiredTiger running your data in B-trees on disk**, an **MQL compiler executing real query predicates**, a **query planner choosing real index scans**, and a **TCP server that real MongoDB drivers can connect to**. When the network is available, every local mutation flows upstream to Atlas, and every remote change flows back — with conflict resolution.
+The result is not a mock. It is not SQLite pretending to be Mongo. It is **ACID document storage in Rust**, an **MQL compiler executing real query predicates**, a **query planner choosing real index scans**, and a **TCP server that real MongoDB drivers can connect to**. When the network is available, local mutations can flow upstream and remote changes back — with conflict resolution.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -41,15 +41,14 @@ The result is not a mock. It is not SQLite pretending to be Mongo. It is **Wired
 │  ┌──────────────────────────────────────────────────────────────────┐│
 │  │                    Storage Layer (Rust via PyO3)                 ││
 │  │                                                                  ││
-│  │  RustLocalClient → RustLocalDB → RustLocalCollection             ││
+│  │  RedbLocalClient → RedbLocalDB → RedbLocalCollection              ││
 │  │      │              │            │                               ││
-│  │      │              │            ├── Data Table: table:{db}_{col}││
-│  │      │              │            ├── Oplog Table: table:__oplog_ ││
-│  │      │              │            ├── Index Tables: table:__idx_  ││
-│  │      │              │            └── Metadata: table:__idxmeta_  ││
+│  │      │              │            ├── Collection + index tables    ││
+│  │      │              │            ├── Oplog: __oplog_{db}_{coll}   ││
+│  │      │              │            └── Engine `StorageSession`     ││
 │  │      │              │                                            ││
 │  │      ▼              ▼                                            ││
-│  │  wiredtiger_open("create")  →  session.create("key=S,value=u")  ││
+│  │  redb `Database::open(path)`  →  transactional reads/writes       ││
 │  └──────────────────────────────────────────────────────────────────┘│
 │                              │                                       │
 │                              ▼                                       │
@@ -71,219 +70,31 @@ The result is not a mock. It is not SQLite pretending to be Mongo. It is **Wired
 │  PUSH: tail oplog → bulk_write(InsertOne/UpdateOne/DeleteOne)        │
 │  PULL: change streams (preferred) or timestamp polling               │
 │  CONFLICT: LWW · local_wins · remote_wins · field_merge · callable   │
-│  CHECKPOINT: WiredTiger table:__sync_checkpoint                      │
+│  CHECKPOINT: logical `__sync_checkpoint` (redb KV)                   │
 │                                                                      │
 │  ┌─────────┐     oplog entries     ┌─────────────────────────────┐   │
 │  │  LOCAL   │ ──────────────────►  │   MongoDB Atlas / Cloud     │   │
-│  │ WiredTiger│ ◄────────────────── │   (PyMongo bulk_write)      │   │
+│  │  redb    │ ◄────────────────── │   (PyMongo bulk_write)      │   │
 │  └─────────┘   change streams      └─────────────────────────────┘   │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-WiredTiger work in the oplog, admin commands, and storage layer uses typed `RustWtSession` / `RustWtCursor` borrow via `pub(crate)` Rust methods, not per-operation Python method dispatch on the PyO3 cursor wrapper.
+Hot paths in the wire server and `smongo-py` use typed **`RedbLocalCollection`** access and Rust command handlers to avoid per-operation Python dispatch where it matters.
+
 
 ---
 
-## 1. WiredTiger: The Same Engine That Powers MongoDB
+## 1. Embedded storage (`smongo-engine` + redb)
 
-### Why WiredTiger Changes Everything
+Python `local://` and the wire server talk to **`RedbLocalClient` → `RedbLocalDB` → `RedbLocalCollection`**, backed by a single **`redb`** database file (or in-memory / WASM backends in other targets). Documents, secondary indexes, and per-collection oplog tables live in the engine; **`storage_stats`** and **`serverStatus`** report a MongoDB-shaped **`storageEngine`** document (`name: "redb"`), aligned with driver expectations.
 
-WiredTiger is not an abstraction. It is **the production storage engine inside every MongoDB server since 3.2**. When this project calls `wiredtiger_open(db_path, "create")`, it creates the same B-tree file structures, the same page cache, the same checkpoint mechanism, and the same MVCC concurrency control that runs in production MongoDB clusters handling millions of operations per second.
+Writes are transactional in the engine: data rows, index maintenance, and oplog append succeed or roll back together. The query planner (index scan, PK equality, collection scan, geo) runs in Rust; **`collStats` / `$collStats`** surface counts and sizes through the same stats helpers.
 
-This is not "MongoDB-like" storage. This **is** MongoDB's storage.
+Legacy **`table:`** URI strings still appear in sync checkpoint keys for compatibility with older sync code paths; the redb layer strips the prefix before KV access.
 
-### Table Architecture
+## 2. Indexes and the planner
 
-The data table uses `key_format=S, value_format=u` — string keys mapping to **raw BSON bytes**. Documents are encoded via `bson.encode()` (PyMongo's C-optimized codec) and decoded via `bson.decode()`. The wire protocol path uses a single-pass raw BSON codec in Rust (`raw_bson.rs`) that bypasses PyMongo entirely. This preserves MongoDB type fidelity (int32 vs int64 vs double, ObjectId, datetime, etc.) and avoids the serialization overhead of JSON. Oplog and index metadata tables remain `key_format=S, value_format=S` (JSON strings) for debuggability.
-
-```
-WiredTiger Data Directory
-├── table:{db}_{collection}              # Document data (key = _id, value = BSON bytes)
-├── table:__oplog_{db}_{collection}      # Operation log per collection (JSON)
-├── table:__idx_{db}_{coll}_{index}      # One B-tree per secondary index
-├── table:__idxmeta_{db}_{collection}    # Index definitions (survives restarts)
-└── table:__sync_checkpoint              # Sync progress markers
-```
-
-Each `RustLocalCollection` opens its own WiredTiger **session** (from the shared connection) and protects it with a **per-collection `ReadWriteLock`**:
-
-- **Thread safety**: A Rust `ReadWriteLock` (GIL-independent `Mutex`+`Condvar`) allows concurrent readers while serializing writers. `RustLocalDB` holds a `Mutex`-guarded collection cache.
-- **Isolation**: Each collection's cursor operations don't interfere with others.
-- **Crash safety**: WiredTiger's checkpointing ensures data survives process crashes.
-- **B-tree ordering**: Primary keys are stored in sorted order, enabling efficient range scans.
-
-### The Write Path
-
-Every write — insert, update, delete — is wrapped in a **WiredTiger transaction** that ensures atomicity across the data table, all affected index tables, and the oplog. If any step fails (e.g. a unique index violation during update), the entire transaction is rolled back cleanly.
-
-For updates and deletes, the **query planner accelerates document matching**: `RustQueryPlanner` reuses the same plan scoring that powers `find()` -- using `pk_lookup` (O(log n) by `_id`), `index_scan` (O(log n + k) via B-tree range), or `collection_scan` (O(n) fallback) -- so that writes against indexed fields never scan the entire collection.
-
-```
-Application write
-    │
-    ▼
-┌──────────────────┐
-│  Acquire Lock    │  ← per-collection ReadWriteLock + Lock
-└────────┬─────────┘
-         ▼
-┌──────────────────┐
-│  Begin Txn       │  ← session.begin_transaction()
-└────────┬─────────┘
-         ▼
-┌──────────────────┐
-│ Schema Validation │  ← $jsonSchema enforcement
-└────────┬─────────┘
-         ▼
-┌──────────────────┐
-│ Index Maintenance │  ← add_doc / update_doc / remove_doc on every index
-└────────┬─────────┘
-         ▼
-┌──────────────────┐
-│  WiredTiger Write │  ← cursor[_id] = bson.encode(doc) with overwrite=true
-└────────┬─────────┘
-         ▼
-┌──────────────────┐
-│  Version Bump    │  ← monotonic counter per document for conflict detection
-└────────┬─────────┘
-         ▼
-┌──────────────────┐
-│  Oplog Append    │  ← timestamped, checksummed, with changed_fields tracking
-└────────┬─────────┘
-         ▼
-┌──────────────────┐
-│  Commit Txn      │  ← session.commit_transaction() (or rollback on error)
-└──────────────────┘
-```
-
-The `_internal=True` flag allows the sync layer to write documents pulled from the cloud without re-logging them to the oplog, preventing infinite echo loops in bidirectional sync.
-
-### Streaming Read Path
-
-The read architecture is designed around **lazy iteration**. Instead of materializing every matching document into a Python list, the engine yields documents one at a time from WiredTiger:
-
-```
-Application: coll.find({"city": "NYC"}).limit(10)
-    │
-    ▼
-┌──────────────────────────────────────────┐
-│  Collection.find()  (client.py)          │
-│  → creates RustStreamingCursor            │
-│  → wraps result in Cursor(iterable)      │
-└────────────────┬─────────────────────────┘
-                 ▼
-┌──────────────────────────────────────────┐
-│  RustStreamingCursor.__iter__()          │
-│                                          │
-│  1. Acquire read lock                    │
-│  2. Consult RustQueryPlanner.plan(query) │
-│  3. Branch on plan_type:                 │
-│     ├── pk_lookup   → single cursor.search(), yield 0-1 docs
-│     ├── index_scan  → walk index B-tree, yield per-id lookup
-│     ├── $in scan    → multi-point seek, yield per-id lookup
-│     ├── or_union    → execute subplans, dedup, yield per-id
-│     └── coll_scan   → cursor.next() loop, yield per-doc
-│  4. Release read lock on generator exit  │
-└────────────────┬─────────────────────────┘
-                 ▼
-┌──────────────────────────────────────────┐
-│  Cursor._resolve()  (aggregation/)       │
-│                                          │
-│  • No sort: itertools.islice(source, N)  │
-│    → only N docs pulled from generator   │
-│  • With sort: materialize, sort, slice   │
-│  • Results cached after first resolution │
-└──────────────────────────────────────────┘
-```
-
-**Why this matters**: A `find({}).limit(10)` on a million-document collection deserializes exactly 10 BSON documents. `find_one()` deserializes exactly 1. `count_documents()` iterates the WiredTiger cursor without building a list. The streaming path uses the same query planner as the materialized `find()`, so index scans, PK lookups, and `$or`-union plans all benefit.
-
-The materialized `RustLocalCollection.find(query) → list[Document]` remains available for internal callers (write paths and other code that needs a full list). The public `Collection.find()` facade uses the streaming path above (`RustStreamingCursor` plus Python `Cursor` for sort, skip, limit, and projection). **Wire `find`** does not: the wire command applies sort, skip, limit, and projection in Rust with no Python `Cursor` (see §5 Command Dispatcher).
-
-### Primary Key Lookups
-
-When querying by `_id`, WiredTiger's B-tree gives us a direct O(log n) lookup:
-
-```python
-cursor = session.open_cursor(table_uri)
-cursor.set_key(str(doc_id))
-if cursor.search() == 0:
-    doc = bson.decode(cursor.get_value())
-```
-
-No table scan. No index. Just the raw power of a B-tree seek — the same operation that serves every `findOne({_id: ...})` in production MongoDB.
-
----
-
-## 2. The Index Engine: WiredTiger B-Trees All the Way Down
-
-### Lexicographic Key Encoding
-
-The index engine solves a fundamental problem: how do you make WiredTiger's lexicographic byte ordering match MongoDB's type-aware comparison semantics? The answer is a carefully designed encoding scheme:
-
-```
-Type Prefix Hierarchy (ensures cross-type ordering):
-    "00"              → None (sorts lowest)
-    "1" + IEEE 754    → Numbers (with sign-bit manipulation for correct ordering)
-    "15" + hex        → ObjectId
-    "2" + UTF-8 hex   → Strings
-    "30" / "31"       → Boolean false / true (sorts highest)
-```
-
-For numbers, the encoder performs **IEEE 754 sign-bit manipulation**: negative numbers have all bits inverted, positive numbers have only the sign bit flipped. This transforms the floating-point binary representation into one where lexicographic byte comparison produces numerically correct ordering:
-
-```python
-packed = struct.pack(">d", float(value))
-b = bytearray(packed)
-if b[0] & 0x80:           # negative: invert all bits
-    b = bytearray(~x & 0xFF for x in b)
-else:                       # non-negative: flip sign bit
-    b[0] ^= 0x80
-return "1" + b.hex()
-```
-
-For **descending indexes**, the encoded key is run through a hex digit inversion (`0↔f, 1↔e, ...`), reversing the sort order without changing the B-tree's native ascending traversal.
-
-### Composite Index Keys
-
-Multi-field indexes encode each field value with its direction applied, separated by pipes, with the document `_id` appended as a tiebreaker:
-
-```
-encoded_field_1 | encoded_field_2 | ... | _id
-
-Example for index {age: 1, name: -1} on doc {_id: "abc", age: 30, name: "Alice"}:
-"1[encoded_30]|[inverted_encoded_Alice]|abc"
-```
-
-### The Query Planner
-
-The planner scores candidate indexes by **longest prefix match** against query conditions:
-
-| Condition Type | Score | Effect |
-|---|---|---|
-| Equality (`field: value`) | +2 | Tight bound on both sides |
-| Range (`$gt`, `$lt`, `$gte`, `$lte`) | +1 | Open or closed bound |
-| `$in` | +1 | Multi-point scan: one seek per value, merge results |
-| `$or` at top level | — | `or_union` if every branch is indexed, else collection scan |
-
-The winning index's bounds are compiled into WiredTiger-domain keys. The planner then executes a **cursor range scan**:
-
-```
-1. search_near(lower_bound_key)
-2. Advance cursor forward
-3. Collect _id values until key > upper_bound_key
-4. Fetch full documents by _id
-5. Re-filter with compiled MQL predicate (index is acceleration, not full pushdown)
-```
-
-### Index Types
-
-| Type | Description |
-|---|---|
-| **Single field** | `create_index("email")` → `email_1` |
-| **Compound** | `create_index([("age", 1), ("name", -1)])` → `age_1_name_-1` |
-| **Unique** | `create_index("email", unique=True)` — enforced via prefix scan before insert |
-| **Sparse** | `create_index("phone", sparse=True)` — skips docs where field is None |
-| **TTL** | `create_index("createdAt", expireAfterSeconds=3600)` — background reaper thread |
+Index definitions and B-tree rows are owned by **`smongo-engine`**. Keys use MongoDB-aware encodings so range scans and unique checks match server semantics. Python **`smongo/index.py`** retains **planner helpers and encoders** used by tests and tooling; **`IndexManager`** with **`table:__idx_*`** URIs is a **legacy** layout, not the default embedded path.
 
 ---
 
@@ -340,7 +151,9 @@ The winning index's bounds are compiled into WiredTiger-domain keys. The planner
 
 ---
 
-## 4. The Aggregation Pipeline: 25+ Stages Deep
+## 4. The Aggregation Pipeline: 27 Stages Deep
+
+All 27 pipeline stages run in **`smongo-engine`** (pure Rust) with a single FFI crossing per pipeline. Streaming stages use lazy iterator adapters; blocking stages materialize at their boundary only. See [ZERO-FFI-STATUS.md](ZERO-FFI-STATUS.md) for the architecture.
 
 The pipeline engine processes documents through a chain of stages, each transforming the document stream:
 
@@ -454,7 +267,7 @@ Auth:          saslStart, saslContinue, connectionStatus (SCRAM-SHA-256 auth + R
 
 The wire layer maintains a clean boundary between the BSON world (drivers) and the engine world (Python dicts with `smongo.ObjectId`, floats, regex dicts).
 
-Since P8, the wire path uses a **single-pass raw BSON codec** (`rust/src/raw_bson.rs`) that converts directly between wire bytes and engine-ready Python dicts -- no intermediate `bson::Document` allocation and no second normalization walk.
+Since P8, the wire path uses a **single-pass raw BSON codec** (`rust/smongo-py/src/raw_bson.rs`) that converts directly between wire bytes and engine-ready Python dicts -- no intermediate `bson::Document` allocation and no second normalization walk.
 
 **Decode (wire bytes → engine):** `raw_decode_document` parses BSON bytes inline: `ObjectId` → `smongo.ObjectId`, `DateTime` → Python `datetime`, `Decimal128` → `float`, `Regex` → `{"$regex", "$options"}` dict.
 
@@ -464,7 +277,7 @@ The Python-facing `normalize_inbound` / `normalize_outbound` functions in `wire_
 
 ### Connection Model
 
-Each TCP connection gets its own task (Tokio async) with a private `ConnectionContext`. TLS is supported via rustls when `tls_cert_file`/`tls_key_file` are provided. SCRAM-SHA-256 authentication and RBAC are enforced when `auth_required=True`. The server shares a single `RustLocalClient` (and thus a single WiredTiger connection) and a single `CursorRegistry` across all connections. Cursor IDs are random 63-bit integers with an idle reaper (600s default).
+Each TCP connection gets its own task (Tokio async) with a private `ConnectionContext`. TLS is supported via rustls when `tls_cert_file`/`tls_key_file` are provided. SCRAM-SHA-256 authentication and RBAC are enforced when `auth_required=True`. The server shares a single `RedbLocalClient` (one **`smongo-engine`** database handle over **redb**) and a single `CursorRegistry` across all connections. Cursor IDs are random 63-bit integers with an idle reaper (600s default).
 
 The server advertises itself as wire version 0–21, maxBsonObjectSize of 16MB, and maxMessageSizeBytes of 48MB — matching production MongoDB's capabilities.
 
@@ -502,9 +315,9 @@ Every write operation appends a structured entry to the collection's oplog table
 | `internal` | Echo prevention flag — sync layer skips internal entries |
 | `changed_fields` | Field names modified — enables field-level merge |
 
-The oplog key is `{time_ns:020d}-{uuid4}`, ensuring **lexicographic time ordering** in WiredTiger's B-tree while remaining globally unique.
+The oplog key is `{time_ns:020d}-{uuid4}`, ensuring **lexicographic time ordering** in the engine’s ordered key space while remaining globally unique.
 
-Oplog read/write (`OplogWriter.log`, `OplogReader.read_all`, and related paths) uses typed `RustWtSession` / `RustWtCursor` borrow for WiredTiger cursor work, bypassing Python method dispatch for all 47 oplog cursor operations. `OplogHub` registers listeners as `Py<ChangeStream>` instead of `Py<PyAny>`.
+Oplog read/write goes through **`smongo-engine`** (`OplogWriter` / `OplogReader` over the collection’s oplog table) and PyO3 bridges (`RedbOplogWriterBridge` / `RedbOplogReaderBridge`) so hot paths stay in Rust. `OplogHub` registers listeners as `Py<ChangeStream>` instead of `Py<PyAny>`.
 
 ### Oplog Compaction
 
@@ -513,7 +326,7 @@ The oplog grows with every mutation. For long-running embedded deployments, unbo
 - **`OplogWriter.truncate_before(key)`**: Delete all entries lexicographically before a given key (used by sync after pushing entries to Atlas).
 - **`OplogWriter.truncate_count(max_entries)`**: Keep only the last N entries, deleting the oldest.
 - **`OplogReader.count()`** / **`OplogReader.oldest_key()`**: Monitoring primitives.
-- **`RustLocalCollection.compact_oplog(keep=1000)`**: Public API for manual compaction.
+- **Manual compaction**: use `OplogWriter.truncate_count(max_entries)` / `truncate_before(key)` from the collection’s oplog writer (or disable `oplog_auto_compact` if multiple consumers need the full tail).
 - **Auto-compact after sync push**: When `oplog_auto_compact` is enabled (default), `SyncManager._push()` calls `truncate_before(last_pushed_key)` after each successful push cycle, reclaiming space for entries safely stored in Atlas.
 
 ### Change Streams
@@ -534,7 +347,7 @@ The pipeline's `$match` stage is compiled with the same `compile_query` used for
 
 ### The Architecture of Bidirectional Sync
 
-The sync layer is what transforms a standalone embedded database into a **distributed data system**. It bridges the gap between "works offline" and "works everywhere" by maintaining eventual consistency between the local WiredTiger engine and a remote MongoDB Atlas cluster.
+The sync layer is what transforms a standalone embedded database into a **distributed data system**. It bridges the gap between "works offline" and "works everywhere" by maintaining eventual consistency between the local **`smongo-engine` + redb** store and a remote MongoDB Atlas cluster.
 
 ```
 ┌────────────────────────────────────────────────────────────┐
@@ -582,7 +395,7 @@ The push path tails the local oplog from the last checkpoint forward:
    - `delete` → `DeleteOne`
    - `index_create` / `index_drop` → direct remote index management
 3. **Flush** via `bulk_write(ops, ordered=False)` in configurable batch sizes
-4. **Checkpoint** the last oplog key to `push:{ns}` in WiredTiger
+4. **Checkpoint** the last oplog key to `push:{ns}` in local storage (sync metadata table)
 
 ### Pull: Cloud Changes to Local
 
@@ -691,7 +504,7 @@ The `ObjectId` implementation follows the MongoDB ObjectId specification exactly
 - **Random**: 5 bytes from `os.urandom()`, generated once per process — ensures uniqueness across processes
 - **Counter**: 3-byte incrementing value (thread-safe via lock), seeded from random — ensures uniqueness within a process
 
-ObjectIds are naturally time-ordered (the timestamp prefix sorts first), which means WiredTiger's B-tree stores documents roughly in insertion order — similar to production MongoDB's behavior.
+ObjectIds are naturally time-ordered (the timestamp prefix sorts first), which means **`_id`**-keyed storage tends to preserve insertion order — similar to production MongoDB’s behavior.
 
 ---
 
@@ -718,27 +531,27 @@ Validation errors include the full dot-path to the failing field and a descripti
 `MongoClient` provides a unified interface that adapts to the connection URI:
 
 ```python
-# Mode 1: Pure local — WiredTiger only, no network
+# Mode 1: Pure local — redb-backed engine, no network
 client = MongoClient("local://my_data")
 
 # Mode 2: Pure remote — delegates to PyMongo
 client = MongoClient("mongodb+srv://cluster.mongodb.net/mydb")
 
-# Mode 3: Hybrid — local WiredTiger + background sync to Atlas
+# Mode 3: Hybrid — local redb + background sync to Atlas
 client = MongoClient("local://my_data", sync="mongodb+srv://cluster.mongodb.net")
 ```
 
 | Mode | Storage | Network | Sync |
 |---|---|---|---|
-| `local` | WiredTiger on disk | None | None |
+| `local` | `smongo-engine` + redb on disk | None | None |
 | `remote` | MongoDB Atlas | Required | N/A (direct) |
-| `hybrid` | WiredTiger on disk | Optional | Bidirectional to Atlas |
+| `hybrid` | `smongo-engine` + redb on disk | Optional | Bidirectional to Atlas |
 
 In hybrid mode, the client constructs a `SyncManager` and starts it automatically. Collections are registered for sync as they are accessed through `Database.__getitem__` or `create_collection`.
 
 The `Collection` wrapper provides the full MongoDB API surface: `find`, `find_one`, `insert_one`, `insert_many`, `update_one`, `update_many`, `delete_one`, `delete_many`, `find_one_and_update`, `find_one_and_replace`, `find_one_and_delete`, `bulk_write`, `aggregate`, `count_documents`, `watch`, `create_index`, `drop_index`, `list_indexes`, `explain`, `get_oplog`.
 
-In local mode, **`find()` returns a lazy `Cursor`** backed by a `RustStreamingCursor`. Documents are deserialized from WiredTiger only as the cursor is consumed. **`find_one()`** delegates to `RustLocalCollection.find_one()` which stops after the first match. **`count_documents()`** delegates to `RustLocalCollection.count()` which iterates without building a list. **`aggregate()`** pulls its input documents lazily via streaming cursors rather than materializing everything into memory.
+In local mode, **`find()`** uses engine-backed iteration (and wire paths use Rust streaming helpers). Documents are decoded from BSON as the cursor advances. **`find_one()`** and **`count_documents()`** use engine primitives that stop early or count without materializing full result lists. **`aggregate()`** consumes input via the same lazy patterns where applicable.
 
 `bulk_write` accepts a list of operation descriptors (`InsertOne`, `UpdateOne`, `UpdateMany`, `DeleteOne`, `DeleteMany`, `ReplaceOne`) and executes them in order (or unordered), returning a `BulkWriteResult` with `inserted_count`, `matched_count`, `modified_count`, and `deleted_count`.
 
@@ -750,9 +563,9 @@ In local mode, **`find()` returns a lazy `Cursor`** backed by a `RustStreamingCu
 
 This is not a document database that happens to use similar method names. The fidelity runs deep:
 
-1. **Same storage engine**: WiredTiger's B-trees provide the same durability guarantees, page-level concurrency, and checkpoint-based recovery. Documents are stored as **native BSON bytes** — the same binary format MongoDB uses on disk.
+1. **Embedded B-tree storage**: **redb** backs **`smongo-engine`** on native targets with ACID commits and a single-file layout. Documents are stored as **native BSON bytes** — the same binary format MongoDB uses on the wire.
 
-2. **Same write semantics**: Every write is wrapped in a **WiredTiger transaction** (data + indexes + oplog as a single atomic unit). Validation failures or unique-index violations trigger a clean rollback. A **per-collection ReadWriteLock** ensures thread safety with concurrent reader access.
+2. **Same write semantics**: Each write runs inside an **engine transaction** (`StorageSession::begin_transaction` / `commit_transaction`): data rows, indexes, and oplog updates commit or roll back together. Validation failures or unique-index violations surface as errors with no partial durable state.
 
 3. **Same query language**: MQL queries compiled from the same JSON grammar with the same operators, the same dot-notation path semantics, the same type comparison rules. The query planner accelerates **both reads and writes**.
 
@@ -788,7 +601,7 @@ This is not a document database that happens to use similar method names. The fi
 
 | Package | Role | Required |
 |---|---|---|
-| **wiredtiger** | B-tree storage engine (data, oplog, indexes, checkpoints) | Yes (local mode) |
+| **redb** (via **`smongo-engine`**) | Embedded B-tree persistence (data, oplog, indexes, sync metadata) | Yes (local `local://` mode) |
 | **pymongo** | Remote mode driver, sync target, BSON codec for wire protocol | Yes (sync/remote/wire) |
 | **flask** | Web dashboard (demo application) | No (demo only) |
 | **numpy** | Vector math for `$vectorSearch` | No (vector search only) |
@@ -808,12 +621,12 @@ smongo/
 ├── client.py             # MongoClient (local/remote/hybrid), Database, Collection,
 │                         #   streaming find/find_one/count, bulk_write, find_one_and_*
 ├── _smongo_core/         # Compiled Rust extension (PyO3) -- the actual engine
-├── storage/              # Runtime helpers used by the Rust engine
-│   ├── engine.py         #   LocalClient/LocalDB (Python interface, delegates to Rust)
-│   ├── collection.py     #   TTLReaper (used by RustLocalCollection)
-│   ├── locking.py        #   ReadWriteLock (Python fallback; runtime uses Rust)
+├── storage/              # Local backends and helpers around the PyO3 engine
+│   ├── redb_engine.py    #   RedbCollection — CRUD, indexes, oplog bridges, change streams
+│   ├── collection.py     #   TTLReaper and shared collection helpers
+│   ├── locking.py        #   ReadWriteLock helpers
 │   ├── results.py        #   InsertResult, UpdateResult, DeleteResult
-│   ├── streaming.py      #   StreamingCursor (Python fallback; runtime uses RustStreamingCursor)
+│   ├── streaming.py      #   StreamingCursor (Python-side cursor wrapper where used)
 │   └── helpers.py        #   BSON encode/decode helpers
 ├── query/                # MQL compiler package
 │   ├── compiler.py       #   compile_query, query operators
@@ -826,7 +639,7 @@ smongo/
 │   ├── joins.py          #   $lookup, $graphLookup, $unionWith
 │   ├── output.py         #   $facet, $out, $merge
 │   └── vector.py         #   $vectorSearch (NumPy / USearch)
-├── index.py              # Index key encoding, helpers, DuplicateKeyError (runtime: RustIndexManager, RustQueryPlanner)
+├── index.py              # Index key encoding, helpers, DuplicateKeyError
 ├── oplog.py              # OplogWriter (with compaction), OplogReader, ChangeStream
 ├── sync.py               # SyncManager, conflict resolvers, checkpoint persistence,
 │                         #   metrics, exponential backoff, selective sync filters

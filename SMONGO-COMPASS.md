@@ -8,7 +8,7 @@
 
 MongoDB runs in the cloud. It powers your Atlas cluster, your replica sets, your sharded deployments. The tools you use to work with it — Compass, mongosh, PyMongo, the Node.js driver — all speak the same binary protocol over TCP. That protocol is the lingua franca of the MongoDB ecosystem.
 
-smongo brings the MongoDB experience to the edge: an embedded WiredTiger engine, the full MQL query language, a 25-stage aggregation pipeline, B-tree indexes, and an oplog that syncs bidirectionally with Atlas. But an engine without connectivity is a silo. The wire protocol server breaks that boundary — it lets every standard MongoDB tool connect to the local engine over TCP, as if it were a real `mongod`.
+smongo brings the MongoDB experience to the edge: **`smongo-engine` + redb** for embedded storage, the full MQL query language, a rich aggregation pipeline, B-tree indexes, and an oplog that syncs bidirectionally with Atlas. An engine without connectivity is a silo — the wire protocol server breaks that boundary by letting standard MongoDB tools connect over TCP, as if the embed were a `mongod`.
 
 Compass is the proof. When it connects to smongo and renders databases, collections, documents, indexes, and aggregation results with no special configuration, no adapter, no translation layer — that's the confirmation that the edge engine speaks the same language as the cloud.
 
@@ -38,9 +38,8 @@ Compass is the proof. When it connects to smongo and renders databases, collecti
     │     └────────────────┘               └───────┬────────┘        │
     │                                              │                 │
     │                                       ┌──────┴───────┐         │
-    │                                       │  WiredTiger   │         │
-    │                                       │  B-Trees      │         │
-    │                                       │  on disk      │         │
+    │                                       │ smongo-engine│         │
+    │                                       │ + redb file  │         │
     │                                       └──────────────┘         │
     └─────────────────────────────────────────────────────────────────┘
 ```
@@ -74,7 +73,7 @@ Your Machine
 ├── localhost:27017  ──►  Real MongoDB 7 container (sync target, stands in for Atlas)
 └── localhost:27018  ──►  smongo wire server (Compass connects here)
                           │
-                          ├── WiredTiger B-trees on disk
+                          ├── redb-backed engine on disk
                           ├── Bidirectional sync to :27017
                           └── Same data the web dashboard shows
 ```
@@ -89,7 +88,7 @@ You can connect Compass to both `27017` and `27018` simultaneously to compare th
 
 ### How It Works Inside the Container
 
-The `docker-compose.yml` sets `WIRE_PORT=27018` and `WIRE_HOST=0.0.0.0`. When `web_app.py` starts, it launches the wire server **in the same process** as Flask, sharing the same WiredTiger connection via the `local_client` parameter. No second process, no lock conflict, no duplicate data.
+The `docker-compose.yml` sets `WIRE_PORT=27018` and `WIRE_HOST=0.0.0.0`. When `web_app.py` starts, it launches the wire server **in the same process** as Flask, sharing the same **`RedbClient` / `RedbLocalClient`** via the `local_client` parameter. No second process, no duplicate open of the database path, no duplicate data.
 
 ```yaml
 services:
@@ -127,7 +126,7 @@ python -m smongo.wire --port 27017
 Output:
 
 ```
-smongo wire server on 127.0.0.1:27017  (db: local_wt_data)  -- small but mighty
+smongo wire server on 127.0.0.1:27017  (db path: e.g. `./local_data`)  -- small but mighty
 ```
 
 ### Connect from Compass
@@ -136,7 +135,7 @@ smongo wire server on 127.0.0.1:27017  (db: local_wt_data)  -- small but mighty
 mongodb://localhost:27017
 ```
 
-No auth. No TLS. No replica set config.
+No auth. No TLS. No replica set config. (The Rust `RustWireServer` supports SCRAM-SHA-256 and TLS if needed.)
 
 ### CLI Flags
 
@@ -144,7 +143,7 @@ No auth. No TLS. No replica set config.
 |---|---|---|
 | `--port` | `27017` | TCP port to listen on |
 | `--host` | `127.0.0.1` | Bind address (`0.0.0.0` for external access) |
-| `--db-path` | `local_wt_data` | WiredTiger data directory |
+| `--db-path` | `local_data` | Directory / file path for the embedded redb database |
 | `-v` / `--verbose` | off | Debug-level logging |
 
 ### Alternative: Installed Entry Point
@@ -198,7 +197,7 @@ Compass                                     smongo
   │    maxWireVersion: 21,                    │
   │    maxBsonObjectSize: 16777216,           │
   │    version: "7.0.0-smongo",              │
-  │    modules: ["embedded", "wiredtiger"],   │
+  │    modules: ["embedded", "redb"],   │
   │    ok: 1.0                                │
   │  }                                        │
   │ ◄─────────────────────────────────────    │
@@ -218,10 +217,10 @@ Every major Compass feature maps to wire protocol commands that smongo handles:
 
 | Compass Feature | Wire Command(s) | Notes |
 |---|---|---|
-| Database sidebar | `listDatabases` | Size-on-disk stats from WiredTiger |
+| Database sidebar | `listDatabases` | Size-on-disk stats from the engine |
 | Collection list | `listCollections` | Types, UUIDs, options |
 | Browse documents | `find` + `getMore` | Paginated, proper BSON types (ObjectId, Date, etc.) |
-| Insert document | `insert` | Persisted to WiredTiger with oplog entry |
+| Insert document | `insert` | Persisted to redb with oplog entry |
 | Edit document | `findAndModify` / `update` | In-place field edits |
 | Delete document | `delete` | With oplog entry for sync |
 | Query filter bar | `find` with `filter` | Full MQL: `$gt`, `$in`, `$regex`, `$elemMatch`, ... |
@@ -230,7 +229,7 @@ Every major Compass feature maps to wire protocol commands that smongo handles:
 | Indexes tab | `listIndexes` / `createIndexes` / `dropIndexes` | B-tree indexes with unique, sparse, TTL |
 | Explain plan | `explain` | INDEX SCAN / PK LOOKUP / COLL SCAN with scoring |
 | Schema analysis | `find` (sampling) | Compass samples documents to infer field types |
-| Server stats | `serverStatus` / `hostInfo` / `buildInfo` | WiredTiger stats, uptime, memory, connections |
+| Server stats | `serverStatus` / `hostInfo` / `buildInfo` | `storageEngine` (`redb`), uptime, memory, connections |
 | mongosh shell | Any command | Full 80+ command set |
 
 ---
@@ -250,8 +249,8 @@ mongodb://localhost:27017/?directConnection=true  # explicit direct mode
 
 | Setting | Value | Reason |
 |---|---|---|
-| **Authentication** | None | smongo has no auth layer |
-| **TLS/SSL** | Off | No TLS in embedded mode |
+| **Authentication** | None (default Python `WireServer`) or SCRAM-SHA-256 (`RustWireServer`) | Default mode has no auth; Rust wire server supports SCRAM |
+| **TLS/SSL** | Off (default) or On (`RustWireServer` with cert/key) | Default mode has no TLS; Rust wire server supports rustls |
 | **Direct Connection** | On | Standalone server, not a replica set |
 | **Read Preference** | Primary | Single node — only primary exists |
 
@@ -263,13 +262,13 @@ mongodb://localhost:27017/?directConnection=true  # explicit direct mode
 
 **Symptom**: Error immediately after connecting.
 
-**Cause**: Credentials in the URI (`mongodb://user:pass@localhost`) or saved Compass auth settings.
+**Cause**: Credentials in the URI (`mongodb://user:pass@localhost`) or saved Compass auth settings when connecting to the default Python `WireServer` (which has no auth).
 
-smongo returns error code 18 (`AuthenticationFailed`) with a clear message:
+The default Python `WireServer` returns error code 18 (`AuthenticationFailed`) with a clear message:
 
 > *"smongo embedded mode does not support authentication. Connect without credentials (remove username/password from your URI)."*
 
-**Fix**: Remove credentials from the URI. Set Authentication to **None** in Compass.
+**Fix**: Remove credentials from the URI and set Authentication to **None** in Compass. Alternatively, use the Rust `RustWireServer` which supports SCRAM-SHA-256 authentication.
 
 ---
 
@@ -360,16 +359,16 @@ smongo supports 25+ stages but not the entire MongoDB catalog. `$search` (Atlas 
 
 ## Multiple Apps, One Machine
 
-WiredTiger acquires an **exclusive file lock** on its data directory. This single constraint governs every multi-app scenario.
+The embedded engine opens a **single redb database** at a path you choose. **Only one process** should own that path at a time — a second opener (another wire server or another embed in a different process) will conflict. TCP ports are separate: many Compass / PyMongo clients can share **one** wire server process.
 
 ### The Rule
 
 ```
-Process A calls wiredtiger_open("./my_data")  →  ✅  acquires lock
-Process B calls wiredtiger_open("./my_data")  →  ❌  WiredTigerError
+Process A opens local://./my_data   →  ✅  owns the redb file
+Process B opens the same path       →  ❌  conflict (second process)
 ```
 
-The lock is per-directory, per-process. Not per-thread, not per-port, not per-user.
+Use **one wire server** (or one Python process with a shared `RedbClient`) per database path.
 
 ### Every Scenario
 
@@ -377,13 +376,13 @@ The lock is per-directory, per-process. Not per-thread, not per-port, not per-us
 Scenario                                         Result
 ─────────────────────────────────────────────────────────────────────
 Two wire servers, same db-path, same port        ❌ Port conflict
-Two wire servers, same db-path, different ports  ❌ WiredTiger lock
+Two wire servers, same db-path, different ports  ❌ Second open of same path
 Two wire servers, diff db-path, same port        ❌ Port conflict
 Two wire servers, diff db-path, different ports  ✅ Independent databases
-Wire server + embedded client, same db-path      ❌ WiredTiger lock
+Wire server + embedded client, same db-path      ❌ Two owners (unless same process — see below)
 Multiple Compass windows → one wire server       ✅ Each gets its own TCP connection
 Compass + PyMongo → one wire server              ✅ Both connect over TCP
-Web dashboard + wire server in same process      ✅ Shared RustLocalClient
+Web dashboard + wire server in same process      ✅ Shared RedbClient / RedbLocalClient
 ```
 
 ### The Safe Pattern
@@ -403,9 +402,9 @@ Route everything through one wire server:
           └────────────┬───────────┘
                        │
           ┌────────────┴───────────┐
-          │  WiredTiger ./my_data  │
-          │  Exclusive file lock   │
-          │  Thread-safe sessions  │
+          │  redb ./my_data        │
+          │  One process owner     │
+          │  Many TCP sessions OK  │
           └────────────────────────┘
 ```
 
@@ -416,7 +415,7 @@ from pymongo import MongoClient
 client = MongoClient("mongodb://localhost:27017")
 ```
 
-Not the embedded client (which would compete for the WiredTiger lock):
+Avoid a **second process** also opening `local://my_data` while the wire server holds that path:
 
 ```python
 from smongo import MongoClient
@@ -425,7 +424,7 @@ client = MongoClient("local://my_data")  # ❌ if another process already has it
 
 ### Single-Process Sharing
 
-If your app and the wire server live in the **same Python process**, they share the same `RustLocalClient` -- one `wiredtiger_open()`, no conflict. This is how `web_app.py` works: Flask and the wire server coexist by sharing the WiredTiger connection.
+If your app and the wire server live in the **same Python process**, pass **`MongoClient(...).get_local_client()`** into `WireServer` so there is a single engine handle. This is how `web_app.py` works: Flask and the wire server share one **`RedbClient`**.
 
 ```python
 from smongo import MongoClient
@@ -452,7 +451,7 @@ This is what the architecture enables end-to-end:
     ┌────────────────────────────────────────────────────────────┐
     │                       THE EDGE                              │
     │                                                            │
-    │   Your app writes to the local WiredTiger engine.          │
+    │   Your app writes to the local redb-backed engine.         │
     │   Queries execute against local B-tree indexes.            │
     │   Aggregation pipelines run in-process.                    │
     │   Vector search runs against local embeddings.             │
@@ -460,7 +459,7 @@ This is what the architecture enables end-to-end:
     │                                                            │
     │   ┌─────────────────────────────────────────────────────┐  │
     │   │  smongo embedded engine                              │  │
-    │   │  WiredTiger B-trees · MQL compiler · Query planner  │  │
+    │   │  redb storage · MQL compiler · Query planner         │  │
     │   │  25+ agg stages · B-tree indexes · $vectorSearch    │  │
     │   │  Oplog · Schema validation · Change streams          │  │
     │   └──────────────────────┬──────────────────────────────┘  │
@@ -493,7 +492,7 @@ This is what the architecture enables end-to-end:
     └────────────────────────────────────────────────────────────┘
 ```
 
-**Write locally.** Your app talks to WiredTiger B-trees on disk. Queries are fast because they're local. The query planner picks indexes. The MQL compiler handles the full grammar. There's no network round-trip.
+**Write locally.** Your app talks to the embedded **redb** database file. Queries are fast because they're local. The query planner picks indexes. The MQL compiler handles the full grammar. There's no network round-trip.
 
 **Browse with Compass.** The wire server exposes the local engine as a standard `mongod`. Compass connects, discovers databases, and renders the full GUI. You can explain queries, build aggregation pipelines, create indexes, and inspect documents — all against the local engine.
 
@@ -544,7 +543,7 @@ The exact document returned for `hello` / `isMaster`:
   "gitVersion": "<commit hash>",
   "versionArray": [7, 0, 0, 0],
   "bits": 64,
-  "modules": ["embedded", "wiredtiger"],
+  "modules": ["embedded", "redb"],
   "javascriptEngine": "none",
   "ok": 1.0
 }
@@ -637,8 +636,8 @@ Negotiated during the handshake. Transparent to Compass — no configuration nee
 |---|---|---|
 | Wire protocol (OP_MSG) | Yes | Yes |
 | OP_COMPRESSED | Yes (zlib/snappy/zstd) | Yes |
-| Authentication (SCRAM) | No | Yes |
-| TLS/SSL | No | Yes |
+| Authentication (SCRAM) | Yes (`RustWireServer`); No (default Python `WireServer`) | Yes |
+| TLS/SSL | Yes (`RustWireServer` via rustls); No (default Python `WireServer`) | Yes |
 | Replica set | No (standalone) | Yes |
 | Sharding | No | Yes |
 | Change streams (wire) | No | Yes |
@@ -649,35 +648,20 @@ Negotiated during the handshake. Transparent to Compass — no configuration nee
 | Wire version | 21 | 21 |
 | Compass compatible | Yes | Yes |
 
-### I. WiredTiger Lock Mechanics
+### I. Single-owner database path
 
-`wiredtiger_open()` creates a `WiredTiger.lock` file and acquires an OS-level `flock()`:
-
-- **Exclusive** — no shared or read-only bypass
-- **Process-scoped** — held for the lifetime of the connection
-- **Released on close** — `conn.close()` or process exit (including crashes)
-- **Not bypassable** — no config option to skip it
-- **No stale locks** — `flock()` is released automatically by the OS on process exit
-
-Error when the lock is held:
-
-```
-wiredtiger_open: __posix_file_lock, /path/to/my_data/WiredTiger.lock:
-    resource busy: Resource temporarily unavailable
-```
-
-In smongo, this surfaces as a `WiredTigerError` during `RustLocalClient.__init__()`, before the TCP socket is even created.
+redb uses a memory-mapped file with **single-writer** semantics at the library level. Practically: **one `Database` / one process** should own a given path. Run **one** embedded Python process (or one wire server) per path; scale read concurrency by connecting many TCP clients to that server — not by opening the same file in two processes.
 
 ### J. Compass mongosh Commands
 
 Open the built-in shell (bottom bar in Compass) and run these against smongo:
 
 ```javascript
-db.serverStatus()                                    // WiredTiger stats, uptime, memory
+db.serverStatus()                                    // storageEngine (redb), uptime, memory
 db.adminCommand({ listDatabases: 1 })                // all databases with sizes
 db.users.find({ age: { $gt: 30 } }).explain()        // query plan (INDEX SCAN / COLL SCAN)
 db.adminCommand({ "client.sync": 1 })                // sync status (if sync is enabled)
-db.adminCommand({ fsync: 1 })                        // force WiredTiger checkpoint
+db.adminCommand({ fsync: 1 })                        // flush / checkpoint (engine implementation)
 db.users.stats()                                     // collection storage stats
 db.serverStatus().connections                         // active connection count
 db.adminCommand({ "system.profile": 1 })             // profiled slow operations

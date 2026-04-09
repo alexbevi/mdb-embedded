@@ -1,11 +1,9 @@
-"""Thread-local WiredTiger transaction session for multi-document transactions.
+"""Thread-local marker for multi-document wire transactions (redb / engine).
 
-When a wire-protocol ``startTransaction`` command is received, a new
-WiredTiger session is opened and ``begin_transaction()`` is called on it.
-The session is stored in a thread-local so that all collection operations
-on the same thread use this shared transactional session instead of their
-own per-collection session.  ``commit()`` / ``rollback()`` map directly
-to the WiredTiger session calls, giving true ACID guarantees.
+``TransactionSession`` is constructed with the Rust :class:`RedbLocalClient` (or a
+Python :class:`~smongo.storage.redb_engine.RedbClient`, which delegates to it).
+``activate`` / ``commit`` / ``rollback`` map to ``wire_txn_*`` on that client so
+all collection operations on the connection share one engine transaction.
 """
 
 from __future__ import annotations
@@ -16,39 +14,35 @@ from typing import Any
 _txn_state = threading.local()
 
 
+def _rust_client(local_client: Any) -> Any:
+    """Resolve the PyO3 ``RedbLocalClient`` from a ``RedbClient`` wrapper or pass-through."""
+    inner = getattr(local_client, "_rust_client", None)
+    return inner if inner is not None else local_client
+
+
 class TransactionSession:
-    """A WiredTiger session with an open transaction spanning multiple collections."""
+    """Binds ``wire_txn_begin`` / ``commit`` / ``abort`` on ``RedbLocalClient``."""
 
-    def __init__(self, conn: Any) -> None:
-        self._session = conn.open_session()
-        self._session.begin_transaction()
-
-    @property
-    def session(self) -> Any:
-        """The underlying WiredTiger session."""
-        return self._session
+    def __init__(self, local_client: Any) -> None:
+        self._rust = _rust_client(local_client)
 
     def activate(self) -> None:
-        """Set this as the active transaction for the current thread."""
-        _txn_state.session = self._session
+        """Start a wire transaction and publish the client for diagnostics."""
+        self._rust.wire_txn_begin()
+        _txn_state.session = self._rust
 
     def deactivate(self) -> None:
-        """Clear the thread-local transaction session."""
         _txn_state.session = None
 
     def commit(self) -> None:
-        """Commit the transaction and close the session."""
-        self._session.commit_transaction()
+        self._rust.wire_txn_commit()
         self.deactivate()
-        self._session.close()
 
     def rollback(self) -> None:
-        """Roll back the transaction and close the session."""
-        self._session.rollback_transaction()
+        self._rust.wire_txn_abort()
         self.deactivate()
-        self._session.close()
 
 
 def get_active_txn_session() -> Any | None:
-    """Return the thread-local transactional WT session, or ``None``."""
+    """Return the thread-local RedbLocalClient while a wire transaction is active, else ``None``."""
     return getattr(_txn_state, "session", None)

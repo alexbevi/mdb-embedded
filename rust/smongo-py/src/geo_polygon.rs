@@ -4,12 +4,9 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
-use s2::cellid::CellID;
 use s2::edgeutil::{distance_from_segment, simple_crossing};
 use s2::latlng::LatLng;
 use s2::point::Point;
-use s2::rect::Rect;
-use s2::region::RegionCoverer;
 
 /// On-edge tolerance (~1m on Earth).
 const BOUNDARY_ANGLE_RAD: f64 = 1e-7;
@@ -22,31 +19,6 @@ pub struct GeoQueryShape {
 }
 
 impl GeoQueryShape {
-    /// Conservative S2 cell cover over a lat/lng bounding rect of all vertices (RegionCoverer, max level 30).
-    pub fn covering_cell_ids(&self) -> Vec<CellID> {
-        let mut rect = Rect::empty();
-        for poly in &self.polygons {
-            for ring in poly {
-                for p in ring {
-                    let ll = LatLng::from(*p);
-                    rect = &rect + &ll.normalized();
-                }
-            }
-        }
-        if rect.is_empty() {
-            return Vec::new();
-        }
-        let margin = LatLng::from_degrees(1e-4, 1e-4);
-        let rect = rect.expanded(&margin);
-        let coverer = RegionCoverer {
-            min_level: 0,
-            max_level: 30,
-            level_mod: 1,
-            max_cells: 512,
-        };
-        coverer.covering(&rect).0
-    }
-
     /// `$geoWithin`: in exterior and not in any hole (closed sets, boundary counts as inside / in hole).
     pub fn contains_point_lonlat(&self, lon_deg: f64, lat_deg: f64) -> bool {
         let ll = LatLng::from_degrees(lat_deg, lon_deg);

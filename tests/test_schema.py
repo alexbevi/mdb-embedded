@@ -23,12 +23,12 @@ class TestSchemaRequired:
 
     def test_required_missing(self):
         schema = {"required": ["name", "age"]}
-        with pytest.raises(ValidationError, match="missing required field 'age'"):
+        with pytest.raises(ValidationError, match="Required field 'age' is missing"):
             validate_document({"name": "Alice"}, schema)
 
     def test_required_all_missing(self):
         schema = {"required": ["name"]}
-        with pytest.raises(ValidationError, match="missing required field 'name'"):
+        with pytest.raises(ValidationError, match="Required field 'name' is missing"):
             validate_document({}, schema)
 
 
@@ -43,7 +43,7 @@ class TestSchemaType:
 
     def test_bson_type_string_wrong(self):
         schema = {"properties": {"name": {"bsonType": "string"}}}
-        with pytest.raises(ValidationError, match="expected type string"):
+        with pytest.raises(ValidationError, match="Expected type string"):
             validate_document({"name": 42}, schema)
 
     def test_bson_type_int(self):
@@ -68,7 +68,7 @@ class TestSchemaType:
 
     def test_bson_type_null_disallowed(self):
         schema = {"properties": {"x": {"bsonType": "string"}}}
-        with pytest.raises(ValidationError, match="null not allowed"):
+        with pytest.raises(ValidationError, match="Expected type string, got .null."):
             validate_document({"x": None}, schema)
 
     def test_type_alias(self):
@@ -115,7 +115,7 @@ class TestSchemaAdditionalProperties:
             "properties": {"name": {"bsonType": "string"}},
             "additionalProperties": False,
         }
-        with pytest.raises(ValidationError, match="additional property.*not allowed"):
+        with pytest.raises(ValidationError, match="Additional property .extra. not allowed"):
             validate_document({"name": "Alice", "extra": 1}, schema)
 
     def test_additional_properties_allows_id(self):
@@ -139,7 +139,7 @@ class TestSchemaMinMaxProperties:
 
     def test_min_properties_fail(self):
         schema = {"minProperties": 3}
-        with pytest.raises(ValidationError, match="too few properties"):
+        with pytest.raises(ValidationError, match="Document has 1 properties, minimum is 3"):
             validate_document({"a": 1}, schema)
 
     def test_max_properties_ok(self):
@@ -148,7 +148,7 @@ class TestSchemaMinMaxProperties:
 
     def test_max_properties_fail(self):
         schema = {"maxProperties": 1}
-        with pytest.raises(ValidationError, match="too many properties"):
+        with pytest.raises(ValidationError, match="Document has 2 properties, maximum is 1"):
             validate_document({"a": 1, "b": 2}, schema)
 
 
@@ -159,7 +159,7 @@ class TestSchemaNumericConstraints:
 
     def test_minimum_fail(self):
         schema = {"properties": {"x": {"bsonType": "int", "minimum": 10}}}
-        with pytest.raises(ValidationError, match="< minimum"):
+        with pytest.raises(ValidationError, match="less than minimum"):
             validate_document({"x": 5}, schema)
 
     def test_maximum(self):
@@ -168,17 +168,17 @@ class TestSchemaNumericConstraints:
 
     def test_maximum_fail(self):
         schema = {"properties": {"x": {"bsonType": "int", "maximum": 10}}}
-        with pytest.raises(ValidationError, match="> maximum"):
+        with pytest.raises(ValidationError, match="greater than maximum"):
             validate_document({"x": 50}, schema)
 
     def test_exclusive_minimum(self):
         schema = {"properties": {"x": {"bsonType": "int", "exclusiveMinimum": 5}}}
-        with pytest.raises(ValidationError, match="exclusiveMinimum"):
+        with pytest.raises(ValidationError, match="must be greater than"):
             validate_document({"x": 5}, schema)
 
     def test_exclusive_maximum(self):
         schema = {"properties": {"x": {"bsonType": "int", "exclusiveMaximum": 10}}}
-        with pytest.raises(ValidationError, match="exclusiveMaximum"):
+        with pytest.raises(ValidationError, match="must be less than"):
             validate_document({"x": 10}, schema)
 
     def test_bool_excluded_from_numeric_checks(self):
@@ -189,12 +189,12 @@ class TestSchemaNumericConstraints:
 class TestSchemaStringConstraints:
     def test_min_length(self):
         schema = {"properties": {"s": {"bsonType": "string", "minLength": 3}}}
-        with pytest.raises(ValidationError, match="string too short"):
+        with pytest.raises(ValidationError, match="less than minLength"):
             validate_document({"s": "ab"}, schema)
 
     def test_max_length(self):
         schema = {"properties": {"s": {"bsonType": "string", "maxLength": 3}}}
-        with pytest.raises(ValidationError, match="string too long"):
+        with pytest.raises(ValidationError, match="exceeds maxLength"):
             validate_document({"s": "abcdef"}, schema)
 
     def test_pattern(self):
@@ -203,7 +203,7 @@ class TestSchemaStringConstraints:
 
     def test_pattern_fail(self):
         schema = {"properties": {"email": {"bsonType": "string", "pattern": r"@"}}}
-        with pytest.raises(ValidationError, match="pattern mismatch"):
+        with pytest.raises(ValidationError, match="does not match pattern"):
             validate_document({"email": "nope"}, schema)
 
 
@@ -214,24 +214,24 @@ class TestSchemaEnum:
 
     def test_enum_invalid(self):
         schema = {"properties": {"status": {"enum": ["active", "inactive"]}}}
-        with pytest.raises(ValidationError, match="value not in enum"):
+        with pytest.raises(ValidationError, match="not in enum"):
             validate_document({"status": "deleted"}, schema)
 
 
 class TestSchemaArray:
     def test_min_items(self):
         schema = {"properties": {"tags": {"bsonType": "array", "minItems": 2}}}
-        with pytest.raises(ValidationError, match="too few items"):
+        with pytest.raises(ValidationError, match="Array has 1 items, minimum is 2"):
             validate_document({"tags": [1]}, schema)
 
     def test_max_items(self):
         schema = {"properties": {"tags": {"bsonType": "array", "maxItems": 2}}}
-        with pytest.raises(ValidationError, match="too many items"):
+        with pytest.raises(ValidationError, match="Array has 3 items, maximum is 2"):
             validate_document({"tags": [1, 2, 3]}, schema)
 
     def test_unique_items(self):
         schema = {"properties": {"tags": {"bsonType": "array", "uniqueItems": True}}}
-        with pytest.raises(ValidationError, match="duplicate items"):
+        with pytest.raises(ValidationError, match="are not unique"):
             validate_document({"tags": [1, 2, 1]}, schema)
 
     def test_items_sub_schema(self):
@@ -240,5 +240,5 @@ class TestSchemaArray:
 
     def test_items_sub_schema_fail(self):
         schema = {"properties": {"scores": {"bsonType": "array", "items": {"bsonType": "int"}}}}
-        with pytest.raises(ValidationError, match="expected type int"):
+        with pytest.raises(ValidationError, match="Expected type int"):
             validate_document({"scores": [1, "two", 3]}, schema)

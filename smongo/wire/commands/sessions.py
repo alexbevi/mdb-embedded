@@ -71,5 +71,5 @@ def _cmd_start_txn(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) 
     if lsid is None:
         return make_error("InvalidOptions", "startTransaction requires lsid")
     txn = ctx.start_transaction(lsid)
-    log.info("startTransaction: txnNumber=%d on WT session", txn.txn_number)
+    log.info("startTransaction: txnNumber=%d on engine session", txn.txn_number)
     return {"ok": 1.0}

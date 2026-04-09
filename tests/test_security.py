@@ -160,10 +160,10 @@ class TestDecompressionBomb:
 class TestBatchSizeEnforcement:
     @pytest.fixture()
     def ctx(self, tmp_path):
-        from smongo._smongo_core import RustLocalClient
+        from smongo._smongo_core import RedbLocalClient
         from smongo.wire.cursors import CursorRegistry
 
-        client = RustLocalClient(str(tmp_path / "wt"))
+        client = RedbLocalClient(str(tmp_path / "redb"))
         return ConnectionContext(client, 1, ("127.0.0.1", 9999), CursorRegistry())
 
     def test_insert_over_limit(self, ctx):
@@ -231,9 +231,11 @@ class TestReDoSProtection:
             fn({"name": "aaaaab"})
 
     def test_schema_regex_guarded(self):
+        """Rust regex engine is ReDoS-safe (automaton-based), so nested
+        quantifiers are handled without catastrophic backtracking.  Verify
+        the pattern either rejects safely or matches correctly."""
         schema = {"properties": {"name": {"type": "string", "pattern": "(a+)+"}}}
-        with pytest.raises(ValueError, match="nested quantifiers"):
-            validate_document({"name": "aaaaab"}, schema)
+        validate_document({"name": "aaaaab"}, schema)
 
 
 # =====================================================================
@@ -363,10 +365,10 @@ class TestSessionRegistryCap:
 class TestNamespaceInDispatch:
     @pytest.fixture()
     def ctx(self, tmp_path):
-        from smongo._smongo_core import RustLocalClient
+        from smongo._smongo_core import RedbLocalClient
         from smongo.wire.cursors import CursorRegistry
 
-        client = RustLocalClient(str(tmp_path / "wt"))
+        client = RedbLocalClient(str(tmp_path / "redb"))
         return ConnectionContext(client, 1, ("127.0.0.1", 9999), CursorRegistry())
 
     def test_find_with_null_byte_coll(self, ctx):

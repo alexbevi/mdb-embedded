@@ -11,8 +11,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 smongo-engine = { path = "../smongo-engine" }
-wiredtiger-sys = { path = "../wiredtiger-sys" }
-pyo3 = "0.28"
+pyo3 = { version = "0.28", features = ["auto-initialize"] }
 hex = "0.4"
 getrandom = "0.2"
 bson = "2"

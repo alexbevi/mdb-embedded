@@ -67,8 +67,6 @@ cached_module!(LOGGING, logging_mod, "logging");
 cached_module!(RANDOM, random_mod, "random");
 cached_module!(SECRETS, secrets_mod, "secrets");
 cached_module!(RESOURCE, resource_mod, "resource");
-cached_module!(TYPES, types_mod, "types");
-cached_module!(THREADING, threading_mod, "threading");
 
 // ── Third-party ──────────────────────────────────────────────────────
 cached_module!(BSON, bson_mod, "bson");
@@ -204,21 +202,10 @@ cached_module!(
     "smongo.aggregation.constants"
 );
 cached_module!(
-    SMONGO_AGG_OUTPUT,
-    smongo_agg_output,
-    "smongo.aggregation.output"
-);
-cached_module!(
     SMONGO_AGG_JOINS,
     smongo_agg_joins,
     "smongo.aggregation.joins"
 );
-cached_module!(
-    SMONGO_AGG_VECTOR,
-    smongo_agg_vector,
-    "smongo.aggregation.vector"
-);
-cached_module!(SMONGO_AGG_GEO, smongo_agg_geo, "smongo.aggregation.geo");
 cached_module!(
     SMONGO_WIRE_CONTEXT,
     smongo_wire_context,

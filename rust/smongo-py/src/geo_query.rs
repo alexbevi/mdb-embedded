@@ -1,51 +1,18 @@
 //! Shared parsing for `$near` / `$nearSphere` field conditions (planner + query compiler).
 
-use std::collections::HashMap;
-
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
-fn as_dict_list<'py>(val: &Bound<'py, PyAny>) -> PyResult<Vec<Bound<'py, PyDict>>> {
-    let list = val.cast::<PyList>()?;
-    list.iter()
-        .map(|item| Ok(item.cast::<PyDict>()?.clone()))
-        .collect()
-}
-
-/// Top-level field keys plus `$and` conjuncts (one level), for index planning.
-pub(crate) fn collect_field_conditions<'py>(
-    query: &Bound<'py, PyDict>,
-) -> PyResult<HashMap<String, Bound<'py, PyAny>>> {
-    let mut out = HashMap::new();
-    for (key, cond) in query.iter() {
-        let ks: String = key.extract()?;
-        match ks.as_str() {
-            "$and" => {
-                for sub in &as_dict_list(&cond)? {
-                    for (k, v) in sub.iter() {
-                        let k2: String = k.extract()?;
-                        if !k2.starts_with('$') {
-                            out.insert(k2, v.clone());
-                        }
-                    }
-                }
-            }
-            s if !s.starts_with('$') => {
-                out.insert(ks, cond);
-            }
-            _ => {}
-        }
-    }
-    Ok(out)
-}
-
 /// Parse `{ $near | $nearSphere, $maxDistance?, $minDistance? }` on an indexed field.
 /// GeoJSON form nests `$geometry` / distances inside the `$near` document; legacy uses
 /// top-level `$maxDistance` / `$minDistance` with `$near: [lon, lat]`.
+/// (longitude, latitude, max_distance_m, min_distance_m)
+pub(crate) type NearSpec = (f64, f64, Option<f64>, Option<f64>);
+
 pub(crate) fn parse_field_near_spec(
     cond_dict: &Bound<'_, PyDict>,
-) -> PyResult<Option<(f64, f64, Option<f64>, Option<f64>)>> {
+) -> PyResult<Option<NearSpec>> {
     let outer_max = cond_dict
         .get_item("$maxDistance")?
         .and_then(|v| v.extract::<f64>().ok());
@@ -146,7 +113,7 @@ pub(crate) fn parse_field_geo_within_center_sphere(
         return Ok(None);
     };
     let inner = gw.cast::<PyDict>()?;
-    parse_geo_within_inner_center_sphere(&inner)
+    parse_geo_within_inner_center_sphere(inner)
 }
 
 /// `$geoWithin` + `$geometry` Polygon/MultiPolygon (no `$centerSphere`).
@@ -160,7 +127,7 @@ pub(crate) fn parse_geo_within_inner_geometry(
         return Ok(None);
     };
     let g = geom.cast::<PyDict>()?;
-    Ok(Some(crate::geo_polygon::geo_query_shape_from_geometry_dict(&g)?))
+    Ok(Some(crate::geo_polygon::geo_query_shape_from_geometry_dict(g)?))
 }
 
 pub(crate) fn parse_field_geo_within_geometry(
@@ -170,7 +137,7 @@ pub(crate) fn parse_field_geo_within_geometry(
         return Ok(None);
     };
     let inner = gw.cast::<PyDict>()?;
-    parse_geo_within_inner_geometry(&inner)
+    parse_geo_within_inner_geometry(inner)
 }
 
 /// `$geoIntersects` + `$geometry` Polygon/MultiPolygon.
@@ -181,7 +148,7 @@ pub(crate) fn parse_geo_intersects_inner_geometry(
         return Ok(None);
     };
     let g = geom.cast::<PyDict>()?;
-    Ok(Some(crate::geo_polygon::geo_query_shape_from_geometry_dict(&g)?))
+    Ok(Some(crate::geo_polygon::geo_query_shape_from_geometry_dict(g)?))
 }
 
 pub(crate) fn parse_field_geo_intersects_geometry(
@@ -191,5 +158,5 @@ pub(crate) fn parse_field_geo_intersects_geometry(
         return Ok(None);
     };
     let inner = gi.cast::<PyDict>()?;
-    parse_geo_intersects_inner_geometry(&inner)
+    parse_geo_intersects_inner_geometry(inner)
 }

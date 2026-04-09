@@ -65,7 +65,7 @@ def remote_client(mongo_uri):
 
 @pytest.fixture
 def embedded_client(tmp_path):
-    client = EmbeddedClient(f"local+wt://{tmp_path}/wt")
+    client = EmbeddedClient(f"local://{tmp_path}/redb")
     yield client
 
 

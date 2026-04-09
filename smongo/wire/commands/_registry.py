@@ -10,7 +10,7 @@ from collections.abc import Callable
 from bson import Binary, Int64, Timestamp
 from bson import ObjectId as BsonObjectId
 
-from ..._compat import WTError as _WTError
+from ..._compat import StorageError as _StorageError
 from ...index import DuplicateKeyError
 from ...schema import ValidationError
 from .._types import CommandDoc, DocSequences, ResponseDoc
@@ -67,7 +67,7 @@ _HELP: dict[str, str] = {
     "findAndModify": "Atomically find and modify a single document",
     "getLastError": "Return the result of the previous write operation",
     "getnonce": "Generate a random nonce for authentication",
-    "fsync": "Flush all pending writes and checkpoint WiredTiger",
+    "fsync": "Flush all pending writes and persist embedded storage",
     "usersInfo": "Return information about database users",
     "rolesInfo": "Return information about database roles",
     "createUser": "Create a new database user",
@@ -209,7 +209,7 @@ def dispatch(
         resp = error_response(121, "DocumentValidationFailure", str(exc))
     except NotImplementedError as exc:
         resp = make_error("CommandNotSupported", str(exc))
-    except _WTError as exc:
+    except _StorageError as exc:
         log.exception("Storage engine error in command '%s'", cmd_name)
         resp = error_response(1, "InternalError", str(exc))
     except (

@@ -16,7 +16,7 @@ import time
 import pymongo
 import pytest
 
-from smongo._smongo_core import RustLocalClient
+from smongo._smongo_core import RedbLocalClient
 from smongo.wire.server import WireServer
 
 
@@ -51,12 +51,12 @@ class TestAuditLogging:
     def audit_env(self, tmp_path_factory):
         """Bootstrap server with auth + audit logging to a file."""
         base = tmp_path_factory.mktemp("audit")
-        db_path = str(base / "wt_data")
+        db_path = str(base / "redb_data")
         audit_file = str(base / "audit.json")
         port = _find_free_port()
 
         # Phase 1: create user without auth
-        lc = RustLocalClient(db_path)
+        lc = RedbLocalClient(db_path)
         server1 = WireServer(db_path, "127.0.0.1", port, auth_required=False, local_client=lc)
         server1.start()
         _wait_for_port("127.0.0.1", port)

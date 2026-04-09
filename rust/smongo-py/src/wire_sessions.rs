@@ -112,6 +112,9 @@ impl SessionRegistry {
                 let (lock, cvar) = &*stop;
                 loop {
                     let mut stopped = lock.lock();
+                    if *stopped {
+                        break;
+                    }
                     cvar.wait_for(&mut stopped, std::time::Duration::from_secs(60));
                     if *stopped {
                         break;

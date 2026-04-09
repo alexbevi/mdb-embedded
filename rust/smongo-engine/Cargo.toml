@@ -23,6 +23,14 @@ serde-wasm-bindgen = "0.6"
 redb = "2.3"
 parking_lot = "0.12.5"
 s2 = "0.0.13"
+roaring = { version = "0.10", optional = true }
+# hnswlib-rs — enable via `features = ["hnsw"]` when ready
+# hnswlib = { version = "0.10", optional = true }
+
+[features]
+default = []
+bitmap = ["roaring"]
+# hnsw = ["hnswlib"]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }

@@ -1,9 +1,4 @@
-"""
-Test RedbLocalClient from Python.
-
-This demonstrates that the redb-backed client works for basic CRUD operations
-without requiring WiredTiger.
-"""
+"""Test RedbLocalClient from Python (basic CRUD and indexes)."""
 import tempfile
 import os
 from smongo._smongo_core import RedbLocalClient
@@ -88,32 +83,7 @@ def test_redb_indexes():
         print("✓ Redb index test passed!")
 
 
-def test_redb_no_wiredtiger_import():
-    """Verify that using redb client doesn't require wiredtiger."""
-    import sys
-
-    # Check that we're not importing wiredtiger
-    wt_modules_before = [m for m in sys.modules.keys() if 'wiredtiger' in m.lower()]
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = os.path.join(tmpdir, "test_nowt")
-        client = RedbLocalClient(db_path)
-        db = client.get_db("testdb")
-        coll = db.collection("test")
-        coll.insert_one({"test": 1})
-        client.close()
-
-    wt_modules_after = [m for m in sys.modules.keys() if 'wiredtiger' in m.lower()]
-
-    # RedbLocalClient should not cause wiredtiger to be loaded
-    # (Though it might already be loaded if smongo was imported)
-    print(f"  WiredTiger modules before: {wt_modules_before}")
-    print(f"  WiredTiger modules after: {wt_modules_after}")
-    print("✓ No-WiredTiger test passed!")
-
-
 if __name__ == "__main__":
     test_redb_basic_crud()
     test_redb_indexes()
-    test_redb_no_wiredtiger_import()
     print("\n✅ All redb Python tests passed!")

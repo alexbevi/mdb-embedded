@@ -5,7 +5,7 @@
 Demonstrates how smongo's read path avoids materializing documents you
 never need: find_one() deserializes exactly one document, count_documents()
 never builds a list, and find().limit(N) only decodes N BSON blobs from
-WiredTiger.
+the embedded engine.
 
 Run:
     python examples/basic/04_streaming.py
@@ -51,7 +51,7 @@ def _run(sensors) -> None:
     print(f"  inserted {sensors.count_documents({}):,} docs with 3 indexes\n")
 
     # ── find_one: only 1 document deserialized ────────────────
-    print("── find_one (single doc from WiredTiger) ──")
+    print("── find_one (single doc from storage) ──")
     t0 = time.perf_counter()
     doc = sensors.find_one({"sensor": "sensor_07"})
     elapsed = (time.perf_counter() - t0) * 1000

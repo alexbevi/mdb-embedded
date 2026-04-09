@@ -464,7 +464,7 @@ class TestTwoDsphereGeoWithinGeometry:
     def test_polygon_empty_rejected(self, local_collection):
         local_collection.insert_one({"_id": "1", "location": NYC})
         local_collection.create_index([("location", "2dsphere")])
-        with pytest.raises(ValueError, match="linear ring|Polygon"):
+        with pytest.raises((ValueError, RuntimeError), match="linear ring|Polygon"):
             list(
                 local_collection.find(
                     {

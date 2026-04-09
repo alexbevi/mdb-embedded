@@ -128,10 +128,10 @@ pub(crate) fn eval_query(doc: &Bound<'_, PyDict>, query: &Bound<'_, PyDict>) -> 
                         }
                     }
                     if let Some((clon, clat, rrad)) =
-                        parse_field_geo_within_center_sphere(&cond_dict)?
+                        parse_field_geo_within_center_sphere(cond_dict)?
                     {
                         let max_m = rrad * crate::geo_s2::EARTH_RADIUS_METERS;
-                        let Some((dlon, dlat)) = crate::geo_s2::extract_lon_lat_py(&value_ref)?
+                        let Some((dlon, dlat)) = crate::geo_s2::extract_lon_lat_py(value_ref)?
                         else {
                             return Ok(false);
                         };
@@ -148,8 +148,8 @@ pub(crate) fn eval_query(doc: &Bound<'_, PyDict>, query: &Bound<'_, PyDict>) -> 
                                 return Ok(false);
                             }
                         }
-                    } else if let Some(shape) = parse_field_geo_within_geometry(&cond_dict)? {
-                        let Some((dlon, dlat)) = crate::geo_s2::extract_lon_lat_py(&value_ref)?
+                    } else if let Some(shape) = parse_field_geo_within_geometry(cond_dict)? {
+                        let Some((dlon, dlat)) = crate::geo_s2::extract_lon_lat_py(value_ref)?
                         else {
                             return Ok(false);
                         };
@@ -165,8 +165,8 @@ pub(crate) fn eval_query(doc: &Bound<'_, PyDict>, query: &Bound<'_, PyDict>) -> 
                                 return Ok(false);
                             }
                         }
-                    } else if let Some(shape) = parse_field_geo_intersects_geometry(&cond_dict)? {
-                        let Some((dlon, dlat)) = crate::geo_s2::extract_lon_lat_py(&value_ref)?
+                    } else if let Some(shape) = parse_field_geo_intersects_geometry(cond_dict)? {
+                        let Some((dlon, dlat)) = crate::geo_s2::extract_lon_lat_py(value_ref)?
                         else {
                             return Ok(false);
                         };
@@ -183,10 +183,10 @@ pub(crate) fn eval_query(doc: &Bound<'_, PyDict>, query: &Bound<'_, PyDict>) -> 
                             }
                         }
                     } else if let Some((clon, clat, max_m, min_m)) =
-                        crate::geo_query::parse_field_near_spec(&cond_dict)?
+                        crate::geo_query::parse_field_near_spec(cond_dict)?
                     {
                         let max_m = max_m.or(Some(crate::geo_s2::DEFAULT_NEAR_MAX_DISTANCE_M));
-                        let Some((dlon, dlat)) = crate::geo_s2::extract_lon_lat_py(&value_ref)?
+                        let Some((dlon, dlat)) = crate::geo_s2::extract_lon_lat_py(value_ref)?
                         else {
                             return Ok(false);
                         };
@@ -400,14 +400,14 @@ fn eval_op<'py>(
         "$maxDistance" | "$minDistance" => Ok(false),
         "$geoWithin" => {
             let inner = cond_val.cast::<PyDict>()?;
-            if let Some((clon, clat, rrad)) = parse_geo_within_inner_center_sphere(&inner)? {
+            if let Some((clon, clat, rrad)) = parse_geo_within_inner_center_sphere(inner)? {
                 let max_m = rrad * crate::geo_s2::EARTH_RADIUS_METERS;
                 let Some((dlon, dlat)) = crate::geo_s2::extract_lon_lat_py(value)? else {
                     return Ok(false);
                 };
                 let dist = crate::geo_s2::haversine_meters(clon, clat, dlon, dlat);
                 Ok(dist <= max_m)
-            } else if let Some(shape) = parse_geo_within_inner_geometry(&inner)? {
+            } else if let Some(shape) = parse_geo_within_inner_geometry(inner)? {
                 let Some((dlon, dlat)) = crate::geo_s2::extract_lon_lat_py(value)? else {
                     return Ok(false);
                 };
@@ -420,7 +420,7 @@ fn eval_op<'py>(
         },
         "$geoIntersects" => {
             let inner = cond_val.cast::<PyDict>()?;
-            if let Some(shape) = parse_geo_intersects_inner_geometry(&inner)? {
+            if let Some(shape) = parse_geo_intersects_inner_geometry(inner)? {
                 let Some((dlon, dlat)) = crate::geo_s2::extract_lon_lat_py(value)? else {
                     return Ok(false);
                 };

@@ -2,8 +2,7 @@
 TCP wire protocol server -- accepts MongoDB driver connections over OP_MSG.
 
 Each connection gets its own daemon thread with a private ConnectionContext
-(and thus private WiredTiger sessions).  The server shares a single
-LocalClient and CursorRegistry across all connections.
+The server shares a single embedded client and CursorRegistry across all connections.
 """
 
 from __future__ import annotations
@@ -14,7 +13,7 @@ import struct
 import threading
 from itertools import count
 
-from ..storage import LocalClient
+from ..storage.redb_engine import RedbClient
 from ..sync import SyncManager
 from .commands import dispatch
 from .context import (
@@ -66,12 +65,12 @@ class WireServer:
 
     def __init__(
         self,
-        db_path: str = "local_wt_data",
+        db_path: str = "local_data",
         host: str = "127.0.0.1",
         port: int = 27017,
         sync: str | SyncManager | None = None,
         max_connections: int = MAX_CONNECTIONS,
-        local_client: LocalClient | None = None,
+        local_client: RedbClient | None = None,
         auth_required: bool | object = _UNSET,
         tls_cert_file: str | None = None,
         tls_key_file: str | None = None,
@@ -92,11 +91,11 @@ class WireServer:
         if local_client is not None:
             self._local_client = local_client
         elif self._use_rust_server:
-            from smongo._smongo_core import RustLocalClient
+            from smongo._smongo_core import RedbLocalClient
 
-            self._local_client = RustLocalClient(db_path)
+            self._local_client = RedbLocalClient(db_path)
         else:
-            self._local_client = LocalClient(db_path)
+            self._local_client = RedbClient(db_path)
         self._owns_local_client = local_client is None
         self._cursor_registry = CursorRegistry()
         self._session_registry = SessionRegistry()

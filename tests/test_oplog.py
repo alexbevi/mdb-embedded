@@ -1,13 +1,88 @@
 """Tests for smongo.oplog -- OplogWriter, OplogReader, ChangeStream."""
 
-import os
+import bisect
 import threading
 import time
 
 import pytest
-import wiredtiger as wt
 
+from smongo._compat import StorageError
 from smongo.oplog import ChangeStream, OplogHub, OplogReader, OplogWriter, _doc_checksum
+
+
+class _FakeOplogCursor:
+    """In-memory cursor matching the storage cursor API used by OplogWriter / OplogReader."""
+
+    def __init__(self, store: dict[str, bytes]) -> None:
+        self._store = store
+        self.key: str | None = None
+        self._iter_keys: list[str] | None = None
+        self._pos = -1
+
+    def set_key(self, k: str) -> None:
+        self.key = k
+
+    def search_near(self) -> int:
+        keys = sorted(self._store.keys())
+        self._iter_keys = keys
+        if not keys:
+            raise StorageError("empty oplog")
+        ck = self.key
+        assert ck is not None
+        i = bisect.bisect_left(keys, ck)
+        if i < len(keys) and keys[i] == ck:
+            self._pos = i
+            self.key = keys[i]
+            return 0
+        if i == len(keys):
+            self._pos = len(keys) - 1
+            self.key = keys[self._pos]
+            return -1
+        self._pos = i
+        self.key = keys[i]
+        return 1
+
+    def get_key(self) -> str:
+        assert self.key is not None
+        return self.key
+
+    def get_value(self) -> bytes:
+        assert self.key is not None
+        return self._store[self.key]
+
+    def next(self) -> int:
+        if self._iter_keys is None:
+            self._iter_keys = sorted(self._store.keys())
+            self._pos = -1
+        self._pos += 1
+        if self._pos < len(self._iter_keys):
+            self.key = self._iter_keys[self._pos]
+            return 0
+        return 1
+
+    def remove(self) -> None:
+        assert self.key is not None
+        k = self.key
+        self._store.pop(k, None)
+        if self._iter_keys is not None and k in self._iter_keys:
+            self._iter_keys.remove(k)
+
+    def __setitem__(self, k: str, v: bytes) -> None:
+        self._store[k] = v
+
+    def close(self) -> None:
+        pass
+
+
+class _FakeOplogSession:
+    def __init__(self) -> None:
+        self._tables: dict[str, dict[str, bytes]] = {}
+
+    def _store(self, uri: str) -> dict[str, bytes]:
+        return self._tables.setdefault(uri, {})
+
+    def open_cursor(self, uri: str, _x: object, _y: object) -> _FakeOplogCursor:
+        return _FakeOplogCursor(self._store(uri))
 
 
 @pytest.fixture
@@ -16,17 +91,11 @@ def hub():
 
 
 @pytest.fixture
-def oplog_env(tmp_path):
-    """Yield (session, oplog_uri, namespace) for oplog tests."""
-    db_path = str(tmp_path / "oplog_wt")
-    os.makedirs(db_path)
-    conn = wt.wiredtiger_open(db_path, "create")
-    session = conn.open_session()
+def oplog_env():
+    """Yield (session, oplog_uri, namespace) for oplog tests using an in-memory table."""
+    session = _FakeOplogSession()
     uri = "table:__oplog_test"
-    session.create(uri, "key_format=S,value_format=u")
     yield session, uri, "testdb.testcoll"
-    session.close()
-    conn.close()
 
 
 @pytest.fixture

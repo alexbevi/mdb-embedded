@@ -57,7 +57,7 @@ def _cmd_aggregate(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) 
                 "totalSize": stats["storageSize"] + stats["totalIndexSize"],
                 "indexSizes": stats["indexSizes"],
                 "scaleFactor": 1,
-                "wiredTiger": stats.get("wiredTiger", {}),
+                "storageEngine": stats.get("storageEngine", {"name": "redb"}),
             }
         if "count" in spec:
             doc["count"] = stats["count"]
@@ -71,9 +71,12 @@ def _cmd_aggregate(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) 
             result_docs = normalize_outbound_docs([doc])
         return {"cursor": {"id": Int64(0), "ns": ns, "firstBatch": result_docs}, "ok": 1.0}
 
-    docs = coll.get_all()
-    coll_getter = lambda name: ctx.get_db(db_name).get_collection(name)
-    result = Cursor(docs, collection_getter=coll_getter).aggregate(pipeline)
+    if hasattr(coll, "_rust_coll") and hasattr(coll._rust_coll, "aggregate_engine"):
+        result = list(coll._rust_coll.aggregate_engine(pipeline))
+    else:
+        docs = coll.get_all()
+        coll_getter = lambda name: ctx.get_db(db_name).get_collection(name)
+        result = Cursor(docs, collection_getter=coll_getter).aggregate(pipeline)
     result_docs = normalize_outbound_docs(result)
 
     cursor_id, first_batch = ctx.cursor_registry.create(ns, result_docs, batch_size)

@@ -19,7 +19,7 @@ from .server import WireServer
 
 
 def run_server(
-    db_path: str = "local_wt_data",
+    db_path: str = "local_redb_data",
     host: str = "127.0.0.1",
     port: int = 27017,
     sync: str | SyncManager | None = None,

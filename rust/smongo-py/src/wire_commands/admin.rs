@@ -5,7 +5,7 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
-use crate::storage_engine::RustLocalDB;
+use crate::redb_client::RedbLocalDB;
 use crate::wire_context::ConnectionContext;
 use crate::wire_cursors::CursorRegistry;
 use crate::wire_errors::{error_response, make_error};
@@ -106,34 +106,6 @@ fn cmd_list_databases(
         }
     }
 
-    {
-        let lc = ctx.borrow().local_client.clone_ref(py);
-        let lc_ref = lc
-            .bind(py)
-            .cast::<crate::storage_engine::RustLocalClient>()?;
-        let result: PyResult<()> = (|| {
-            let mut session = lc_ref.borrow().open_session_typed()?;
-            let mut cursor = session.open_cursor_typed("metadata:", None)?;
-            loop {
-                let rc = cursor.next_rc()?;
-                if rc != 0 {
-                    break;
-                }
-                let uri = cursor.get_key_str()?;
-                if uri.starts_with("table:") && !uri.starts_with("table:__") {
-                    let table_name = &uri[6..];
-                    if let Some((db_part, _)) = table_name.split_once('_') {
-                        seen.insert(db_part.to_string());
-                    }
-                }
-            }
-            cursor.close_typed()?;
-            session.close_typed()?;
-            Ok(())
-        })();
-        let _ = result;
-    }
-
     if seen.is_empty() {
         seen.insert("test".to_string());
     }
@@ -153,7 +125,7 @@ fn cmd_list_databases(
             let mut db_size: i64 = 0;
             let result: PyResult<()> = (|| {
                 let db = get_db(ctx, &db_name)?;
-                let db_ref = db.cast::<RustLocalDB>()?;
+                let db_ref = db.cast::<RedbLocalDB>()?;
                 let coll_names = db_ref.borrow().list_collection_names()?;
                 for cn in &coll_names {
                     let result: PyResult<()> = (|| {
@@ -200,7 +172,7 @@ fn cmd_list_collections(
 ) -> PyResult<Py<PyAny>> {
     let db_name = dict_get_str(cmd, "$db", "test")?;
     let db = get_db(ctx, &db_name)?;
-    let db_ref = db.cast::<RustLocalDB>()?;
+    let db_ref = db.cast::<RedbLocalDB>()?;
     let coll_names = db_ref.borrow().list_collection_names()?;
     let name_only = dict_get_bool(cmd, "nameOnly", false)?;
     let filter_doc = cmd.get_item("filter")?;
@@ -318,20 +290,20 @@ fn cmd_drop(
 
     let _: PyResult<()> = (|| {
         let db = get_db(ctx, &db_name)?;
-        let db_ref = db.cast::<RustLocalDB>()?;
+        let db_ref = db.cast::<RedbLocalDB>()?;
         let coll_py = db_ref
             .borrow()
             .get_collection_typed(py, coll_name.as_str())?;
         let list_py = coll_py.bind(py).borrow().list_indexes(py)?;
         let list_bound = list_py.bind(py);
-        n_indexes_was = list_bound.len()? as i64 + 1;
+        n_indexes_was = list_bound.len() as i64 + 1;
         let indexes: Vec<Bound<'_, PyAny>> = list_bound.try_iter()?.collect::<PyResult<_>>()?;
         for idx in indexes {
             let name: String = idx.get_item("name")?.extract()?;
-            let _ = coll_py.bind(py).borrow().drop_index(py, &name, false);
+            let _ = coll_py.bind(py).borrow().drop_index(&name);
         }
         let empty = PyDict::new(py);
-        coll_py.bind(py).borrow().delete(py, &empty, true, false)?;
+        coll_py.bind(py).borrow().delete_many(py, &empty, false)?;
         db.call_method1("drop_collection", (&coll_name,))?;
         Ok(())
     })();
@@ -352,7 +324,7 @@ fn cmd_drop_database(
     let db_name = dict_get_str(cmd, "$db", "test")?;
 
     let db = get_db(ctx, &db_name)?;
-    let db_ref = db.cast::<RustLocalDB>()?;
+    let db_ref = db.cast::<RedbLocalDB>()?;
     let names = db_ref.borrow().list_collection_names()?;
     for coll_name in names {
         db_ref.borrow().drop_collection(py, &coll_name)?;
@@ -584,10 +556,12 @@ fn cmd_coll_stats(
     resp.set_item("nindexes", stats.get_item("nindexes")?)?;
     resp.set_item("totalIndexSize", stats.get_item("totalIndexSize")?)?;
     resp.set_item("indexSizes", stats.get_item("indexSizes")?)?;
-    let wt = stats
-        .get_item("wiredTiger")?
-        .unwrap_or_else(|| PyDict::new(py).into_any());
-    resp.set_item("wiredTiger", wt)?;
+    let se = stats.get_item("storageEngine")?.unwrap_or_else(|| {
+        let d = PyDict::new(py);
+        let _ = d.set_item("name", "redb");
+        d.into_any()
+    });
+    resp.set_item("storageEngine", se)?;
     resp.set_item("ok", 1.0)?;
     Ok(resp.into_any().unbind())
 }
@@ -608,7 +582,7 @@ fn cmd_db_stats(
     let mut total_index_size: i64 = 0;
     let mut coll_count: i64 = 0;
 
-    let db_ref = db.cast::<RustLocalDB>()?;
+    let db_ref = db.cast::<RedbLocalDB>()?;
     let coll_names = db_ref.borrow().list_collection_names()?;
     for cn in &coll_names {
         let result: PyResult<()> = (|| {
@@ -722,12 +696,10 @@ fn cmd_server_status(
     })()
     .unwrap_or(0.0);
 
-    let wt_stats: Bound<'_, PyDict> = (|| -> PyResult<Bound<'_, PyDict>> {
+    let conn_meta: Bound<'_, PyDict> = (|| -> PyResult<Bound<'_, PyDict>> {
         let lc = ctx.borrow().local_client.clone_ref(py);
-        let lc_ref = lc
-            .bind(py)
-            .cast::<crate::storage_engine::RustLocalClient>()?;
-        lc_ref.borrow().connection_stats(py)
+        let lc_ref = lc.bind(py).cast::<crate::redb_client::RedbLocalClient>()?;
+        Ok(lc_ref.borrow().connection_stats(py)?.into_bound(py))
     })()
     .unwrap_or_else(|_| PyDict::new(py));
 
@@ -771,8 +743,15 @@ fn cmd_server_status(
     lsrc.set_item("activeSessionsCount", session_count)?;
     resp.set_item("logicalSessionRecordCache", lsrc)?;
 
-    wt_stats.set_item("uri", "statistics:")?;
-    resp.set_item("wiredTiger", wt_stats)?;
+    let storage_engine = PyDict::new(py);
+    storage_engine.set_item("name", "redb")?;
+    if let Ok(uri) = conn_meta.get_item("uri") {
+        storage_engine.set_item("uri", uri)?;
+    }
+    if let Ok(eng) = conn_meta.get_item("engine") {
+        storage_engine.set_item("engine", eng)?;
+    }
+    resp.set_item("storageEngine", storage_engine)?;
     resp.set_item("ok", 1.0)?;
 
     let sync_mgr = ctx.borrow().sync_mgr.clone_ref(py);
@@ -791,51 +770,14 @@ fn cmd_server_status(
 
 fn cmd_fsync(
     py: Python<'_>,
-    ctx: &Bound<'_, ConnectionContext>,
+    _ctx: &Bound<'_, ConnectionContext>,
     cmd: &Bound<'_, PyDict>,
     _seqs: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     let lock = dict_get_bool(cmd, "lock", false)?;
     let is_async = dict_get_bool(cmd, "async", false)?;
 
-    let checkpoint_result: PyResult<()> = (|| {
-        let lc = ctx.borrow().local_client.clone_ref(py);
-        let lc_ref = lc
-            .bind(py)
-            .cast::<crate::storage_engine::RustLocalClient>()?;
-        let mut session = lc_ref.borrow().open_session_typed()?;
-        session.checkpoint_typed(None)?;
-        session.close_typed()?;
-        Ok(())
-    })();
-    if let Err(e) = checkpoint_result {
-        let msg = e.value(py).str()?.to_string();
-        let r = error_response(py, 1, "InternalError", &format!("checkpoint failed: {msg}"))?;
-        return Ok(r.into_any().unbind());
-    }
-
-    let mut tables_flushed: i64 = 0;
-    let _: PyResult<()> = (|| {
-        let lc = ctx.borrow().local_client.clone_ref(py);
-        let lc_ref = lc
-            .bind(py)
-            .cast::<crate::storage_engine::RustLocalClient>()?;
-        let mut session = lc_ref.borrow().open_session_typed()?;
-        let mut cursor = session.open_cursor_typed("metadata:", None)?;
-        loop {
-            let rc = cursor.next_rc()?;
-            if rc != 0 {
-                break;
-            }
-            let uri = cursor.get_key_str()?;
-            if uri.starts_with("table:") {
-                tables_flushed += 1;
-            }
-        }
-        cursor.close_typed()?;
-        session.close_typed()?;
-        Ok(())
-    })();
+    let tables_flushed: i64 = 1;
 
     let resp = PyDict::new(py);
     resp.set_item("numFiles", tables_flushed)?;
@@ -1370,7 +1312,7 @@ fn cmd_create_user(
         }
 
         store.set_item(&key, &entry)?;
-        persist_user_to_wt(py, ctx, &key, &entry)?;
+        persist_user_to_redb(py, ctx, &key, &entry)?;
         Ok(ok_dict(py)?.into_any().unbind())
     })();
     lock.call_method1("__exit__", (py.None(), py.None(), py.None()))?;
@@ -1401,44 +1343,29 @@ fn build_scram_credentials(
     Ok(())
 }
 
-fn persist_user_to_wt(
+fn persist_user_to_redb(
     py: Python<'_>,
     ctx: &Bound<'_, ConnectionContext>,
     key: &str,
     user_doc: &Bound<'_, PyAny>,
 ) -> PyResult<()> {
     let lc = ctx.borrow().local_client.clone_ref(py);
-    let lc_ref = lc
-        .bind(py)
-        .cast::<crate::storage_engine::RustLocalClient>()?;
-    let mut session = lc_ref.borrow().open_session_typed()?;
-    let _ = session.create_typed("table:__users", "key_format=S,value_format=S");
+    let lc_ref = lc.bind(py).cast::<crate::redb_client::RedbLocalClient>()?;
     let json_util = crate::cached_modules::bson_json_util(py)?;
     let value: String = json_util.call_method1("dumps", (user_doc,))?.extract()?;
-    let mut cursor = session.open_cursor_typed("table:__users", None)?;
-    cursor.set_item_str(key, &value)?;
-    cursor.close_typed()?;
-    session.close_typed()?;
-    Ok(())
+    lc_ref
+        .borrow()
+        .sync_kv_put("table:__users", key, &value)
 }
 
-fn delete_user_from_wt(
-    py: Python<'_>,
+fn delete_user_from_redb(
+    _py: Python<'_>,
     ctx: &Bound<'_, ConnectionContext>,
     key: &str,
 ) -> PyResult<()> {
-    let lc = ctx.borrow().local_client.clone_ref(py);
-    let lc_ref = lc
-        .bind(py)
-        .cast::<crate::storage_engine::RustLocalClient>()?;
-    let mut session = lc_ref.borrow().open_session_typed()?;
-    let _ = session.create_typed("table:__users", "key_format=S,value_format=S");
-    let mut cursor = session.open_cursor_typed("table:__users", None)?;
-    cursor.set_key_str(key)?;
-    let _ = cursor.remove_typed();
-    cursor.close_typed()?;
-    session.close_typed()?;
-    Ok(())
+    let lc = ctx.borrow().local_client.clone_ref(_py);
+    let lc_ref = lc.bind(_py).cast::<crate::redb_client::RedbLocalClient>()?;
+    lc_ref.borrow().sync_kv_remove("table:__users", key)
 }
 
 fn cmd_drop_user(
@@ -1467,7 +1394,7 @@ fn cmd_drop_user(
             return Ok(r.into_any().unbind());
         }
         store.call_method1("__delitem__", (&key,))?;
-        let _ = delete_user_from_wt(py, ctx, &key);
+        let _ = delete_user_from_redb(py, ctx, &key);
         Ok(ok_dict(py)?.into_any().unbind())
     })();
     lock.call_method1("__exit__", (py.None(), py.None(), py.None()))?;
@@ -1511,7 +1438,7 @@ fn cmd_update_user(
             let entry_dict = entry.cast::<PyDict>()?;
             build_scram_credentials(py, entry_dict, &pwd)?;
         }
-        let _ = persist_user_to_wt(py, ctx, &key, &entry);
+        let _ = persist_user_to_redb(py, ctx, &key, &entry);
         Ok(ok_dict(py)?.into_any().unbind())
     })();
     lock.call_method1("__exit__", (py.None(), py.None(), py.None()))?;
@@ -1559,7 +1486,7 @@ fn cmd_grant_roles_to_user(
             }
         }
         entry.set_item("roles", current_list)?;
-        let _ = persist_user_to_wt(py, ctx, &key, &entry);
+        let _ = persist_user_to_redb(py, ctx, &key, &entry);
         Ok(ok_dict(py)?.into_any().unbind())
     })();
     lock.call_method1("__exit__", (py.None(), py.None(), py.None()))?;
@@ -1609,7 +1536,7 @@ fn cmd_revoke_roles_from_user(
         }
         let new_roles = PyList::new(py, &keep)?;
         entry.set_item("roles", new_roles)?;
-        let _ = persist_user_to_wt(py, ctx, &key, &entry);
+        let _ = persist_user_to_redb(py, ctx, &key, &entry);
         Ok(ok_dict(py)?.into_any().unbind())
     })();
     lock.call_method1("__exit__", (py.None(), py.None(), py.None()))?;

@@ -70,7 +70,7 @@ def _cmd_build_info(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences)
         "sysInfo": f"{platform.system()} {platform.release()} {platform.machine()}",
         "versionArray": [7, 0, 0, 0],
         "bits": 64,
-        "modules": ["embedded", "wiredtiger"],
+        "modules": ["embedded", "redb"],
         "allocator": "system",
         "javascriptEngine": "none",
         "openssl": {"running": "disabled"},

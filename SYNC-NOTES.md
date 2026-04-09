@@ -10,7 +10,7 @@ Indexes sync bidirectionally, but the mechanism is different in each direction.
 
 ### Push (local → remote)
 
-`create_index()` and `drop_index()` log oplog entries (`"index_create"`, `"index_drop"`) containing the key spec and options. During push, the sync layer reads those entries and calls PyMongo's `create_index()` / `drop_index()` on the remote collection. This works because both sides interpret `[("city", 1), ("age", -1)]` identically -- smongo creates a WiredTiger B-tree table locally, PyMongo tells `mongod` to create one remotely. The logical definitions are portable.
+`create_index()` and `drop_index()` log oplog entries (`"index_create"`, `"index_drop"`) containing the key spec and options. During push, the sync layer reads those entries and calls PyMongo's `create_index()` / `drop_index()` on the remote collection. This works because both sides interpret `[("city", 1), ("age", -1)]` identically — smongo maintains real secondary indexes locally via **`smongo-engine` + redb**, while PyMongo tells `mongod` to create the same logical index remotely. The definitions are portable.
 
 ### Pull (remote → local)
 
@@ -55,7 +55,7 @@ If the remote index has `partialFilterExpression`, `collation`, `weights` (text 
 
 ### 3. Atlas Search indexes are a different universe
 
-Atlas Search indexes (`$search`, `$searchMeta`) are managed by the Atlas Search service, not by `mongod`'s WiredTiger. They don't appear in `list_indexes()` and use a completely different creation API (`createSearchIndex`). These cannot sync in either direction.
+Atlas Search indexes (`$search`, `$searchMeta`) are managed by the Atlas Search service, not by `mongod`'s collection indexes. They don't appear in `list_indexes()` and use a completely different creation API (`createSearchIndex`). These cannot sync in either direction.
 
 **Impact:** None unless you expect `$search` to work locally. smongo's `$vectorSearch` is a separate native stage and works independently.
 
@@ -90,7 +90,7 @@ After a successful push, if `oplog_auto_compact` is enabled (default), the sync 
 
 ### 8. ~~Checkpoint table is not transactional with the oplog~~ (FIXED in 0.9.2)
 
-**Fixed.** `_atomic_checkpoint_and_compact()` now wraps both the checkpoint write and oplog truncation in a single WiredTiger transaction. A crash between the two triggers a rollback, preventing duplicate ops on restart. The new `_ck_lock` serializes all checkpoint-session access for thread safety under concurrent push.
+**Fixed.** `_atomic_checkpoint_and_compact()` performs checkpoint write and oplog truncation under the engine’s transactional rules so a crash cannot leave “checkpoint advanced but oplog not truncated” in a bad split. The `_ck_lock` serializes checkpoint access for thread safety under concurrent push.
 
 ### 8b. Dead-letter queue for failed ops (Added in 0.9.3)
 
@@ -204,24 +204,19 @@ If you change a selective sync filter (e.g., widen it to include documents that 
 
 ### 20. ~~Tombstone registry is in-memory only~~ (FIXED in 0.9.2)
 
-**Fixed.** `TombstoneRegistry` is now backed by a WiredTiger table (`table:__tombstones`, key=doc_id, value=deletion_timestamp). Tombstones survive process restarts. The `mark_deleted()` / `is_tombstoned()` / `expire()` API is unchanged. A threading lock protects cursor operations.
+**Fixed.** `TombstoneRegistry` is backed by a durable engine table (`table:__tombstones`, key=doc_id, value=deletion_timestamp). Tombstones survive process restarts. The `mark_deleted()` / `is_tombstoned()` / `expire()` API is unchanged. A threading lock protects concurrent access.
 
 ---
 
 ## Docker / Compose Considerations
 
-### 21. Standalone `mongod` vs. replica set
+### 21. ~~Standalone `mongod` vs. replica set~~ (FIXED in 0.9.3)
 
-The existing `docker-compose.yml` runs `mongo:7` standalone. This means:
-- No change streams (pull falls back to timestamp polling)
-- No remote delete detection (see #14)
-- No transaction support on the remote side
+**Fixed.** The `docker-compose.yml` now runs `mongo:7` as a **single-node replica set** (`--replSet rs0` + `rs.initiate()`). Change streams, remote delete detection, and transaction support all work out of the box.
 
-For a realistic sync demo, use a single-node replica set.
+### 22. Local database path persistence
 
-### 22. WiredTiger data directory persistence
-
-The compose file uses a named volume (`wt_data`) for the WiredTiger data directory. WiredTiger lock files (`WiredTiger.lock`) will prevent multiple smongo containers from opening the same directory. If a container crashes without clean shutdown, the lock file may need manual removal.
+The compose file may use a named volume for the **local redb database path**. Only one process should open a given path at a time; competing containers or hosts must use different paths. If a process exits uncleanly, rely on normal filesystem recovery; avoid running two smongo instances on the same file.
 
 ### 23. Clock skew between containers
 
@@ -383,5 +378,5 @@ See [`examples/patterns/edge_fleet_sync.py`](examples/patterns/edge_fleet_sync.p
 3. **Forward all index options on pull**, not just `unique` and `sparse`.
 4. ~~**Fix checkpoint advancement on partial failure**~~ -- done in 0.9.1.
 5. ~~**Add integration tests for field_merge and change stream pull.**~~ -- change stream pull done in 0.9.3; field_merge still unit-only.
-6. ~~**Persist tombstones to WiredTiger**~~ -- done in 0.9.2.
+6. ~~**Persist tombstones to durable storage**~~ -- done in 0.9.2.
 7. **Document the `_lastModified` requirement** for remote documents participating in LWW.

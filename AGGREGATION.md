@@ -1,6 +1,6 @@
 # Aggregation Pipeline
 
-**25+ stages. 17 group accumulators. Vector search. Faceted queries. Materialized views. All running locally on WiredTiger.**
+**27 stages. 17 group accumulators. Vector search. Faceted queries. Materialized views. All running locally in `smongo-engine` (pure Rust) on redb.**
 
 ---
 
@@ -17,21 +17,9 @@ Input documents
 └─────────┘   └─────────┘   └─────────┘   └─────────┘
 ```
 
-The engine processes stages sequentially. Each stage receives the full output of the previous stage as a Python list, transforms it, and passes it forward. This is an in-memory pipeline -- all intermediate results are materialized as lists.
+All 27 stages run in **`smongo-engine`** (pure Rust) with a single FFI crossing per pipeline. Streaming stages (`$match`, `$project`, `$limit`, `$skip`, `$unwind`, `$addFields`, `$unset`, `$replaceRoot`, `$redact`) use lazy iterator adapters with constant memory overhead. Blocking stages (`$sort`, `$group`, `$bucket`, `$facet`, `$setWindowFields`) materialize at their boundary only. See [ZERO-FFI-STATUS.md](ZERO-FFI-STATUS.md) for the full architecture.
 
-```python
-for stage in pipeline:
-    op, spec = next(iter(stage.items()))
-
-    if op == "$match":
-        fn = compile_query(spec)
-        docs = [d for d in docs if fn(d)]
-    elif op == "$group":
-        docs = group_stage(docs, spec)
-    elif op == "$sort":
-        docs = sort_stage(docs, spec)
-    ...
-```
+The Python `smongo/aggregation/` package serves as the reference specification and provides the user-facing `Cursor` class; at runtime, `Collection.aggregate()` delegates to the Rust engine via `aggregate_engine()` / `aggregate_pipeline()`.
 
 ---
 
@@ -57,13 +45,9 @@ cursor.limit(5).sort("age", -1)
 
 Internally, `_resolve()` applies them in the correct order: sort → skip → limit → projection.
 
-**Lazy input**: The cursor accepts any `Iterable[Document]` -- including a `RustStreamingCursor` that pulls documents from WiredTiger one at a time. When `.sort()` is applied, the source is fully materialized (sorting requires the full set). When only `.skip()` and `.limit()` are applied **without** sorting, the cursor uses `itertools.islice` to consume only the required slice from the underlying iterator. This means `find({}).limit(10)` on a large collection deserializes only 10 BSON documents.
+**Lazy input**: The cursor accepts any `Iterable[Document]` — including engine-backed iterators that pull documents **one BSON decode at a time**. When `.sort()` is applied, the source is fully materialized (sorting requires the full set). When only `.skip()` and `.limit()` are applied **without** sorting, the cursor uses `itertools.islice` to consume only the required slice from the underlying iterator. This means `find({}).limit(10)` on a large collection deserializes only 10 BSON documents.
 
-The cursor also serves as the aggregation entry point. The `.aggregate()` method always materializes its input (pipelines process stage-by-stage over full document lists):
-
-```python
-Cursor(docs, collection_getter=getter).aggregate(pipeline)
-```
+The cursor also serves as the aggregation entry point. At runtime, `aggregate()` delegates to the Rust engine (`aggregate_engine()` / `aggregate_pipeline()`), which processes stages with streaming iterators where possible. The Python `Cursor` wrapper receives the final results.
 
 ---
 
@@ -120,14 +104,7 @@ The `_id` field is the group key. It can be:
 
 The group key is resolved via `resolve_expr`, so it supports the full expression language -- `$cond`, `$concat`, arithmetic, etc.
 
-When the group key is a dict or list, it's serialized to JSON for use as a hash key, then deserialized back in the output. This ensures compound keys work correctly:
-
-```python
-key = resolve_expr(doc, spec["_id"])
-if isinstance(key, (dict, list)):
-    key = json.dumps(key, sort_keys=True)
-grouped[key].append(doc)
-```
+When the group key is a dict or list, the engine serializes it for use as a hash key and deserializes back in the output, ensuring compound keys work correctly.
 
 ### $project -- Reshape Documents
 
@@ -158,15 +135,7 @@ Multi-key stable sort with null-aware ordering:
 {"$sort": {"age": -1, "name": 1}}
 ```
 
-The sort is null-aware: documents with `None` for a sort field sort **after** documents with values (when ascending) or **before** (when descending). This is implemented with a tuple key:
-
-```python
-key=lambda d: (get_value(d, field) is not None, get_value(d, field))
-```
-
-The `(True, value)` tuples ensure non-null values sort before `(False, None)`.
-
-For multi-key sorts, the implementation applies sorts in **reverse order** using Python's stable sort guarantee. The last sort key is applied first, then the second-to-last, etc. This produces the correct composite ordering.
+The sort is null-aware: documents with `None` for a sort field sort **after** documents with values (when ascending) or **before** (when descending). Multi-key sorts produce the correct composite ordering. The sort runs in the Rust engine with BSON-aware comparison semantics.
 
 ### $limit / $skip -- Result Windowing
 
@@ -219,7 +188,7 @@ Adds new fields to each document without removing existing ones. `$set` is an al
 }}
 ```
 
-Each document is deep-copied before modification to prevent mutation of upstream documents.
+The engine copies each document before modification to prevent mutation of upstream documents.
 
 ### $count -- Count Documents
 
@@ -256,16 +225,7 @@ Joins documents from another collection:
 }}
 ```
 
-The implementation builds a hash index on the foreign collection's `foreignField` values for O(1) lookups per document, then performs the join:
-
-```python
-foreign_index = defaultdict(list)
-for fd in foreign_docs:
-    fv = get_value(fd, foreign_field)
-    foreign_index[fv].append(fd)
-```
-
-Requires a `collection_getter` callable that can retrieve another collection by name. This is injected by the client layer when it creates the Cursor.
+The engine builds a hash index on the foreign collection's `foreignField` values for O(1) lookups per document, then performs the join. Cross-collection access uses the `DatabaseContext` provided to the engine — no Python callbacks are needed.
 
 ### $sample -- Random Sampling
 
@@ -275,7 +235,7 @@ Returns a random subset of documents:
 {"$sample": {"size": 5}}
 ```
 
-Uses Python's `random.sample`. If `size` exceeds the document count, returns all documents.
+If `size` exceeds the document count, returns all documents.
 
 ---
 
@@ -358,7 +318,7 @@ Output is always a single document:
 }]
 ```
 
-Each sub-pipeline gets a **deep copy** of the input documents, so mutations in one facet don't affect others. Each sub-pipeline runs through a fresh Cursor with the same `collection_getter`, so sub-pipelines can use `$lookup` and other collection-aware stages.
+Each sub-pipeline gets a copy of the input documents, so mutations in one facet don't affect others. Sub-pipelines can use `$lookup` and other collection-aware stages via the engine's `DatabaseContext`.
 
 ### $out -- Write Results to Collection
 
@@ -374,7 +334,7 @@ Execution:
 2. Insert all pipeline result documents
 3. Return the result documents (so they're still available to the caller)
 
-Must be the last stage in the pipeline. Requires a `collection_getter`.
+Must be the last stage in the pipeline. Requires a `DatabaseContext` (provided automatically when using `Collection.aggregate()`).
 
 ### $merge -- Upsert into Collection
 
@@ -450,7 +410,7 @@ In `$project`, fields can be set to expression objects:
 
 ## Expression Engine Integration
 
-Every stage that computes values -- `$group`, `$project`, `$addFields`, `$sort`, `$replaceRoot`, `$unwind`, `$lookup` -- flows through the same `resolve_expr` function from `query/expressions.py`. This means the full expression language is available everywhere:
+Every stage that computes values -- `$group`, `$project`, `$addFields`, `$sort`, `$replaceRoot`, `$unwind`, `$lookup` -- flows through the engine's expression evaluator (Rust, with the Python reference in `query/expressions.py`). This means the full expression language is available everywhere:
 
 - Conditionals: `$cond`, `$ifNull`, `$switch`
 - String operations: `$concat`, `$toUpper`, `$toLower`, `$substr`

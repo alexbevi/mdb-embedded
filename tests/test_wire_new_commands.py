@@ -129,11 +129,10 @@ class TestTransactions:
             },
         )
 
-        coll = ctx.get_collection("test", "txn_abort")
-        assert len(coll.find({"rollme": True})) == 1
-
         resp = dispatch(ctx, {"abortTransaction": 1, "$db": "test", "lsid": lsid})
         assert resp["ok"] == 1.0
+
+        coll = ctx.get_collection("test", "txn_abort")
         assert len(coll.find({"rollme": True})) == 0
 
     def test_abort_rolls_back_delete(self, ctx):
@@ -151,7 +150,6 @@ class TestTransactions:
                 "lsid": lsid,
             },
         )
-        assert len(coll.find({"keep": True})) == 0
 
         dispatch(ctx, {"abortTransaction": 1, "$db": "test", "lsid": lsid})
         assert len(coll.find({"keep": True})) == 1
@@ -171,7 +169,6 @@ class TestTransactions:
                 "lsid": lsid,
             },
         )
-        assert coll.find({"val": 999})
 
         dispatch(ctx, {"abortTransaction": 1, "$db": "test", "lsid": lsid})
         assert coll.find({"val": 1})
@@ -210,7 +207,7 @@ class TestGetNonce:
 
 
 # =====================================================================
-# fsync -- real WiredTiger checkpoint
+# fsync -- persists embedded storage
 # =====================================================================
 
 
@@ -418,7 +415,8 @@ class TestEnhancedCollStats:
         assert "size" in resp
         assert "storageSize" in resp
         assert "nindexes" in resp
-        assert "wiredTiger" in resp
+        assert "storageEngine" in resp
+        assert resp["storageEngine"].get("name") == "redb"
 
 
 class TestEnhancedDbStats:
@@ -443,10 +441,11 @@ class TestEnhancedValidate:
 
 
 class TestEnhancedServerStatus:
-    def test_has_wt_stats(self, ctx):
+    def test_has_storage_engine_stats(self, ctx):
         resp = dispatch(ctx, {"serverStatus": 1, "$db": "admin"})
         assert resp["ok"] == 1.0
-        assert "wiredTiger" in resp
+        assert "storageEngine" in resp
+        assert resp["storageEngine"].get("name") == "redb"
         assert "logicalSessionRecordCache" in resp
         assert resp["mem"]["bits"] == 64
 

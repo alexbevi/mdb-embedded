@@ -18,7 +18,7 @@
  *   clang -o test_ffi rust/smongo-c/tests/test_ffi.c \
  *         -L rust/target/debug -lsmongo_c \
  *         -Irust/smongo-c
- *   SMONGO_WT_LIBRARY=<path-to-libwiredtiger> ./test_ffi
+ *   ./test_ffi
  */
 
 #include <stdio.h>

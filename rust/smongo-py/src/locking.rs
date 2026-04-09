@@ -1,7 +1,7 @@
 //! Read-write lock primitives for collection-level concurrency.
 //!
-//! `InlineRwLock` is a plain Rust struct (no PyO3) used internally by
-//! `RustLocalCollection` and `RustStreamingCursor`.  Storing it behind an
+//! `InlineRwLock` is a plain Rust struct (no PyO3) used internally on
+//! collection- and cursor-related hot paths.  Storing it behind an
 //! `Arc` avoids `PyCell` borrows on the hot path -- the root cause of
 //! `PyBorrowMutError` under concurrent Tokio connections.
 //!
@@ -13,39 +13,6 @@ use std::sync::Arc;
 
 use parking_lot::{Condvar, Mutex};
 use pyo3::prelude::*;
-
-// ---------------------------------------------------------------------------
-// MutexForceGuard -- RAII guard for the forget(guard) / force_unlock pattern
-// ---------------------------------------------------------------------------
-
-/// RAII guard that releases a `parking_lot::Mutex<()>` on drop.
-///
-/// The `parking_lot::MutexGuard` is deliberately forgotten after acquisition
-/// (so the GIL can be released while the mutex stays locked).  This guard
-/// captures the `Arc<Mutex<()>>` and calls [`force_unlock`] in its `Drop`
-/// impl, ensuring the mutex is released even on early returns or panics.
-pub(crate) struct MutexForceGuard(Arc<Mutex<()>>);
-
-impl MutexForceGuard {
-    /// Lock `mutex` (releasing the Python GIL while blocking), forget the
-    /// native guard, and return a [`MutexForceGuard`] that will unlock on
-    /// drop.
-    pub fn acquire(py: Python<'_>, mutex: &Arc<Mutex<()>>) -> Self {
-        let m = Arc::clone(mutex);
-        py.detach(|| {
-            std::mem::forget(m.lock());
-        });
-        Self(Arc::clone(mutex))
-    }
-}
-
-impl Drop for MutexForceGuard {
-    fn drop(&mut self) {
-        // SAFETY: The mutex was locked (guard forgotten) before this type was
-        // constructed.  We are on the same thread that acquired the lock.
-        unsafe { self.0.force_unlock() };
-    }
-}
 
 struct LockState {
     readers: u32,

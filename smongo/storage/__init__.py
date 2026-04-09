@@ -1,27 +1,26 @@
 """
-Local Embedded Engine -- WiredTiger storage layer.
+Embedded storage — redb-backed engine (``RedbClient``, ``RedbCollection``).
 
-Each collection is a WiredTiger B-Tree table (key=_id, value=BSON document).
-Write operations are wrapped in WiredTiger transactions for atomicity,
-all session access is serialized with a per-collection lock for thread safety,
-and the query planner accelerates writes as well as reads.
+Embedded storage is redb-only; use :class:`~smongo.storage.redb_engine.RedbClient`
+or :class:`~smongo.client.MongoClient` with a ``local://`` URI.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from .._compat import WTError as _WTError
-from .collection import _TTL_DELETE_BATCH_SIZE, LocalCollection, TTLReaper
-from .engine import LocalClient, LocalDB
+from .._compat import StorageError
+from .collection import _TTL_DELETE_BATCH_SIZE, TTLReaper
 from .locking import ReadWriteLock
+from .redb_engine import RedbClient, RedbCollection, RedbDB
 from .results import DeleteResult, InsertResult, UpdateResult
 from .streaming import StreamingCursor
 from .transaction import TransactionSession, get_active_txn_session
 
+_StorageError = StorageError
+
 
 def __getattr__(name: str) -> Any:
-    """Lazy re-export for names not defined in the embedded engine package."""
     if name == "BulkWriteResult":
         from ..client import BulkWriteResult
 
@@ -34,14 +33,15 @@ __all__ = [
     "BulkWriteResult",
     "DeleteResult",
     "InsertResult",
-    "LocalClient",
-    "LocalCollection",
-    "LocalDB",
+    "RedbClient",
+    "RedbCollection",
+    "RedbDB",
     "ReadWriteLock",
     "StreamingCursor",
     "TTLReaper",
     "TransactionSession",
     "UpdateResult",
-    "_WTError",
+    "StorageError",
+    "_StorageError",
     "get_active_txn_session",
 ]

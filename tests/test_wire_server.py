@@ -35,10 +35,13 @@ def _wait_for_port(host: str, port: int, timeout: float = 5.0) -> None:
 
 @pytest.fixture(scope="class")
 def wire_env(tmp_path_factory):
-    """Start a fresh WireServer for each test class."""
-    db_path = str(tmp_path_factory.mktemp("wire_wt"))
+    """Start a fresh WireServer for each test class (RustWireServer / Tokio path)."""
+    db_path = str(tmp_path_factory.mktemp("wire_redb"))
     port = _find_free_port()
-    server = WireServer(db_path, host="127.0.0.1", port=port)
+    # Explicit auth_required=False selects RustWireServer (parity with TLS/auth builds).
+    server = WireServer(
+        db_path, host="127.0.0.1", port=port, auth_required=False
+    )
     server.start()
     _wait_for_port("127.0.0.1", port)
     yield server, port

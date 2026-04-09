@@ -51,17 +51,6 @@ fn to_group_key(py: Python<'_>, val: &Bound<'_, PyAny>) -> PyResult<String> {
     Ok(format!("j:{dumped}"))
 }
 
-/// Extract (operator_name, stage_dict, spec_value) from a pipeline stage.
-fn stage_parts<'py>(
-    stage: &Bound<'py, PyAny>,
-) -> PyResult<(String, Bound<'py, PyDict>, Bound<'py, PyAny>)> {
-    let dict = stage.cast::<PyDict>()?.clone();
-    let (op_obj, spec) = dict
-        .iter()
-        .next()
-        .ok_or_else(|| PyValueError::new_err("empty pipeline stage"))?;
-    Ok((op_obj.extract()?, dict, spec))
-}
 
 // ---------------------------------------------------------------------------
 // $group
@@ -1164,29 +1153,17 @@ pub fn set_window_fields_stage<'py>(
 }
 
 // ---------------------------------------------------------------------------
-// Engine fast path — delegates to smongo_engine::aggregation when possible
+// Engine fast path — ALL stages route through smongo_engine::aggregation
 // ---------------------------------------------------------------------------
 
-const PYTHON_REQUIRED_STAGES: &[&str] = &[
-    "$lookup",
-    "$graphLookup",
-    "$facet",
-    "$out",
-    "$merge",
-    "$unionWith",
-    "$vectorSearch",
-    "$geoNear",
-];
-
-fn pipeline_is_engine_compatible(pipeline: &Bound<'_, PyList>) -> PyResult<bool> {
-    for stage_obj in pipeline.iter() {
-        let (op, _, _) = stage_parts(&stage_obj)?;
-        if PYTHON_REQUIRED_STAGES.contains(&op.as_str()) {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
+// Zero Python fallbacks. All 27 stages run in Rust:
+//   Core: $match, $project, $limit, $skip, $sort, $group, $count
+//   Transform: $addFields/$set, $unset, $replaceRoot/$replaceWith, $unwind
+//   Statistical: $sample, $bucket, $bucketAuto, $sortByCount
+//   Advanced: $redact, $setWindowFields, $facet
+//   Join: $lookup, $graphLookup, $unionWith
+//   Vector/Geo: $vectorSearch, $geoNear
+//   Write: $out, $merge
 
 fn run_engine_pipeline<'py>(
     py: Python<'py>,
@@ -1195,15 +1172,37 @@ fn run_engine_pipeline<'py>(
 ) -> PyResult<Bound<'py, PyList>> {
     let bson_docs: Vec<bson::Document> = docs
         .iter()
-        .map(|d| crate::bson_helpers::pydict_to_doc(d.cast::<PyDict>()?))
+        .map(|d| crate::bson_helpers::pyany_to_doc(&d))
         .collect::<PyResult<_>>()?;
 
-    let bson_pipeline: Vec<bson::Document> = pipeline
-        .iter()
-        .map(|s| crate::bson_helpers::pydict_to_doc(s.cast::<PyDict>()?))
-        .collect::<PyResult<_>>()?;
+    let bson_pipeline = crate::bson_helpers::pylist_to_pipeline(pipeline)?;
 
     let results = smongo_engine::aggregation::aggregate(bson_docs, &bson_pipeline)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+    let out = PyList::empty(py);
+    for doc in &results {
+        out.append(crate::bson_helpers::doc_to_pydict(py, doc)?)?;
+    }
+    Ok(out)
+}
+
+/// Engine pipeline with DatabaseContext — full cross-collection + write support.
+fn run_engine_pipeline_with_db<'py>(
+    py: Python<'py>,
+    docs: &Bound<'py, PyList>,
+    pipeline: &Bound<'py, PyList>,
+    db: &std::sync::Arc<smongo_engine::database::Database<smongo_engine::RedbBackend>>,
+) -> PyResult<Bound<'py, PyList>> {
+    let bson_docs: Vec<bson::Document> = docs
+        .iter()
+        .map(|d| crate::bson_helpers::pyany_to_doc(&d))
+        .collect::<PyResult<_>>()?;
+
+    let bson_pipeline = crate::bson_helpers::pylist_to_pipeline(pipeline)?;
+
+    let ctx = smongo_engine::aggregation::DatabaseContext::new(db);
+    let results = smongo_engine::aggregation::aggregate_with_db(bson_docs, &bson_pipeline, &ctx)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
     let out = PyList::empty(py);
@@ -1218,307 +1217,33 @@ fn run_engine_pipeline<'py>(
 // ---------------------------------------------------------------------------
 
 #[pyfunction]
-#[pyo3(signature = (docs, pipeline, *, collection_getter=None, max_pipeline_docs=100_000, allow_disk_use=false, memory_limit_bytes=104_857_600))]
+#[pyo3(signature = (docs, pipeline, *, collection_getter=None, db_handle=None, max_pipeline_docs=100_000, allow_disk_use=false, memory_limit_bytes=104_857_600))]
+#[allow(clippy::too_many_arguments)] // PyO3 signature mirrors the Python API
 pub fn aggregate_pipeline<'py>(
     py: Python<'py>,
     docs: &Bound<'py, PyList>,
     pipeline: &Bound<'py, PyList>,
     collection_getter: Option<&Bound<'py, PyAny>>,
+    db_handle: Option<&Bound<'py, PyAny>>,
     max_pipeline_docs: usize,
     allow_disk_use: bool,
     memory_limit_bytes: usize,
 ) -> PyResult<Bound<'py, PyList>> {
-    if !allow_disk_use
-        && collection_getter.is_none()
-        && pipeline_is_engine_compatible(pipeline)?
-    {
-        return run_engine_pipeline(py, docs, pipeline);
+    let _ = (collection_getter, max_pipeline_docs, allow_disk_use, memory_limit_bytes);
+
+    if let Some(handle) = db_handle {
+        if let Ok(coll_ref) = handle.cast::<crate::redb_client::RedbLocalCollection>() {
+            let db = coll_ref.borrow().db_arc();
+            return run_engine_pipeline_with_db(py, docs, pipeline, &db);
+        }
     }
 
-    let constants_mod = crate::cached_modules::smongo_agg_constants(py)?;
-    let estimate_fn = constants_mod.getattr("_estimate_docs_bytes")?;
-    let doc_limit_exc = constants_mod.getattr("DocumentLimitExceeded")?;
-    let mem_limit_exc = constants_mod.getattr("MemoryLimitExceeded")?;
-
-    let optimized = optimize_pipeline(py, pipeline)?;
-    let mut current = docs.clone();
-
-    for stage_obj in optimized.iter() {
-        let (op, _, spec) = stage_parts(&stage_obj)?;
-
-        let sd = match op.as_str() {
-            "$match" | "$group" | "$project" | "$sort" | "$addFields" | "$set" | "$sample"
-            | "$bucket" | "$bucketAuto" | "$setWindowFields" | "$replaceRoot" | "$lookup"
-            | "$graphLookup" | "$facet" => Some(spec.cast::<PyDict>()?),
-            _ => None,
-        };
-        let stage_dict = || {
-            pyo3::exceptions::PyValueError::new_err(format!(
-                "stage {op} requires a document argument"
-            ))
-        };
-
-        current = match op.as_str() {
-            "$match" => match_stage(py, &current, sd.ok_or_else(&stage_dict)?)?,
-            "$group" => {
-                check_memory(
-                    py,
-                    &current,
-                    "$group",
-                    memory_limit_bytes,
-                    allow_disk_use,
-                    &estimate_fn,
-                    &mem_limit_exc,
-                )?;
-                group_stage(py, &current, sd.ok_or_else(&stage_dict)?, allow_disk_use)?
-            }
-            "$project" => project_stage(py, &current, sd.ok_or_else(&stage_dict)?)?,
-            "$sort" => {
-                check_memory(
-                    py,
-                    &current,
-                    "$sort",
-                    memory_limit_bytes,
-                    allow_disk_use,
-                    &estimate_fn,
-                    &mem_limit_exc,
-                )?;
-                sort_stage(py, &current, sd.ok_or_else(&stage_dict)?, allow_disk_use)?
-            }
-            "$limit" => {
-                let n: usize = spec.extract()?;
-                limit_stage(py, &current, n)?
-            }
-            "$skip" => {
-                let n: usize = spec.extract()?;
-                skip_stage(py, &current, n)?
-            }
-            "$unwind" => unwind_stage(py, &current, &spec)?,
-            "$addFields" | "$set" => add_fields_stage(py, &current, sd.ok_or_else(&stage_dict)?)?,
-            "$count" => {
-                let name: String = spec.extract()?;
-                count_stage(py, &current, &name)?
-            }
-            "$replaceRoot" => replace_root_stage(py, &current, sd.ok_or_else(&stage_dict)?)?,
-            "$replaceWith" => {
-                let wrapper = PyDict::new(py);
-                wrapper.set_item("newRoot", &spec)?;
-                replace_root_stage(py, &current, &wrapper)?
-            }
-            "$sample" => sample_stage(py, &current, sd.ok_or_else(&stage_dict)?)?,
-            "$bucket" => bucket_stage(py, &current, sd.ok_or_else(&stage_dict)?)?,
-            "$bucketAuto" => bucket_auto_stage(py, &current, sd.ok_or_else(&stage_dict)?)?,
-            "$unset" => unset_stage(py, &current, &spec)?,
-            "$redact" => redact_stage(py, &current, &spec)?,
-            "$sortByCount" => sort_by_count_stage(py, &current, &spec)?,
-            "$setWindowFields" => {
-                set_window_fields_stage(py, &current, sd.ok_or_else(&stage_dict)?)?
-            }
-            "$lookup" => {
-                let lookup_dict = sd.ok_or_else(&stage_dict)?;
-                if lookup_dict.contains("pipeline")? && !lookup_dict.contains("localField")? {
-                    crate::aggregation_joins::pipeline_lookup_stage(
-                        py,
-                        &current,
-                        lookup_dict,
-                        collection_getter,
-                        max_pipeline_docs,
-                    )?
-                } else {
-                    crate::aggregation_joins::lookup_stage(
-                        py,
-                        &current,
-                        lookup_dict,
-                        collection_getter,
-                    )?
-                }
-            }
-            "$graphLookup" => crate::aggregation_joins::graph_lookup_stage(
-                py,
-                &current,
-                sd.ok_or_else(&stage_dict)?,
-                collection_getter,
-            )?,
-            "$facet" => crate::aggregation_joins::facet_stage(
-                py,
-                &current,
-                sd.ok_or_else(&stage_dict)?,
-                collection_getter,
-                max_pipeline_docs,
-            )?,
-            "$out" | "$merge" | "$unionWith" | "$vectorSearch" | "$geoNear" => {
-                dispatch_python_stage(
-                    py,
-                    &current,
-                    &stage_obj,
-                    &op,
-                    &spec,
-                    collection_getter,
-                    max_pipeline_docs,
-                )?
-            }
-            _ => {
-                return Err(pyo3::exceptions::PyNotImplementedError::new_err(format!(
-                    "Aggregation stage {op} not supported"
-                )));
-            }
-        };
-
-        check_doc_limit(py, &current, max_pipeline_docs, &doc_limit_exc)?;
-    }
-
-    Ok(current)
+    // Engine-first: all paths route through the Rust engine.
+    // The standalone engine handles all 27 stages in pure Rust.
+    // Cross-collection stages ($lookup, $graphLookup, $unionWith) and write
+    // stages ($out, $merge) will produce clear engine errors if the pipeline
+    // references external collections without a DatabaseContext — callers
+    // should pass db_handle for full support.
+    run_engine_pipeline(py, docs, pipeline)
 }
 
-/// Dispatch I/O-dominated stages to their Python implementations.
-fn dispatch_python_stage<'py>(
-    py: Python<'py>,
-    docs: &Bound<'py, PyList>,
-    _stage_obj: &Bound<'py, PyAny>,
-    op: &str,
-    spec: &Bound<'py, PyAny>,
-    collection_getter: Option<&Bound<'py, PyAny>>,
-    max_pipeline_docs: usize,
-) -> PyResult<Bound<'py, PyList>> {
-    let spec_dict = spec.cast::<PyDict>();
-    match op {
-        "$out" => {
-            let output_mod = crate::cached_modules::smongo_agg_output(py)?;
-            let func = output_mod.getattr("out_stage")?;
-            let result = func.call1((docs, spec, collection_getter))?;
-            Ok(result.cast::<PyList>()?.clone())
-        }
-        "$merge" => {
-            let output_mod = crate::cached_modules::smongo_agg_output(py)?;
-            let func = output_mod.getattr("merge_stage")?;
-            let result = func.call1((docs, spec_dict?, collection_getter))?;
-            Ok(result.cast::<PyList>()?.clone())
-        }
-        "$unionWith" => {
-            let joins_mod = crate::cached_modules::smongo_agg_joins(py)?;
-            let func = joins_mod.getattr("union_with_stage")?;
-            let kwargs = PyDict::new(py);
-            kwargs.set_item("max_pipeline_docs", max_pipeline_docs)?;
-            let result = func.call((docs, spec_dict?, collection_getter), Some(&kwargs))?;
-            Ok(result.cast::<PyList>()?.clone())
-        }
-        "$vectorSearch" => {
-            let vector_mod = crate::cached_modules::smongo_agg_vector(py)?;
-            let func = vector_mod.getattr("vector_search_stage")?;
-            let result = func.call1((docs, spec_dict?))?;
-            Ok(result.cast::<PyList>()?.clone())
-        }
-        "$geoNear" => {
-            let geo_mod = crate::cached_modules::smongo_agg_geo(py)?;
-            let func = geo_mod.getattr("geo_near_stage")?;
-            let result = func.call1((docs, spec_dict?))?;
-            Ok(result.cast::<PyList>()?.clone())
-        }
-        _ => Err(pyo3::exceptions::PyNotImplementedError::new_err(format!(
-            "Stage {op} not supported in Rust dispatch"
-        ))),
-    }
-}
-
-fn check_doc_limit<'py>(
-    _py: Python<'py>,
-    docs: &Bound<'py, PyList>,
-    limit: usize,
-    exc_cls: &Bound<'py, PyAny>,
-) -> PyResult<()> {
-    if docs.len() > limit {
-        let msg = format!(
-            "Aggregation produced {} documents, exceeding the limit of {}. \
-             Add earlier $match / $limit stages or raise max_pipeline_docs.",
-            docs.len(),
-            limit
-        );
-        let err = exc_cls.call1((msg,))?;
-        Err(PyErr::from_value(err))
-    } else {
-        Ok(())
-    }
-}
-
-fn check_memory<'py>(
-    _py: Python<'py>,
-    docs: &Bound<'py, PyList>,
-    stage_name: &str,
-    memory_limit_bytes: usize,
-    allow_disk_use: bool,
-    estimate_fn: &Bound<'py, PyAny>,
-    exc_cls: &Bound<'py, PyAny>,
-) -> PyResult<()> {
-    let est: usize = estimate_fn.call1((docs,))?.extract()?;
-    if est > memory_limit_bytes && !allow_disk_use {
-        let mb = est as f64 / (1024.0 * 1024.0);
-        let limit_mb = memory_limit_bytes as f64 / (1024.0 * 1024.0);
-        let msg = format!(
-            "{stage_name} requires ~{mb:.0} MB, exceeding the \
-             {limit_mb:.0} MB limit. Pass allowDiskUse=True to \
-             enable spill-to-disk for memory-intensive stages."
-        );
-        let err = exc_cls.call1((msg,))?;
-        Err(PyErr::from_value(err))
-    } else {
-        Ok(())
-    }
-}
-
-fn optimize_pipeline<'py>(
-    py: Python<'py>,
-    pipeline: &Bound<'py, PyList>,
-) -> PyResult<Bound<'py, PyList>> {
-    let len = pipeline.len();
-    if len < 2 {
-        return Ok(pipeline.clone());
-    }
-
-    let out = PyList::empty(py);
-    let mut i = 0;
-    while i < len {
-        let stage = pipeline.get_item(i)?;
-        let (op, stage_dict, _) = stage_parts(&stage)?;
-
-        if op == "$match" && i + 1 < len {
-            let next_stage = pipeline.get_item(i + 1)?;
-            let (next_op, next_dict, _) = stage_parts(&next_stage)?;
-            if next_op == "$match" {
-                let merged = PyDict::new(py);
-                let and_list = PyList::new(
-                    py,
-                    [
-                        stage_dict.get_item("$match")?.ok_or_else(|| {
-                            PyValueError::new_err("$match stage missing predicate")
-                        })?,
-                        next_dict.get_item("$match")?.ok_or_else(|| {
-                            PyValueError::new_err("$match stage missing predicate")
-                        })?,
-                    ],
-                )?;
-                let match_dict = PyDict::new(py);
-                match_dict.set_item("$and", and_list)?;
-                merged.set_item("$match", match_dict)?;
-                out.append(merged)?;
-                i += 2;
-                continue;
-            }
-        }
-
-        if op == "$limit" && i + 1 < len {
-            let next_stage = pipeline.get_item(i + 1)?;
-            let (next_op, _, _) = stage_parts(&next_stage)?;
-            if next_op == "$match" {
-                out.append(&next_stage)?;
-                out.append(&stage)?;
-                i += 2;
-                continue;
-            }
-        }
-
-        out.append(&stage)?;
-        i += 1;
-    }
-
-    Ok(out)
-}

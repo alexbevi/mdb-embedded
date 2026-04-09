@@ -15,7 +15,7 @@ class FakeRemoteCollection:
     def find(self, query=None, projection=None):
         return list(self.docs)
 
-    def find_one(self, query=None):
+    def find_one(self, query=None, projection=None):
         return self.docs[0] if self.docs else None
 
     def aggregate(self, pipeline):

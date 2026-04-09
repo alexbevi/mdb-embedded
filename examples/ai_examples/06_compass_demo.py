@@ -211,7 +211,7 @@ def seed_data(db_path: str) -> None:
     knowledge.delete_many({})
 
     texts = [
-        "smongo is an embedded MongoDB engine built on WiredTiger B-trees.",
+        "smongo is an embedded MongoDB engine built on redb with a PyMongo-compatible API.",
         "The wire protocol lets Compass, mongosh, and any driver connect.",
         "Vector search runs cosine similarity in-memory with NumPy.",
         "ACID transactions use snapshot isolation across collections.",

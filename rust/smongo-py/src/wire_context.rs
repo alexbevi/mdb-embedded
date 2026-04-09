@@ -13,9 +13,7 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
-use crate::local_collection::RustLocalCollection;
-use crate::storage_engine::{RustLocalClient, RustLocalDB};
-use crate::transaction::RustTransactionSession;
+use crate::redb_client::{RedbLocalClient, RedbLocalCollection, RedbLocalDB};
 use crate::wire_profiler::{OperationTracker, Profiler, TopStats};
 use crate::wire_sessions::SessionRegistry;
 use crate::wire_transactions::{SessionTransaction, TransactionError, TransactionState};
@@ -321,7 +319,7 @@ pub struct ConnectionContext {
     pub cursor_registry: Py<PyAny>,
     #[pyo3(get)]
     pub sync_mgr: Py<PyAny>,
-    dbs: Mutex<HashMap<String, Py<RustLocalDB>>>,
+    dbs: Mutex<HashMap<String, Py<RedbLocalDB>>>,
     #[pyo3(get, set)]
     pub compressor_id: Py<PyAny>,
     #[pyo3(get)]
@@ -359,29 +357,26 @@ impl ConnectionContext {
         })
     }
 
-    /// Typed DB accessor -- downcasts `local_client` to `RustLocalClient` and
-    /// calls `get_db` directly, bypassing Python method dispatch.
-    /// (Only works with WT-backed RustLocalClient; for redb client fallback needed)
-    pub(crate) fn get_db_typed(&self, py: Python<'_>, db_name: &str) -> PyResult<Py<RustLocalDB>> {
+    /// Typed DB accessor -- `RedbLocalClient` → `RedbLocalDB`.
+    pub(crate) fn get_db_typed(&self, py: Python<'_>, db_name: &str) -> PyResult<Py<RedbLocalDB>> {
         let mut dbs = self.dbs.lock();
         if let Some(db) = dbs.get(db_name) {
             return Ok(db.clone_ref(py));
         }
         let lc = self.local_client.bind(py);
-        let rs_client: &Bound<'_, RustLocalClient> = lc.cast()?;
-        let db = rs_client.borrow().get_db_inner(py, db_name)?;
+        let rs_client: &Bound<'_, RedbLocalClient> = lc.cast()?;
+        let db = rs_client.borrow().get_db(py, db_name)?;
         dbs.insert(db_name.to_string(), db.clone_ref(py));
         Ok(db)
     }
 
-    /// Typed collection accessor -- downcasts through `RustLocalClient` →
-    /// `RustLocalDB` → `RustLocalCollection`, zero Python dispatch.
+    /// Typed collection accessor -- `RedbLocalClient` → `RedbLocalCollection`.
     pub(crate) fn get_collection_typed(
         &self,
         py: Python<'_>,
         db_name: &str,
         coll_name: &str,
-    ) -> PyResult<Py<RustLocalCollection>> {
+    ) -> PyResult<Py<RedbLocalCollection>> {
         validate_namespace(db_name, coll_name)?;
         let db_py = self.get_db_typed(py, db_name)?;
         let db = db_py.bind(py).borrow();
@@ -551,17 +546,8 @@ impl ConnectionContext {
             }
         }
         let lc = self.local_client.bind(py);
-        let conn = lc.getattr("conn")?;
-
-        // Use RustTransactionSession when the connection is a Rust type,
-        // otherwise fall back to the Python TransactionSession.
-        let storage_txn = if let Ok(rs_txn) = RustTransactionSession::new(py, &conn) {
-            Py::new(py, rs_txn)?.into_any()
-        } else {
-            let cls =
-                crate::cached_modules::smongo_storage_txn(py)?.getattr("TransactionSession")?;
-            cls.call1((&conn,))?.unbind()
-        };
+        let cls = crate::cached_modules::smongo_storage_txn(py)?.getattr("TransactionSession")?;
+        let storage_txn = cls.call1((lc,))?.unbind();
         storage_txn.bind(py).call_method0("activate")?;
 
         let txn_number = TXN_NUMBER_GEN.fetch_add(1, Ordering::Relaxed);

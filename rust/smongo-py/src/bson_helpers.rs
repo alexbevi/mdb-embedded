@@ -4,11 +4,8 @@
 //! single-pass raw BSON codec in [`crate::raw_bson`].  The intermediate
 //! `bson::Document` helpers below are retained for non-wire callers
 //! (storage layer, tests) that still need them.
-#[allow(unused_imports)]
 use bson::oid::ObjectId as BsonOid;
-#[allow(unused_imports)]
 use bson::spec::BinarySubtype;
-#[allow(unused_imports)]
 use bson::{doc, Bson, Document};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString};
@@ -117,6 +114,63 @@ pub(crate) fn pydict_to_doc(dict: &Bound<'_, PyDict>) -> PyResult<Document> {
         doc.insert(key, py_to_bson(&v)?);
     }
     Ok(doc)
+}
+
+/// Convert any dict-like Python object to a BSON Document.
+///
+/// Uses Python's `.items()` protocol instead of the C-level `PyDict_Next`,
+/// making it safe for dict subclasses (`bson.SON`, `OrderedDict`, etc.)
+/// that may not iterate correctly via the C API.
+pub(crate) fn pyany_to_doc(obj: &Bound<'_, PyAny>) -> PyResult<Document> {
+    if let Ok(dict) = obj.cast::<PyDict>() {
+        return pydict_to_doc(dict);
+    }
+    let mut doc = Document::new();
+    let type_name = obj
+        .get_type()
+        .qualname()
+        .map(|n| n.to_string())
+        .unwrap_or_else(|_| "<unknown>".to_string());
+    let items = obj.call_method0("items").map_err(|_| {
+        pyo3::exceptions::PyTypeError::new_err(format!(
+            "Expected a dict-like object with .items(), got {type_name}"
+        ))
+    })?;
+    for pair in items.try_iter()? {
+        let pair = pair?;
+        let key: String = pair.get_item(0)?.extract()?;
+        let val = pair.get_item(1)?;
+        doc.insert(key, py_to_bson(&val)?);
+    }
+    Ok(doc)
+}
+
+/// Convert a Python list of dict-like objects to a BSON pipeline,
+/// validating that each stage has a single `$`-prefixed operator key.
+pub(crate) fn pylist_to_pipeline(list: &Bound<'_, PyList>) -> PyResult<Vec<Document>> {
+    let mut pipeline = Vec::with_capacity(list.len());
+    for (i, item) in list.iter().enumerate() {
+        let doc = pyany_to_doc(&item)?;
+        if let Some((first_key, _)) = doc.iter().next() {
+            if first_key.is_empty() || !first_key.starts_with('$') {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Pipeline stage {} has invalid operator key {:?} \
+                     (expected a $-prefixed operator like $match, $group, etc.). \
+                     All keys: {:?}",
+                    i,
+                    first_key,
+                    doc.keys().collect::<Vec<_>>()
+                )));
+            }
+        } else {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Pipeline stage {} is an empty document",
+                i
+            )));
+        }
+        pipeline.push(doc);
+    }
+    Ok(pipeline)
 }
 
 /// Convert a Python list to a BSON Array.

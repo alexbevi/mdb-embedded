@@ -4,7 +4,7 @@
 
 Shows how smongo validates documents on insert and update using MongoDB's
 $jsonSchema syntax. Invalid documents are rejected before they touch
-WiredTiger, so the data on disk is always clean.
+the embedded engine, so the data on disk stays consistent with your rules.
 
 Run:
     python examples/basic/05_schema_validation.py

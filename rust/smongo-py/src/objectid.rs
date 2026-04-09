@@ -67,7 +67,7 @@ pub struct ObjectId {
 }
 
 impl ObjectId {
-    /// Generate a new random ObjectId. Crate-internal convenience.
+    #[cfg(test)]
     pub(crate) fn generate(py: Python<'_>) -> Self {
         let raw = generate_raw();
         Self {

@@ -28,10 +28,10 @@ from smongo import WireServer
 PORT = 27023
 
 KNOWLEDGE = [
-    "smongo is an embedded MongoDB engine that runs entirely in-process on WiredTiger B-trees. No server process, no Docker, no network -- just import and go.",
+    "smongo is an embedded MongoDB engine that runs entirely in-process on redb. No server process, no Docker, no network -- just import and go.",
     "The wire protocol server lets any standard MongoDB driver (PyMongo, mongosh, Compass) connect to smongo over TCP. Clients have no idea they're talking to an embedded engine.",
     "smongo supports $vectorSearch as a native aggregation stage. It performs in-memory cosine or euclidean similarity search using NumPy or USearch, with optional MQL pre-filtering.",
-    "Full ACID transactions with snapshot isolation are supported across multiple collections, using WiredTiger's built-in MVCC concurrency control.",
+    "Full ACID transactions with snapshot isolation are supported across multiple collections via the embedded engine.",
     "The aggregation pipeline supports 25+ stages including $lookup joins, $graphLookup, $facet for parallel sub-pipelines, $setWindowFields, and $merge for materialized views.",
     "Atlas sync pushes local writes to MongoDB Atlas and pulls remote changes back, with per-document vector clocks for causal ordering and automatic conflict resolution.",
     "The query planner uses heuristic prefix-scoring to automatically select B-tree indexes. It supports compound, unique, sparse, TTL, text, hashed, wildcard, and partial indexes.",

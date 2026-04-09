@@ -1,47 +1,51 @@
 """Shared fixtures for the smongo test suite."""
 
-import os
-
 import pytest
 
-from smongo._smongo_core import RustLocalClient
+import smongo._smongo_core as _core
+from smongo.storage.redb_engine import RedbClient
+
+_REQUIRED_METHODS = [
+    "insert_one",
+    "insert_many",
+    "find",
+    "find_one",
+    "update_one",
+    "update_many",
+    "delete_one",
+    "delete_many",
+    "aggregate_engine",
+    "create_index",
+    "explain",
+]
+
+
+def pytest_configure(config):
+    """Fail fast when the native extension is stale or was never compiled."""
+    missing = [m for m in _REQUIRED_METHODS if not hasattr(_core.RedbLocalCollection, m)]
+    if missing:
+        raise SystemExit(
+            f"Stale native extension: RedbLocalCollection is missing {missing}. "
+            "Run `make build-debug` or `pip install -e .` from the repo root."
+        )
 
 
 @pytest.fixture
-def tmp_wt_dir(tmp_path):
-    """Fresh temporary directory suitable for WiredTiger."""
-    return str(tmp_path / "wt_data")
+def tmp_redb_dir(tmp_path):
+    """Fresh temporary directory for embedded redb data files."""
+    return str(tmp_path / "redb_data")
 
 
 @pytest.fixture
-def wt_connection(tmp_wt_dir):
-    """Raw SWIG WiredTiger connection (lazy import to avoid dlopen conflict)."""
-    import wiredtiger as wt
-
-    os.makedirs(tmp_wt_dir, exist_ok=True)
-    conn = wt.wiredtiger_open(tmp_wt_dir, "create")
-    yield conn
-    conn.close()
-
-
-@pytest.fixture
-def wt_session(wt_connection):
-    session = wt_connection.open_session()
-    yield session
-    session.close()
-
-
-@pytest.fixture
-def local_client(tmp_wt_dir):
-    client = RustLocalClient(tmp_wt_dir, durable=False)
+def local_client(tmp_redb_dir):
+    client = RedbClient(tmp_redb_dir)
     yield client
     client.close()
 
 
 @pytest.fixture
-def durable_client(tmp_wt_dir):
-    """RustLocalClient with WAL enabled for crash-recovery tests."""
-    client = RustLocalClient(tmp_wt_dir, durable=True)
+def durable_client(tmp_redb_dir):
+    client = RedbClient(tmp_redb_dir)
     yield client
     client.close()
 

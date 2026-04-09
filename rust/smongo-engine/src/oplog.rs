@@ -19,7 +19,7 @@
 //!
 //! let hub = Arc::new(OplogHub::new());
 //! let writer = OplogWriter::new(session, "__oplog_mydb_users", "mydb.users", Some(hub.clone()));
-//! writer.log("insert", Bson::String("abc".into()), Some(doc!{"name": "Alice"}), None, false, None)?;
+//! writer.log("insert", Bson::String("abc".into()), Some(doc!{"name": "Alice"}), Default::default())?;
 //! ```
 
 use std::collections::VecDeque;
@@ -308,19 +308,22 @@ pub struct CollectionOplogSettings {
     pub node_id: Option<String>,
 }
 
+/// Per-operation options for [`append_oplog`].
+#[derive(Default)]
+pub struct AppendOplogOpts {
+    pub version: Option<i64>,
+    pub internal: bool,
+    pub changed_fields: Option<Vec<String>>,
+}
+
 /// Append one oplog row using *session* (participates in the same storage transaction as data writes).
 pub fn append_oplog<S: StorageSession>(
     session: &S,
-    oplog_table: &str,
-    namespace: &str,
-    hub: Option<&Arc<OplogHub>>,
+    settings: &CollectionOplogSettings,
     op: &str,
     doc_id: Bson,
     payload: Option<Document>,
-    version: Option<i64>,
-    internal: bool,
-    changed_fields: Option<Vec<String>>,
-    node_id: Option<&str>,
+    opts: AppendOplogOpts,
 ) -> OplogResult<String> {
     let time_ns = now_time_nanos();
     let uuid_val = uuid::Uuid::new_v4();
@@ -335,15 +338,15 @@ pub fn append_oplog<S: StorageSession>(
 
     let entry = OplogEntry {
         ts,
-        ns: namespace.to_string(),
+        ns: settings.namespace.clone(),
         op: op.to_string(),
         doc_id: doc_id_json,
         payload: payload_json,
-        v: version,
+        v: opts.version,
         checksum: None,
-        internal,
-        changed_fields,
-        node_id: node_id.map(String::from),
+        internal: opts.internal,
+        changed_fields: opts.changed_fields,
+        node_id: settings.node_id.clone(),
     };
 
     let doc = oplog_entry_to_document(&entry)?;
@@ -351,12 +354,12 @@ pub fn append_oplog<S: StorageSession>(
     doc.to_writer(&mut buf)
         .map_err(|e| OplogError::Serialization(e.to_string()))?;
 
-    let mut cursor = session.open_cursor(oplog_table)?;
+    let mut cursor = session.open_cursor(&settings.oplog_table)?;
     cursor.set_key_str(&oplog_key);
     cursor.set_value_raw(&buf);
     cursor.insert()?;
 
-    if let Some(h) = hub {
+    if let Some(ref h) = settings.hub {
         h.notify(&entry);
     }
 
@@ -412,23 +415,15 @@ impl<S: StorageSession> OplogWriter<S> {
         op: &str,
         doc_id: Bson,
         payload: Option<Document>,
-        version: Option<i64>,
-        internal: bool,
-        changed_fields: Option<Vec<String>>,
+        opts: AppendOplogOpts,
     ) -> OplogResult<String> {
-        append_oplog(
-            &self.session,
-            &self.oplog_uri,
-            &self.namespace,
-            self.hub.as_ref(),
-            op,
-            doc_id,
-            payload,
-            version,
-            internal,
-            changed_fields,
-            self.node_id.as_deref(),
-        )
+        let settings = CollectionOplogSettings {
+            oplog_table: self.oplog_uri.clone(),
+            namespace: self.namespace.clone(),
+            hub: self.hub.clone(),
+            node_id: self.node_id.clone(),
+        };
+        append_oplog(&self.session, &settings, op, doc_id, payload, opts)
     }
 
     /// Remove all entries with keys strictly less than `key`.
@@ -525,7 +520,7 @@ impl<S: StorageSession> OplogReader<S> {
     /// Read entries after a checkpoint key, optionally skipping internal entries.
     ///
     /// Uses `search_near` on the staged checkpoint key (O(log n) on redb) matching
-    /// Python WiredTiger `OplogReader.read_from` semantics.
+    /// Same semantics as Python `smongo.oplog.OplogReader.read_from`.
     pub fn read_from(
         &self,
         checkpoint_key: Option<&str>,
@@ -1128,34 +1123,13 @@ mod tests {
             let w = OplogWriter::new(session, "__oplog_m", "db.m", None);
             w.ensure_table().unwrap();
             let _k1 = w
-                .log(
-                    "insert",
-                    Bson::String("a".into()),
-                    Some(doc! {"x": 1}),
-                    None,
-                    false,
-                    None,
-                )
+                .log("insert", Bson::String("a".into()), Some(doc! {"x": 1}), Default::default())
                 .unwrap();
             k_mid = w
-                .log(
-                    "update",
-                    Bson::String("b".into()),
-                    Some(doc! {"$set": {"y": 2}}),
-                    None,
-                    false,
-                    None,
-                )
+                .log("update", Bson::String("b".into()), Some(doc! {"$set": {"y": 2}}), Default::default())
                 .unwrap();
-            w.log(
-                "delete",
-                Bson::String("c".into()),
-                None,
-                None,
-                false,
-                None,
-            )
-            .unwrap();
+            w.log("delete", Bson::String("c".into()), None, Default::default())
+                .unwrap();
         }
 
         let session2 = backend.open_session().unwrap();

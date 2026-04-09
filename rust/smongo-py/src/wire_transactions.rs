@@ -1,7 +1,7 @@
 //! Transaction state and commit/abort helpers for wire protocol sessions.
 //!
 //! Each active transaction holds a reference to a Python `TransactionSession`
-//! whose underlying WiredTiger session spans all collection operations.
+//! whose underlying engine transaction spans all collection operations.
 
 use std::time::Instant;
 

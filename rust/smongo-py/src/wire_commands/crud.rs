@@ -1,12 +1,11 @@
 //! Wire protocol CRUD command handlers: `find`, `insert`, `update`, `delete`, `getMore`, `count`, `distinct`.
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-#[allow(unused_imports)]
-use pyo3::types::{PyDict, PyList, PyString};
+use pyo3::types::{PyDict, PyList};
 
 use std::collections::HashMap;
 
-use crate::local_collection::RustLocalCollection;
+use crate::redb_client::RedbLocalCollection;
 use crate::wire_context::ConnectionContext;
 use crate::wire_cursors::CursorRegistry;
 use crate::wire_dispatch::inc_counter;
@@ -53,7 +52,7 @@ fn cmd_find(
     let plan = coll_py
         .bind(py)
         .borrow()
-        .explain(py, Some(&filter_dict), false)?;
+        .explain(py, &filter_dict, false)?;
     let plan_bound = plan.bind(py);
     let plan_str = plan_bound
         .get_item("plan")?
@@ -72,7 +71,7 @@ fn cmd_find(
     };
     ctx.borrow_mut().last_plan_summary = plan_summary;
 
-    let docs = RustLocalCollection::find_streaming_typed(
+    let docs = RedbLocalCollection::find_streaming_typed(
         coll_py.clone_ref(py),
         py,
         Some(filter_dict.as_any()),
@@ -321,25 +320,26 @@ fn cmd_update(
                 coll_py
                     .bind(py)
                     .borrow()
-                    .update(py, &q_dict, u_bound, multi, false, None, false)?
+                    .update(py, &q_dict, u_bound, multi, false, false)?
             } else {
-                let target_py = coll_b.find_one(py, &q_dict)?;
-                let target = target_py.bind(py);
-                if !target.is_none() {
-                    let target_id = target.get_item("_id")?;
-                    let id_filter = PyDict::new(py);
-                    id_filter.set_item("_id", target_id)?;
-                    coll_b.find_one_and_replace(
-                        py,
-                        &id_filter,
-                        u_bound.cast::<PyDict>()?,
-                        false,
-                        "before",
-                        false,
-                    )?;
-                    Py::new(py, crate::results::UpdateResult::new(py, 1, 1, None))?.into_any()
-                } else {
-                    Py::new(py, crate::results::UpdateResult::new(py, 0, 0, None))?.into_any()
+                match coll_b.find_one(py, &q_dict, None)? {
+                    Some(target_py) => {
+                        let target = target_py.bind(py);
+                        let target_id = target.get_item("_id")?;
+                        let id_filter = PyDict::new(py);
+                        id_filter.set_item("_id", target_id)?;
+                        coll_b.find_one_and_replace_core(
+                            py,
+                            &id_filter,
+                            u_bound.cast::<PyDict>()?,
+                            false,
+                            "before",
+                            false,
+                        )?;
+                        Py::new(py, crate::results::UpdateResult::new(py, 1, 1, None))?.into_any()
+                    }
+                    None => Py::new(py, crate::results::UpdateResult::new(py, 0, 0, None))?
+                        .into_any(),
                 }
             };
             let result = result_py.bind(py);
@@ -580,7 +580,7 @@ fn cmd_distinct(
     let raw_query = cmd
         .get_item("query")?
         .unwrap_or_else(|| PyDict::new(py).into_any());
-    let docs = RustLocalCollection::find_streaming_typed(
+    let docs = RedbLocalCollection::find_streaming_typed(
         coll_py.clone_ref(py),
         py,
         Some(&raw_query),
@@ -743,7 +743,7 @@ fn cmd_find_and_modify(
     if remove {
         if let Some(ref sort) = sort_spec {
             if sort.is_truthy()? {
-                let matching_py = coll_py.bind(py).borrow().find(py, &qd)?;
+                let matching_py = coll_py.bind(py).borrow().find(py, &qd, None)?;
                 let matching = apply_sort_py(py, matching_py.bind(py).as_any(), sort)?;
                 if matching.is_truthy()? && matching.len()? > 0 {
                     let first = matching.get_item(0)?;
@@ -752,7 +752,7 @@ fn cmd_find_and_modify(
                     doc = coll_py
                         .bind(py)
                         .borrow()
-                        .find_one_and_delete(py, &id_filter, false)?
+                        .find_one_and_delete_core(py, &id_filter, false)?
                         .bind(py)
                         .clone();
                 } else {
@@ -762,7 +762,7 @@ fn cmd_find_and_modify(
                 doc = coll_py
                     .bind(py)
                     .borrow()
-                    .find_one_and_delete(py, &qd, false)?
+                    .find_one_and_delete_core(py, &qd, false)?
                     .bind(py)
                     .clone();
             }
@@ -770,7 +770,7 @@ fn cmd_find_and_modify(
             doc = coll_py
                 .bind(py)
                 .borrow()
-                .find_one_and_delete(py, &qd, false)?
+                .find_one_and_delete_core(py, &qd, false)?
                 .bind(py)
                 .clone();
         }
@@ -790,24 +790,24 @@ fn cmd_find_and_modify(
 
             let matching = if let Some(ref sort) = sort_spec {
                 if sort.is_truthy()? {
-                    let m = coll_py.bind(py).borrow().find(py, &qd)?;
+                    let m = coll_py.bind(py).borrow().find(py, &qd, None)?;
                     apply_sort_py(py, m.bind(py).as_any(), sort)?
                 } else {
-                    let first_py = coll_py.bind(py).borrow().find_one(py, &qd)?;
-                    let first = first_py.bind(py);
-                    if first.is_none() {
-                        PyList::empty(py).into_any()
-                    } else {
-                        PyList::new(py, [first])?.into_any()
+                    match coll_py.bind(py).borrow().find_one(py, &qd, None)? {
+                        None => PyList::empty(py).into_any(),
+                        Some(d) => {
+                            let b = d.bind(py);
+                            PyList::new(py, [b])?.into_any()
+                        }
                     }
                 }
             } else {
-                let first_py = coll_py.bind(py).borrow().find_one(py, &qd)?;
-                let first = first_py.bind(py);
-                if first.is_none() {
-                    PyList::empty(py).into_any()
-                } else {
-                    PyList::new(py, [first])?.into_any()
+                match coll_py.bind(py).borrow().find_one(py, &qd, None)? {
+                    None => PyList::empty(py).into_any(),
+                    Some(d) => {
+                        let b = d.bind(py);
+                        PyList::new(py, [b])?.into_any()
+                    }
                 }
             };
 
@@ -819,14 +819,14 @@ fn cmd_find_and_modify(
                     doc = coll_py
                         .bind(py)
                         .borrow()
-                        .find_one_and_update(py, &id_filter, us_bound, return_doc, false)?
+                        .find_one_and_update_core(py, &id_filter, us_bound, return_doc, false)?
                         .bind(py)
                         .clone();
                 } else {
                     doc = coll_py
                         .bind(py)
                         .borrow()
-                        .find_one_and_replace(
+                        .find_one_and_replace_core(
                             py,
                             &id_filter,
                             us_bound.cast::<PyDict>()?,
@@ -995,7 +995,7 @@ fn cmd_bulk_write(
                 let upd_result = coll_py
                     .bind(py)
                     .borrow()
-                    .update(py, &q_dict, &u_raw, multi, upsert, None, false)?;
+                    .update(py, &q_dict, &u_raw, multi, upsert, false)?;
                 let upserted_id = upd_result.bind(py).getattr("upserted_id")?;
                 if !upserted_id.is_none() {
                     n_upserted += 1;
@@ -1195,13 +1195,13 @@ fn cmd_data_size(
         }
 
         let doc_iter = if !query.is_empty() {
-            RustLocalCollection::find_streaming_typed(
+            RedbLocalCollection::find_streaming_typed(
                 coll_py.clone_ref(py),
                 py,
                 Some(query.as_any()),
             )?
         } else {
-            RustLocalCollection::find_streaming_typed(coll_py.clone_ref(py), py, None)?
+            RedbLocalCollection::find_streaming_typed(coll_py.clone_ref(py), py, None)?
         };
         let mut size: i64 = 0;
         let mut count: i64 = 0;

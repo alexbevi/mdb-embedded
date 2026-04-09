@@ -21,7 +21,7 @@ client = MongoClient(
 db = client["myapp"]
 users = db["users"]
 
-# This write hits local WiredTiger. No network. No latency.
+# This write hits local redb (smongo-engine). No network. No latency.
 users.insert_one({"name": "Alice", "role": "admin", "region": "us-east"})
 
 # This read scans a local B-tree index. Sub-millisecond.
@@ -33,7 +33,7 @@ users.find({"region": "us-east", "role": "admin"}).limit(10)
 
 One constructor argument. That's the difference between "local database" and "distributed data system with bidirectional cloud sync."
 
-**Browser track:** This document describes the **Python** local-first path (WiredTiger + `SyncManager`). **Local-first in the browser** is the **same smongo-engine** compiled to WASM with OPFS-backed persistence and (roadmap) Atlas sync — see [ROADMAP.md](ROADMAP.md) (Part 2 — WASM) and [rust/smongo-engine/wasm/PERSISTENCE-AND-LIFECYCLE.md](rust/smongo-engine/wasm/PERSISTENCE-AND-LIFECYCLE.md).
+**Browser track:** This document describes the **Python** local-first path (**redb** + `SyncManager`). **Local-first in the browser** is the **same smongo-engine** compiled to WASM with OPFS-backed persistence — see [rust/smongo-engine/wasm/PERSISTENCE-AND-LIFECYCLE.md](rust/smongo-engine/wasm/PERSISTENCE-AND-LIFECYCLE.md).
 
 ---
 
@@ -41,7 +41,7 @@ One constructor argument. That's the difference between "local database" and "di
 
 Traditional client-server databases put the network between you and your data. Every read is a round trip. Every write is a round trip. Go offline and you go dark.
 
-smongo inverts this. Your data lives **with you** -- on disk, in WiredTiger B-trees, with ACID transactions, real indexes, and the full MongoDB query language. The cloud is a replication target, not a dependency.
+smongo inverts this. Your data lives **with you** -- on disk, in the embedded **redb** engine, with ACID transactions, real indexes, and the full MongoDB query language. The cloud is a replication target, not a dependency.
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
@@ -54,7 +54,7 @@ smongo inverts this. Your data lives **with you** -- on disk, in WiredTiger B-tr
    ┌─────────────────┐                    ┌─────────────────┐
    │  Local Engine    │                    │  SyncManager    │
    │                  │    oplog tailing   │  (background)   │
-   │  WiredTiger      │◄──────────────────►│                 │
+   │  redb + engine   │◄──────────────────►│                 │
    │  B-tree storage  │                    │  PUSH ──► Atlas │
    │  ACID txns       │                    │  PULL ◄── Atlas │
    │  Real indexes    │                    │                 │
@@ -78,7 +78,7 @@ smongo inverts this. Your data lives **with you** -- on disk, in WiredTiger B-tr
 ### What happens when you write
 
 1. Your `insert_one` / `update_one` / `delete_one` hits the local Rust engine.
-2. WiredTiger wraps the mutation in a transaction: data table + index tables + oplog entry, atomically.
+2. The engine wraps the mutation in a transaction: data table + index tables + oplog entry, atomically.
 3. The write returns. You're done. Sub-100μs for a single insert.
 4. In the background, the `SyncManager` thread wakes up (default: every 5 seconds), tails the oplog from its last checkpoint, batches mutations into pymongo `bulk_write` operations, and pushes them to Atlas.
 5. The oplog checkpoint advances. Successfully pushed entries are compacted.
@@ -87,12 +87,12 @@ smongo inverts this. Your data lives **with you** -- on disk, in WiredTiger B-tr
 
 1. Your `find` / `find_one` / `aggregate` hits the local Rust engine.
 2. The query planner picks the optimal index (or falls back to collection scan).
-3. A `RustStreamingCursor` lazily pulls documents from WiredTiger -- only the documents you actually consume are deserialized from BSON.
+3. Cursors lazily pull matching documents from the local store — only what you iterate is deserialized from BSON.
 4. No network. No round trip. No cold start.
 
 ### What happens when you go offline
 
-Nothing changes. Writes keep landing in WiredTiger. The oplog keeps accumulating. The sync thread notices connectivity is gone, backs off exponentially (up to 5 minutes between retries), and waits. When the network returns, it picks up from its last checkpoint and pushes everything that was missed. Zero data loss. Zero manual intervention.
+Nothing changes. Writes keep landing in **redb**. The oplog keeps accumulating. The sync thread notices connectivity is gone, backs off exponentially (up to 5 minutes between retries), and waits. When the network returns, it picks up from its last checkpoint and pushes everything that was missed. Zero data loss. Zero manual intervention.
 
 ---
 
@@ -161,7 +161,7 @@ When the sync layer writes a pulled document to the local engine, it passes `_in
 
 ### Checkpointing: Crash-Safe Progress
 
-All sync state is persisted in a dedicated WiredTiger table (`table:__sync_checkpoint`):
+All sync state is persisted under stable keys in the local store (logical names like `__sync_checkpoint` on **redb**):
 
 | Key Pattern | Value | Purpose |
 |---|---|---|
@@ -332,7 +332,7 @@ On consecutive failures, the sync thread applies exponential backoff: `min(inter
 │   Desktop / Mobile   │         │  MongoDB Atlas    │
 │                      │  sync   │                   │
 │   smongo (embedded)  │◄───────►│  Cloud database   │
-│   WiredTiger on disk │         │                   │
+│   redb on disk       │         │                   │
 │   Full MQL locally   │         │  Other clients    │
 │                      │         │  also write here  │
 └──────────────────────┘         └──────────────────┘
@@ -392,7 +392,7 @@ server.start()
 # to mongodb://localhost:27017 -- reads are local, writes sync to Atlas
 ```
 
-Vector embeddings, chat histories, document stores, RAG retrieval -- all running against local WiredTiger with `$vectorSearch` support (NumPy / USearch). No network latency on the inference hot path. Training data syncs from Atlas. Generated artifacts sync back.
+Vector embeddings, chat histories, document stores, RAG retrieval -- all running against the **local embedded engine** with `$vectorSearch` support (NumPy / USearch). No network latency on the inference hot path. Training data syncs from Atlas. Generated artifacts sync back.
 
 ### Pattern 5: Multi-Region / Multi-Site
 
@@ -433,7 +433,7 @@ This isn't true multi-master with linearizable consistency -- it's **eventually 
 MongoDB's own Atlas Device Sync (formerly Realm Sync) is purpose-built for mobile and has its own SDK, its own data model (Realm objects), and its own conflict resolution (operational transforms). smongo is different:
 
 - **Same query language everywhere** -- MQL, not a subset or a different ORM
-- **Same storage engine** -- WiredTiger, not a custom mobile database
+- **Same document model** -- BSON + MQL on **redb**, not a custom mobile SQL store
 - **Same wire protocol** -- any MongoDB driver connects natively
 - **No proprietary SDK** -- it's pymongo (or any driver) all the way down
 - **You own the sync** -- configurable strategies, custom resolvers, selective filters, CRDT fields
@@ -449,7 +449,7 @@ CouchDB pioneered offline-first with master-master replication, but it has its o
 
 ### It's not SQLite + custom sync
 
-SQLite is an incredible embedded database, but bolting MongoDB-compatible sync onto it means building a translation layer between SQL and MQL, between relational and document, between SQLite's type system and BSON. smongo skips all that -- it's documents in, documents out, WiredTiger underneath, same as the real thing.
+SQLite is an incredible embedded database, but bolting MongoDB-compatible sync onto it means building a translation layer between SQL and MQL, between relational and document, between SQLite's type system and BSON. smongo skips all that — documents in, documents out, **smongo-engine + redb** underneath, wire-compatible with MongoDB clients.
 
 ---
 

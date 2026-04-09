@@ -1,8 +1,8 @@
 //! Rust-accelerated sync helpers.
 //!
 //! The full SyncManager orchestration stays in Python (smongo/sync.py) because
-//! it is deeply coupled to Python objects on both ends (local LocalCollection,
-//! remote PyMongo collection, WT sessions for checkpoint persistence).
+//! it is deeply coupled to Python objects on both ends (local collection,
+//! remote PyMongo collection, redb KV for checkpoints and tombstones).
 //!
 //! This module ports the hot-path helpers that are called per-document during
 //! push/pull cycles: ObjectId type bridging and the upsert-with-conflict-

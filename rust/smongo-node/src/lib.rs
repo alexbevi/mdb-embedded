@@ -265,12 +265,11 @@ impl Collection {
 
 #[napi]
 impl Collection {
-    /// Release the underlying WiredTiger session and collection handle.
+    /// Release the underlying engine collection handle.
     ///
     /// Must be called before `db.dropCollection()` when a JS-side handle
-    /// was previously obtained for the same collection name, because
-    /// WiredTiger refuses to drop tables while any session holds cached
-    /// cursors on them.
+    /// was previously obtained for the same collection name, so the engine
+    /// can drop tables without conflicting open handles.
     #[napi]
     pub fn close(&mut self) {
         self.inner.take();
@@ -441,6 +440,12 @@ impl Collection {
                 smongo_engine::explain::ExecutionPlanExplain::IndexSeek { .. } => "IXSEEK",
                 smongo_engine::explain::ExecutionPlanExplain::Geo { .. } => "GEO",
                 smongo_engine::explain::ExecutionPlanExplain::OrUnion => "OR_UNION",
+                smongo_engine::explain::ExecutionPlanExplain::CoveringIndexScan { .. } => "IXSCAN_COVERING",
+                smongo_engine::explain::ExecutionPlanExplain::SortedIndexScan { .. } => "IXSCAN_SORTED",
+                smongo_engine::explain::ExecutionPlanExplain::VectorIndexSearch { .. } => "VECTOR_SEARCH",
+                smongo_engine::explain::ExecutionPlanExplain::BitmapScan { .. } => "BITMAP_SCAN",
+                smongo_engine::explain::ExecutionPlanExplain::TextIndexScan { .. } => "TEXT_SCAN",
+                smongo_engine::explain::ExecutionPlanExplain::PrefixIndexScan { .. } => "PREFIX_SCAN",
             },
             "indexUsed": explain.index_used,
             "planReason": explain.plan_reason,
@@ -477,6 +482,12 @@ impl Collection {
             expire_after_seconds: o
                 .get("expireAfterSeconds")
                 .and_then(|v| v.as_u64()),
+            partial_filter_expression: None,
+            collation: None,
+            index_type: None,
+            vector_options: None,
+            text_options: None,
+            prefix_options: None,
         });
         self.engine()?
             .create_index(keys_doc, opts)

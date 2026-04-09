@@ -93,20 +93,6 @@ fn convert_inbound<'py>(
     Ok(value.clone())
 }
 
-/// Like [`normalize_inbound`] but returns a typed `Py<PyDict>` — avoids a
-/// follow-up `.cast::<PyDict>()` at every call site in the CRUD handlers.
-///
-/// Wire CRUD handlers no longer call this (raw decoder produces engine
-/// types directly), but it remains available for the LocalClient path.
-#[allow(dead_code)]
-pub fn normalize_inbound_dict<'py>(
-    py: Python<'py>,
-    doc: &Bound<'py, PyAny>,
-) -> PyResult<Bound<'py, PyDict>> {
-    let raw = normalize_inbound(py, doc)?;
-    Ok(raw.into_bound(py).cast_into::<PyDict>()?)
-}
-
 #[pyfunction]
 pub fn normalize_inbound<'py>(py: Python<'py>, doc: &Bound<'py, PyAny>) -> PyResult<Py<PyAny>> {
     if doc.is_none() {

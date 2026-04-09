@@ -5,12 +5,12 @@ build-backend = "maturin"
 [project]
 name = "smongo"
 version = "0.9.3"
-description = "Small MongoDB, big ambitions -- a local-first document engine with WiredTiger and Atlas sync"
+description = "Small MongoDB, big ambitions -- a local-first document engine (redb + Rust) with Atlas sync"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{name = "smongo contributors"}]
-keywords = ["mongodb", "embedded", "wiredtiger", "database", "local-first", "sync", "smongo"]
+keywords = ["mongodb", "embedded", "redb", "database", "local-first", "sync", "smongo"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -23,7 +23,6 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "wiredtiger>=4.0",
     "pymongo>=4.6",
 ]
 
@@ -75,7 +74,6 @@ strict = true
 
 [[tool.mypy.overrides]]
 module = [
-    "wiredtiger",
     "crc32c",
     "snappy",
     "zstandard",

@@ -47,11 +47,11 @@ export declare class ClientSession {
 
 export declare class Collection {
   /**
-   * Release the underlying WiredTiger session and collection handle.
+   * Release the underlying engine collection handle.
    *
    * Must be called before `db.dropCollection()` when a JS-side handle
    * was previously obtained for the same collection name, because
-   * WiredTiger refuses to drop tables while any session holds cached
+   * The engine may refuse to drop tables while handles hold cached
    * cursors on them.
    */
   close(): void

@@ -66,19 +66,26 @@ pub struct ExplainResult {
 /// Simplified execution plan for explain output
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ExecutionPlanExplain {
-    /// Full collection scan
     #[serde(rename = "COLLSCAN")]
     CollectionScan,
-    /// Index scan with filtering
     #[serde(rename = "IXSCAN")]
     IndexScan { index_name: String },
-    /// Direct index seek
     #[serde(rename = "IXSEEK")]
     IndexSeek { index_name: String },
-    /// `2dsphere` geospatial index probe
+    #[serde(rename = "IXSCAN_COVERING")]
+    CoveringIndexScan { index_name: String },
+    #[serde(rename = "IXSCAN_SORTED")]
+    SortedIndexScan { index_name: String },
+    #[serde(rename = "VECTOR_SEARCH")]
+    VectorIndexSearch { index_name: String },
+    #[serde(rename = "BITMAP_SCAN")]
+    BitmapScan { index_name: String },
+    #[serde(rename = "TEXT_SCAN")]
+    TextIndexScan { index_name: String },
+    #[serde(rename = "PREFIX_SCAN")]
+    PrefixIndexScan { index_name: String },
     #[serde(rename = "GEO")]
     Geo { index_name: String },
-    /// Union of plans (`$or`)
     #[serde(rename = "OR_UNION")]
     OrUnion,
 }
@@ -91,6 +98,24 @@ impl From<&ExecutionPlan> for ExecutionPlanExplain {
                 index_name: index_name.clone(),
             },
             ExecutionPlan::IndexSeek { index_name, .. } => ExecutionPlanExplain::IndexSeek {
+                index_name: index_name.clone(),
+            },
+            ExecutionPlan::CoveringIndexScan { index_name, .. } => ExecutionPlanExplain::CoveringIndexScan {
+                index_name: index_name.clone(),
+            },
+            ExecutionPlan::SortedIndexScan { index_name, .. } => ExecutionPlanExplain::SortedIndexScan {
+                index_name: index_name.clone(),
+            },
+            ExecutionPlan::VectorIndexSearch { index_name, .. } => ExecutionPlanExplain::VectorIndexSearch {
+                index_name: index_name.clone(),
+            },
+            ExecutionPlan::BitmapScan { index_name, .. } => ExecutionPlanExplain::BitmapScan {
+                index_name: index_name.clone(),
+            },
+            ExecutionPlan::TextIndexScan { index_name, .. } => ExecutionPlanExplain::TextIndexScan {
+                index_name: index_name.clone(),
+            },
+            ExecutionPlan::PrefixIndexScan { index_name, .. } => ExecutionPlanExplain::PrefixIndexScan {
                 index_name: index_name.clone(),
             },
             ExecutionPlan::GeoNear { index_name, .. }
@@ -111,13 +136,18 @@ impl ExplainResult {
         plan_reason: String,
     ) -> Self {
         let index_used = match &execution_plan {
-            ExecutionPlan::CollectionScan => None,
-            ExecutionPlan::IndexScan { index_name, .. } => Some(index_name.clone()),
-            ExecutionPlan::IndexSeek { index_name, .. } => Some(index_name.clone()),
-            ExecutionPlan::GeoNear { index_name, .. }
+            ExecutionPlan::CollectionScan | ExecutionPlan::OrUnionPlans { .. } => None,
+            ExecutionPlan::IndexScan { index_name, .. }
+            | ExecutionPlan::IndexSeek { index_name, .. }
+            | ExecutionPlan::CoveringIndexScan { index_name, .. }
+            | ExecutionPlan::SortedIndexScan { index_name, .. }
+            | ExecutionPlan::VectorIndexSearch { index_name, .. }
+            | ExecutionPlan::BitmapScan { index_name, .. }
+            | ExecutionPlan::TextIndexScan { index_name, .. }
+            | ExecutionPlan::PrefixIndexScan { index_name, .. }
+            | ExecutionPlan::GeoNear { index_name, .. }
             | ExecutionPlan::GeoCapWithin { index_name, .. }
             | ExecutionPlan::GeoCellCover { index_name, .. } => Some(index_name.clone()),
-            ExecutionPlan::OrUnionPlans { .. } => None,
         };
 
         Self {
@@ -148,13 +178,31 @@ impl ExplainResult {
         let plan_str = match &self.execution_plan {
             ExecutionPlanExplain::CollectionScan => "COLLSCAN (full collection scan)".to_string(),
             ExecutionPlanExplain::IndexScan { index_name } => {
-                format!("IXSCAN (index scan on '{}')", index_name)
+                format!("IXSCAN (index scan on '{index_name}')")
             }
             ExecutionPlanExplain::IndexSeek { index_name } => {
-                format!("IXSEEK (index seek on '{}')", index_name)
+                format!("IXSEEK (index seek on '{index_name}')")
+            }
+            ExecutionPlanExplain::CoveringIndexScan { index_name } => {
+                format!("IXSCAN_COVERING (covering index on '{index_name}' - no doc fetch)")
+            }
+            ExecutionPlanExplain::SortedIndexScan { index_name } => {
+                format!("IXSCAN_SORTED (sorted index walk on '{index_name}')")
+            }
+            ExecutionPlanExplain::VectorIndexSearch { index_name } => {
+                format!("VECTOR_SEARCH (HNSW index '{index_name}')")
+            }
+            ExecutionPlanExplain::BitmapScan { index_name } => {
+                format!("BITMAP_SCAN (bitmap index '{index_name}')")
+            }
+            ExecutionPlanExplain::TextIndexScan { index_name } => {
+                format!("TEXT_SCAN (text index '{index_name}')")
+            }
+            ExecutionPlanExplain::PrefixIndexScan { index_name } => {
+                format!("PREFIX_SCAN (prefix index '{index_name}')")
             }
             ExecutionPlanExplain::Geo { index_name } => {
-                format!("GEO (2dsphere index '{}')", index_name)
+                format!("GEO (2dsphere index '{index_name}')")
             }
             ExecutionPlanExplain::OrUnion => "OR_UNION (union of branch plans)".to_string(),
         };

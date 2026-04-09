@@ -1,6 +1,6 @@
 FROM python:3.11-bookworm
 
-# WiredTiger native build dependencies
+# Native libs for compression / common build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake swig ninja-build \
     libsnappy-dev liblz4-dev libzstd-dev zlib1g-dev \

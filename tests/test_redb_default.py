@@ -1,15 +1,17 @@
 """
-Test that MongoClient defaults to redb backend.
-
-This verifies Phase 4 - redb is now the primary storage backend.
+Test that MongoClient uses the redb embedded backend for local URIs.
 """
+
 import os
 import tempfile
+
+import pytest
+
 from smongo.client import MongoClient
 
 
 def test_default_backend_is_redb():
-    """Verify that local:// URIs default to redb."""
+    """Verify that local:// URIs use redb."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test")
         client = MongoClient(f"local://{db_path}")
@@ -19,37 +21,25 @@ def test_default_backend_is_redb():
         assert type(client.client).__name__ == "RedbClient"
 
         client.close()
-        print("✓ Default backend is redb")
 
 
-def test_explicit_wiredtiger_backend():
-    """Verify that local+wt:// URIs use WiredTiger."""
+def test_embedded_uri_only_accepts_local_scheme():
+    """URIs with a scheme must use exactly local:// — not legacy typos or other protocols."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = os.path.join(tmpdir, "test_wt")
-        client = MongoClient(f"local+wt://{db_path}")
+        db_path = os.path.join(tmpdir, "data")
+        with pytest.raises(ValueError, match="Unsupported URI scheme"):
+            MongoClient(f"local+bad://{db_path}")
+        with pytest.raises(ValueError, match="Unsupported URI scheme"):
+            MongoClient(f"file://{db_path}")
 
-        assert client.backend == "wiredtiger"
-        assert type(client.client).__name__ == "LocalClient"
 
+def test_embedded_bare_path_without_scheme():
+    """A path with no :// is still accepted (same as passing it to local://)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "bare")
+        client = MongoClient(db_path)
+        assert client.backend == "redb"
         client.close()
-        print("✓ local+wt:// uses WiredTiger")
-
-
-def test_env_var_backend():
-    """Verify SMONGO_BACKEND env var can override."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = os.path.join(tmpdir, "test_env")
-
-        # Force WiredTiger via env var
-        os.environ["SMONGO_BACKEND"] = "wiredtiger"
-        try:
-            client = MongoClient(f"local://{db_path}")
-            assert client.backend == "wiredtiger"
-            client.close()
-        finally:
-            del os.environ["SMONGO_BACKEND"]
-
-        print("✓ SMONGO_BACKEND env var works")
 
 
 def test_redb_crud_through_mongoclient():
@@ -92,7 +82,6 @@ def test_redb_crud_through_mongoclient():
         assert count == 0
 
         client.close()
-        print("✓ Full CRUD through MongoClient + redb works!")
 
 
 def test_redb_indexes_through_mongoclient():
@@ -116,13 +105,7 @@ def test_redb_indexes_through_mongoclient():
         coll.drop_index(index_name)
 
         client.close()
-        print("✓ Index operations through MongoClient + redb work!")
 
 
 if __name__ == "__main__":
-    test_default_backend_is_redb()
-    test_explicit_wiredtiger_backend()
-    test_env_var_backend()
-    test_redb_crud_through_mongoclient()
-    test_redb_indexes_through_mongoclient()
-    print("\n✅ Phase 4 COMPLETE - redb is now the default backend!")
+    raise SystemExit(pytest.main([__file__, "-q"]))

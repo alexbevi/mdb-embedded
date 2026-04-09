@@ -6,9 +6,9 @@
 
 Most "embedded MongoDB" solutions are mocks. They intercept PyMongo calls, store documents in Python dictionaries, and approximate query behavior with hand-rolled filtering. They break on edge cases. They don't support real aggregation. They don't have indexes. They don't crash-recover.
 
-smongo uses **WiredTiger** -- the same B-Tree storage engine that MongoDB acquired in 2014 and made the default in 3.2. Documents are stored as **native BSON bytes** in WiredTiger B-Tree tables. Writes are **ACID transactions**. Indexes are **real B-Trees** with lexicographically sortable keys. The query planner does **heuristic prefix-scoring index selection**.
+smongo embeds **`smongo-engine`** — a Rust implementation of MQL, aggregation, indexes, and sync-oriented oplog — persisted on native targets with **[redb](https://github.com/cberner/redb)** (embedded ACID B-tree). Documents live as **native BSON bytes**. Writes run in **engine transactions** that commit to a single redb write transaction. Indexes are real ordered key structures with planner-driven selection.
 
-When you test against this, you're testing against the real thing. Not an approximation.
+When you test against this, you're exercising the same *protocol and query semantics* you use against Atlas, backed by a real on-disk engine — not an in-memory dict.
 
 ---
 
@@ -23,9 +23,10 @@ users.find({"city": "NYC", "age": {"$gt": 30}})
 ```
 
 That query runs identically against:
-- A local WiredTiger store on your laptop
-- A MongoDB Atlas cluster in the cloud
-- A hybrid setup where both exist simultaneously
+
+- A **local** `local://` database (redb file on disk)
+- A **MongoDB Atlas** cluster in the cloud
+- A **hybrid** setup where both exist simultaneously
 
 The `MongoClient` URI is the only thing that changes:
 
@@ -41,219 +42,107 @@ Same API. Same operators. Same aggregation pipeline. Same index semantics.
 
 ## 3. Real Drivers Can Connect
 
-The wire protocol server isn't a toy. It speaks OP_MSG (opcode 2013) -- the actual binary protocol that every MongoDB driver uses. Start the server and connect `mongosh`:
+The wire protocol server isn't a toy. It speaks OP_MSG (opcode 2013) — the binary protocol MongoDB drivers use. Start the server and connect `mongosh`:
 
 ```bash
 $ python -m smongo.wire --port 27017
 $ mongosh mongodb://localhost:27017
 ```
 
-Or connect PyMongo. Or the Node.js driver. Or the Go driver. Or Compass. Any MongoDB tool works because the protocol is the real one.
+Or connect PyMongo, Node, Go, Compass, etc.
 
-The server handles 80+ commands: `find`, `insert`, `update`, `delete`, `aggregate`, `createIndexes`, `listCollections`, `findAndModify`, `getMore`, `killCursors`, and more. It advertises wire version 0-21, 16MB max BSON object size, and 48MB max message size -- matching production MongoDB's capabilities.
-
-This means you can use smongo as a **development server** for applications written in any language. Not just Python.
+The server handles many commands: `find`, `insert`, `update`, `delete`, `aggregate`, `createIndexes`, `listCollections`, `findAndModify`, `getMore`, `killCursors`, and more. It advertises wire version 0–21, 16MB max BSON object size, and 48MB max message size — aligned with production MongoDB expectations.
 
 ---
 
 ## 4. Bidirectional Sync That Actually Works
 
-Local-first databases are easy until you need to sync. Then you discover the hard problems: conflict resolution, echo prevention, checkpoint persistence, partial failure recovery, selective filtering, and backoff strategies.
+Local-first databases are easy until you need to sync. Then you discover conflict resolution, echo prevention, checkpoint persistence, partial failure recovery, selective filtering, and backoff strategies.
 
-smongo's `SyncManager` solves all of them:
+smongo's `SyncManager` addresses these:
 
 - **Push**: Tail the local oplog, batch `bulk_write` to Atlas. Checkpoint after each batch. Auto-compact the oplog after successful push.
 - **Pull**: MongoDB Change Streams with resume token persistence (preferred), or timestamp-based polling (fallback). Initial full snapshot on first pull.
-- **Conflict resolution**: Last-write-wins, local-wins, remote-wins, field-level merge, or a custom callable. Field-level merge uses oplog `changed_fields` to merge non-conflicting edits and falls back to per-field LWW for conflicts.
-- **Echo prevention**: The `_internal=True` flag on writes from the sync layer suppresses oplog entries, preventing infinite push-pull loops.
-- **Exponential backoff**: On consecutive failures, sleep doubles up to 5 minutes. On success, it resets.
-- **Selective filters**: Per-collection MQL filters control which documents sync. Only sync US users: `{"region": "us-east-1"}`. Only sync large orders: `{"$expr": {"$gt": ["$total", 100]}}`.
+- **Conflict resolution**: Last-write-wins, local-wins, remote-wins, field-level merge, or a custom callable.
+- **Echo prevention**: `_internal=True` on sync-applied writes suppresses oplog entries so you don't loop push ↔ pull.
+- **Exponential backoff** and **selective sync filters** (per-collection MQL).
 
-The sync state is checkpointed in a dedicated WiredTiger table (`table:__sync_checkpoint`), so it survives crashes and restarts.
+Sync checkpoints and metadata live in **engine tables** (e.g. `table:__sync_checkpoint` naming) so state survives restarts.
 
 ---
 
 ## 5. The Aggregation Pipeline Is Real
 
-This isn't a handful of `$match` and `$group` stages bolted on as an afterthought. The pipeline engine supports 25+ stages:
-
-`$match`, `$group`, `$project`, `$sort`, `$limit`, `$skip`, `$unwind`, `$lookup`, `$addFields`/`$set`, `$count`, `$replaceRoot`, `$sample`, `$vectorSearch`, `$facet`, `$out`, `$merge`
-
-With 17 group accumulators: `$sum`, `$avg`, `$min`, `$max`, `$push`, `$addToSet`, `$first`, `$last`, `$firstN`, `$lastN`, `$stdDevPop`, `$stdDevSamp`, `$mergeObjects`, `$top`, `$bottom`, `$topN`, `$bottomN`
-
-And a full expression engine: conditionals (`$cond`, `$ifNull`, `$switch`), string ops (`$concat`, `$toUpper`, `$toLower`), array ops (`$filter`, `$arrayElemAt`, `$concatArrays`), arithmetic (`$add`, `$subtract`, `$multiply`, `$divide`, `$mod`, `$abs`, `$ceil`, `$floor`, `$round`), comparisons, booleans, and type introspection.
-
-You can build analytics dashboards, denormalized views, materialized aggregations, and semantic search -- all running locally with zero network dependency.
+The pipeline engine supports many stages (`$match`, `$group`, `$project`, `$sort`, `$lookup`, `$vectorSearch`, `$facet`, `$out`, `$merge`, …), group accumulators, and a broad expression language — suitable for analytics, denormalized views, and materialized outputs running locally.
 
 ---
 
 ## 6. Vector Search Runs In-Process
 
-`$vectorSearch` is a first-class aggregation stage:
-
-```python
-db.articles.aggregate([{
-    "$vectorSearch": {
-        "path": "embedding",
-        "queryVector": [0.1, 0.2, ...],
-        "limit": 5,
-        "metric": "cosine",
-        "filter": {"published": True}
-    }
-}])
-```
-
-No vector database. No network round-trip. No API key. Embeddings stored alongside documents, searched in-memory with NumPy (brute-force) or USearch (approximate nearest neighbor).
-
-For edge AI applications -- RAG on a laptop, semantic search on a device, local document retrieval -- this means the entire stack runs locally.
+`$vectorSearch` is a first-class aggregation stage. Embeddings live alongside documents; search uses NumPy (exact) or USearch (ANN) without a separate vector service.
 
 ---
 
 ## 7. ACID Transactions Are Not Optional
 
-Every write -- insert, update, delete -- is wrapped in a WiredTiger transaction. Data table, index tables, and oplog are committed or rolled back as a single atomic unit.
-
-Unique index violation on the third of five indexes? All three index writes are rolled back. The data table write is rolled back. The oplog entry is never written. The collection is untouched.
-
-This isn't a nice-to-have. It's what prevents data corruption in concurrent, crash-prone environments -- exactly the environments where an embedded database lives.
+Every local write goes through the engine’s transactional API. Data, indexes, and oplog updates for that operation commit or roll back together. See [ACID-TRANSACTIONS.md](ACID-TRANSACTIONS.md).
 
 ---
 
 ## 8. Lazy Reads -- No Wasted Work
 
-Most embedded databases materialize every matching document into a list, even when you only need the first one. A `find_one()` on a million-document collection deserializes a million BSON blobs just to return `[0]`.
-
-smongo's read path is **streaming**. `Collection.find()` returns a `Cursor` backed by a `RustStreamingCursor` that pulls documents from WiredTiger one at a time:
-
-- `find({}).limit(10)` → deserializes **exactly 10** BSON documents, not the entire collection
-- `find_one({"city": "NYC"})` → deserializes **exactly 1** document, then stops
-- `count_documents({})` → iterates the WiredTiger cursor **without any BSON deserialization**
-
-The streaming cursor uses the same query planner as everything else -- PK lookups, index scans, `$in` multi-point seeks, and `$or`-unions all stream lazily. No intermediate lists. No wasted CPU cycles.
+The read path is **streaming** where it matters: `find()` uses cursors that decode BSON as you iterate; `find_one()` stops at the first match; `count_documents` can count without building Python lists of full documents. The same planner that accelerates reads also accelerates targeted updates and deletes.
 
 ---
 
 ## 9. The Query Planner Accelerates Writes Too
 
-In most embedded databases, `update({"_id": "abc"}, ...)` scans every document looking for the one with `_id` = `"abc"`. That's O(n).
-
-smongo's write path routes through the same query planner that serves reads:
-
-- `update({"_id": "abc"}, ...)` → **PK lookup**: O(log n)
-- `update({"email": "alice@..."}, ...)` with `email_1` index → **index scan**: O(log n + k)
-- `delete({"status": "expired"})` with no index → **collection scan**: O(n)
-
-The planner doesn't just accelerate reads. It accelerates every write that targets a subset of documents.
+Writes that identify documents by `_id` or by an index use the same planning logic as reads (PK or index seek) instead of always scanning the full collection.
 
 ---
 
 ## 10. The Oplog Makes Everything Possible
 
-Every mutation -- every insert, update, delete, index create, index drop -- is append-logged to a WiredTiger oplog table with timestamps, version counters, checksums, and changed-field tracking.
-
-This oplog enables:
-- **Sync**: The push path tails the oplog to know what changed since the last checkpoint
-- **Change streams**: `collection.watch()` tails the oplog and emits MongoDB-compatible events
-- **Conflict resolution**: Version counters and timestamps detect and resolve conflicts
-- **Field-level merge**: The `changed_fields` list lets the sync layer merge non-conflicting edits from different sources
-- **Audit trail**: Every mutation is inspectable in the web dashboard
-
-The oplog supports **compaction** to bound disk growth: `compact_oplog(keep=1000)` or automatic truncation after sync push.
+Mutations are append-logged with timestamps, version counters, checksums, and changed-field tracking. That powers **sync push**, **change streams**, **conflict resolution**, and **auditing**. Compaction is available via **`OplogWriter.truncate_*`** and sync’s auto-compact path.
 
 ---
 
 ## 11. ObjectId Is Spec-Compliant
 
-Not a UUID. Not a random string. A proper 12-byte MongoDB ObjectId:
-
-```
-┌──────────┬──────────────┬──────────────┐
-│ 4 bytes  │   5 bytes    │   3 bytes    │
-│timestamp │ random value │  counter     │
-│(seconds) │ (per-process)│ (mod 2^24)   │
-└──────────┴──────────────┴──────────────┘
-```
-
-Timestamp-prefixed for natural insertion-order sorting in WiredTiger's B-Tree. Thread-safe counter for uniqueness within a process. Random bytes for uniqueness across processes.
-
-`generation_time` extracts the creation timestamp from any ObjectId -- the same API as PyMongo's ObjectId.
+Proper 12-byte MongoDB ObjectId layout: timestamp, random, counter — `generation_time` matches PyMongo’s behavior.
 
 ---
 
 ## 12. Schema Validation at the Edge
 
-`$jsonSchema` validation enforces document structure on every insert and update:
-
-```python
-db.create_collection("users", validator={
-    "$jsonSchema": {
-        "bsonType": "object",
-        "required": ["name", "email"],
-        "properties": {
-            "name": {"bsonType": "string", "minLength": 1},
-            "email": {"bsonType": "string", "pattern": "^.+@.+$"},
-            "age": {"bsonType": "int", "minimum": 0, "maximum": 150}
-        },
-        "additionalProperties": False
-    }
-})
-```
-
-Validation errors include the full dot-path to the failing field. Invalid documents are rejected before the WiredTiger transaction starts, so they never touch disk.
-
-This matters for edge deployments where you can't trust the input source. The schema enforces data quality locally, and clean data syncs to the cloud.
+`$jsonSchema` runs on insert/update so invalid documents fail before durable storage.
 
 ---
 
 ## 13. Minimal Runtime Dependencies
 
-Three runtime components: **WiredTiger** for storage, **PyMongo** for BSON encoding, and the compiled **Rust extension** (`_smongo_core` via PyO3/maturin) that provides the performance-critical engine. **No running MongoDB server** is required.
-
-For local-only mode:
+Local mode needs **PyMongo** (BSON / remote), the **`smongo`** package with the compiled **Rust extension** (PyO3 / maturin), and **redb** pulled in as a **Rust** dependency of the engine — not a separate `pip install` of a second database engine.
 
 ```bash
-pip install wiredtiger pymongo
-python -c "from smongo import MongoClient; c = MongoClient('local://data')"
+pip install pymongo maturin  # build/install smongo per your project
 ```
 
-No running `mongod`. No Docker container. No network connection. No Atlas account for the embedded engine itself. WiredTiger ships as a Python package; PyMongo supplies BSON encode/decode.
-
-Add `flask` for the dashboard. Add `numpy` and `usearch` for vector search. Sync to Atlas uses the remote URI you pass to `MongoClient`.
+No `mongod` process is required for embedded use. Sync and Atlas are optional.
 
 ---
 
-## 14. 1,090 Tests Across Every Layer
+## 14. Broad Test Coverage
 
-The test suite covers the full stack:
-
-| Module | Tests | What's covered |
-|---|---|---|
-| `test_query.py` | Query compilation, all operators, dot-notation, update engine, expressions |
-| `test_storage.py` | CRUD, transactions, thread safety, BSON roundtrip, TTL, find_one_and_* |
-| `test_streaming.py` | RustStreamingCursor (all plan types), lazy Cursor, find_one, count, islice, parity |
-| `test_index.py` | Key encoding, index CRUD, query planner scoring, index scan execution |
-| `test_aggregation.py` | All 25+ stages, cursor chaining, projection, multi-stage pipelines |
-| `test_oplog.py` | Append, read, compaction, change streams |
-| `test_sync_unit.py` | All conflict strategies, collection discovery, backoff, selective filters |
-| `test_client.py` | Client routing, database/collection facades, bulk write |
-| `test_objectid.py` | Construction, parsing, timestamp extraction, ordering |
-| `test_schema.py` | All $jsonSchema constraints |
-| `test_wire_*.py` | Message framing, 80+ commands, cursor batching, BSON codec, PyMongo integration |
-| `test_auth.py` / `test_rbac.py` | TLS, SCRAM-SHA-256, RBAC roles, auth gate, user persistence |
-| `test_audit.py` | Audit logging, JSON format, auth event capture |
-
-Plus integration tests against real MongoDB via Docker and benchmark suites for performance regression.
+The suite spans query compilation, storage, aggregation, sync, wire protocol, auth, schema, and more — plus integration tests where applicable. Run `pytest` and the Rust `cargo test` workflows in CI for the full picture.
 
 ---
 
 ## 15. Free-Threaded Python Ready
 
-smongo's Rust extension is compatible with CPython 3.13t (free-threaded, no GIL). The module declares `#[pymodule(gil_used = false)]`, all Python-valued caches use `PyOnceLock` (deadlock-free under stop-the-world events), and all `unsafe impl Send/Sync` blocks document Rust-native synchronization rather than relying on the GIL. This means smongo can take advantage of true multi-threaded Python execution as the ecosystem moves beyond the GIL.
+The Rust extension targets CPython 3.13+ free-threading with `#[pymodule(gil_used = false)]`, `PyOnceLock` caches, and documented `Send`/`Sync` invariants. See [BYE-BYE-GIL.md](BYE-BYE-GIL.md).
 
 ---
 
 ## The Big Picture
 
-smongo takes the most widely-used document database in the world and makes it run locally -- with full query fidelity, real storage, ACID transactions, and bidirectional sync. It doesn't approximate MongoDB. It doesn't mock it. It runs the same engine, speaks the same protocol, and syncs to the same cloud.
-
-That's what makes it cool.
+smongo brings **MongoDB-shaped** APIs and wire compatibility to an **embedded Rust engine** with a **real on-disk store** (redb), optional **Atlas sync**, and **no mock storage** in the default path. That combination is what makes it cool.

@@ -2,16 +2,18 @@
 
 > How (and why) smongo splits a MongoDB-compatible database across two languages.
 
+**Embedded storage:** `local://` and the wire server use **`smongo-engine` + redb** via **`RedbLocalClient` / `RedbLocalCollection`**.
+
 ---
 
 ## The Split at a Glance
 
 | Layer | Language | Lines | Purpose |
 |-------|----------|-------|---------|
-| WiredTiger FFI (`wt_safe/`) | Pure Rust | ~1,200 | RAII wrappers around the WiredTiger C ABI via `libloading`. Zero PyO3. |
-| WiredTiger bridge (`wt_bridge.rs`) | Rust + PyO3 | ~400 | `#[pyclass]` types (`RustWtSession`, `RustWtCursor`) that expose `wt_safe` to Python. |
-| Core engine | Rust + PyO3 | ~22,800 | Query compiler, BSON codec, index encoding, SCRAM-SHA-256, aggregation, wire protocol, storage engine, streaming cursors, oplog, sync/CRDT. |
-| Orchestration & config | Python | ~9,000 | Server boot (`engine.py`), collection helpers, aggregation output stages, user-facing API (`LocalClient`), test harness. |
+| `smongo-engine` + redb (+ WASM backends) | Rust | — | ACID storage, indexes, oplog, planner. |
+| `smongo-py` (PyO3) | Rust | — | `RedbLocal*` types, wire command dispatch, Tokio server. |
+| Rest of Rust crate | Rust + PyO3 | ~22,800 | BSON/query/agg/auth/wire helpers |
+| Orchestration | Python | ~9,000 | `MongoClient`, aggregation outputs, tests. |
 | **Total** | | **~33,000** | ~73% Rust, ~27% Python. Rust codebase ~24,083 LOC. |
 
 50 Rust source files. 54 Python source files. ~50 `#[pyclass]` types. ~80 `#[pyfunction]` exports.
@@ -29,15 +31,15 @@
 - **Aggregation**: 25+ pipeline stages (`$group`, `$sort`, `$unwind`, `$project`, `$lookup`, `$graphLookup`, `$facet`, `$bucket`, `$setWindowFields`, ...).
 - **Index management**: B-tree encoding, text index tokenization, unique/TTL/partial/hashed index support, `explain()` plans.
 - **Authentication**: SCRAM-SHA-256 (PBKDF2 + HMAC), RBAC role checks.
-- **Storage engine**: WiredTiger session lifecycle, cursor operations, batch insert/update, crash recovery.
+- **Storage engine**: `smongo-engine` sessions (redb), batch insert/update, crash-safe commits.
 - **Transactions**: Multi-document ACID transactions with snapshot isolation.
 - **Replication primitives**: Oplog, change streams, vector clocks, CRDT merge strategies.
 - **Wire commands**: 40+ MongoDB commands dispatched from Rust (`find`, `insert`, `update`, `delete`, `aggregate`, `createIndexes`, `hello`, `getMore`, `commitTransaction`, ...).
 
 **Python owns orchestration.** Things that run once at startup, touch user-facing APIs, or change frequently during development:
 
-- Server boot and configuration (`engine.py`)
-- The `LocalClient` / `LocalDB` convenience wrappers
+- Server boot and configuration (`wire/server.py`, `MongoClient` local URIs)
+- The `RedbClient` / `RedbCollection` Python wrappers (`storage/redb_engine.py`)
 - Aggregation output stages (`$out`, `$merge`) that do cross-collection writes
 - Command registration (`_register` decorator, `_HANDLERS` dict)
 - User store management
@@ -47,11 +49,11 @@
 
 | Component | What it provides | How it's used |
 |-----------|-----------------|---------------|
-| **WiredTiger** (`wiredtiger` pip package) | B-tree storage, ACID transactions, crash recovery, checkpoints | Storage engine — all data, indexes, oplog, and sync checkpoints live in WiredTiger tables |
+| **redb** (via `smongo-engine`) | Embedded B-tree tables, transactions | Storage engine — data, indexes, oplog, sync KV under a single `data.redb` (or in-memory / WASM backends) |
 | **PyMongo** (`pymongo` pip package) | BSON codec, `ObjectId`, Atlas connectivity, bulk write operations | BSON encode/decode on the **storage** path; sync layer uses PyMongo as a real MongoDB driver to Atlas |
 | **Rust extension** (`_smongo_core` via PyO3/maturin) | Query compiler, update engine, wire protocol, streaming cursors, index manager, SCRAM auth, TLS | The performance-critical engine — every request-serving path runs through compiled Rust |
 
-PyMongo is not a client library here. It is a BSON codec and a sync transport. The actual database engine is WiredTiger + Rust. PyMongo provides `bson.encode()`/`bson.decode()` for the storage layer and `MongoClient` for syncing to Atlas.
+PyMongo is not a client library here. It is a BSON codec and a sync transport. The actual database engine is **Rust (`smongo-engine` + redb)**. PyMongo provides `bson.encode()`/`bson.decode()` where used and `MongoClient` for syncing to Atlas.
 
 ---
 
@@ -70,7 +72,7 @@ _smongo_core
 ├── aggregation 25+ stage functions + join stages
 ├── sync        Oplog, change streams, vector clocks, CRDTs, sync manager
 ├── wire        Msg framing, codec, errors, cursors, sessions, profiler, transactions, context, dispatch, TCP server
-└── wt_bridge   WiredTiger session/cursor wrappers, transaction sessions
+└── redb_client RedbLocalClient / RedbLocalCollection, wire transaction helpers
 ```
 
 ### The Two BSON Paths
@@ -106,7 +108,7 @@ Engine-ready Python dict
 
 Response encoding works the same way in reverse: `raw_encode_document()` serializes Python dicts directly to BSON bytes — all in Rust, without touching PyMongo.
 
-**Storage path — PyMongo BSON.** When documents are written to or read from WiredTiger data tables, they use PyMongo's C-optimized `bson.encode()`/`bson.decode()`. PyMongo's codec is battle-tested, handles every BSON type correctly, and provides full round-trip type fidelity for durable storage.
+**Storage path — PyMongo BSON.** Where Python participates in BSON round-trips, PyMongo's C-optimized `bson.encode()`/`bson.decode()` is used. The durable path for `local://` is Rust (`smongo-engine` + redb) with BSON handled in the extension.
 
 | Concern | Wire path (Rust `raw_bson`) | Storage path (PyMongo `bson`) |
 |---------|---------------------------|------------------------------|
@@ -123,7 +125,7 @@ Response encoding works the same way in reverse: `raw_encode_document()` seriali
 Wire decode:   12 raw bytes   → smongo.ObjectId (Rust-native)
 Storage read:  bson.ObjectId  → converted to smongo.ObjectId at collection boundary
 User code:     smongo.ObjectId used everywhere
-Storage write: smongo.ObjectId → 24-char hex string as WT key + bson.ObjectId in encoded doc
+Storage write: smongo.ObjectId → 24-char hex string as primary key + bson.ObjectId in encoded doc
 Wire encode:   smongo.ObjectId → 12 raw bytes in OP_MSG response
 ```
 
@@ -191,13 +193,13 @@ macro_rules! cached_module {
 
 Wire protocol `find` and `aggregate` no longer construct the Python `Cursor` class. The `find` command applies sort, skip, limit, and projection in pure Rust. The `aggregate` command calls `aggregate_pipeline` directly from Rust.
 
-### WiredTiger typed borrow (oplog / admin)
+### Typed borrow (oplog / admin / CRUD)
 
-`RustWtSession` and `RustWtCursor` expose `pub(crate)` helpers (`open_cursor_typed`, `next_rc`, `get_key_str`, and related accessors) that use the underlying `wt_safe` types directly and bypass Python method dispatch. Oplog code (47 call sites) and admin WiredTiger work (metadata walks, statistics, user persistence) use these typed paths. `OplogHub` change-stream listeners hold `Py<ChangeStream>` instead of `Py<PyAny>`.
+Oplog, admin, and CRUD hot paths use typed **`RedbLocalCollection`** (and related Rust modules) to avoid Python dispatch where it matters. `OplogHub` change-stream listeners hold `Py<ChangeStream>` instead of `Py<PyAny>`.
 
 ### Rust-native schema validation
 
-`$jsonSchema` document validation runs entirely in Rust (`schema.rs`). `ValidationError` is a Rust-defined PyO3 exception. `RustLocalCollection::validate_doc` calls `crate::schema::validate_document` directly -- zero `call_method`, zero `py.import()`. The Python `smongo/schema.py` re-exports the Rust symbols for backward compatibility. Regex pattern matching reuses the ReDoS-safe helpers from `query_compiler.rs`.
+`$jsonSchema` document validation runs entirely in Rust (`schema.rs`). `ValidationError` is a Rust-defined PyO3 exception. Callers use `py_validate_document` / engine schema helpers; the Python `smongo/schema.py` re-exports the Rust symbols for backward compatibility. Regex pattern matching reuses the ReDoS-safe helpers from `query_compiler.rs`.
 
 ### Pure-Rust Wire Compression
 
@@ -218,7 +220,7 @@ The `available_compressors()` function is pure Rust — no Python probe needed.
 ```
 ┌─────────────────────────────────────────────────┐
 │                   Python Layer                   │
-│  engine.py · LocalClient · aggregation output    │
+│  redb_engine.py · RedbClient · aggregation output  │
 │  command registration · test harness             │
 ├─────────────────────────────────────────────────┤
 │              Wire Protocol (Rust)                │
@@ -227,13 +229,12 @@ The `available_compressors()` function is pure Rust — no Python probe needed.
 │  wire_context.rs · wire_sessions.rs              │
 ├─────────────────────────────────────────────────┤
 │             Core Engine (Rust)                   │
-│  query_compiler · query_expressions · query_update│
-│  aggregation · index_manager · storage · scram   │
+│  smongo-engine — redb storage · collection · MQL │
+│  smongo-py — query_compiler · wire · bson_helpers│
 │  bson_helpers · objectid · streaming · oplog     │
 ├─────────────────────────────────────────────────┤
-│           WiredTiger FFI (Pure Rust)             │
-│  wt_safe/ — RAII Connection/Session/Cursor       │
-│  wiredtiger-sys/ — dlopen + ABI verification     │
+│           Embedded storage (native)              │
+│  smongo-engine `RedbBackend` (redb crate)        │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -260,9 +261,9 @@ When smongo runs in hybrid mode (`MongoClient("local://data", sync="mongodb+srv:
 Local write
     │
     ▼
-RustLocalCollection.insert()  ← Rust engine, WiredTiger
+RedbLocalCollection.insert_one()  ← smongo-engine + redb
     │
-    ├── Oplog append (WiredTiger table)
+    ├── Oplog append (engine oplog table)
     │
     ▼
 SyncManager._push()
@@ -315,9 +316,15 @@ CI tests against `python3.13t` with `PYTHON_GIL=0`. See [BYE-BYE-GIL.md](BYE-BYE
 ### Build
 
 ```bash
-cd rust && maturin develop --release
-# or: cargo build (for Rust-only checks)
+# From the repo root (next to pyproject.toml):
+pip install -e .                    # builds via maturin build backend
+# or: make build-debug              # fast iteration (maturin develop)
+# or: python -m maturin develop --release --manifest-path rust/smongo-py/Cargo.toml
+# Rust-only checks:
+cargo test --manifest-path rust/Cargo.toml
 ```
+
+> **Important:** Always build from the **repo root**, not from inside `rust/smongo-py/`. The `pyproject.toml` pins `[tool.maturin]` with `manifest-path = rust/smongo-py/Cargo.toml` and `module-name = smongo._smongo_core`. Running `maturin develop` only inside `rust/smongo-py/` can install an extension that does not match the editable `smongo` package.
 
 Zero warnings policy enforced by `clippy::unwrap_used = "deny"` and `clippy::expect_used = "deny"`.
 
@@ -328,7 +335,7 @@ cd rust && cargo test
 # 80 tests — all passing
 ```
 
-Tests cover: ObjectId generation, SCRAM-SHA-256 handshake, query compilation, wire message framing, compression roundtrips, WiredTiger ABI integration (open/close, CRUD, transactions, checkpoint, verify, compact), RBAC role logic, sync utilities, BSON encoding.
+Tests cover: ObjectId generation, SCRAM-SHA-256 handshake, query compilation, wire message framing, compression roundtrips, redb-backed CRUD and transactions, RBAC role logic, sync utilities, BSON encoding.
 
 ### Python Tests
 
@@ -354,8 +361,8 @@ Measures dispatch-level overhead isolated from data size: `findAndModify` (~64 u
 ```toml
 [dependencies]
 pyo3 = "0.28"              # Python ↔ Rust bridge
+smongo-engine = { path }   # Shared engine (redb, MQL, indexes)
 tokio = "1"                # Async TCP server runtime
-wiredtiger-sys = { path }  # WiredTiger C ABI bindings (dlopen)
 parking_lot = "0.12"       # Fast mutexes
 snap = "1"                 # Snappy compression
 zstd = "0.13"              # Zstandard compression
@@ -384,7 +391,7 @@ Release profile: `lto = "thin"`, `codegen-units = 1`, `strip = "symbols"`.
 
 3. **Cache imports, not results.** Python module references are resolved once and stored in `Arc<CachedImports>` or `PyOnceLock<Py<PyModule>>` (free-threading-safe). The data they produce stays in Python-managed memory.
 
-4. **No unsafe without proof.** The only `unsafe` blocks are in `wt_safe/` (C FFI) and `wiredtiger-sys` (dlopen). The PyO3 layer is 100% safe Rust.
+4. **No unsafe without proof.** Prefer safe Rust end-to-end; any `unsafe` must be documented with a safety rationale (see crate lints and code review).
 
 5. **One cast, not thirty.** `rs_dispatch` casts `ctx` once; handlers get a typed reference. `eval_query` takes `&Bound<'_, PyDict>` once; callers that have `PyAny` cast at the call site.
 

@@ -1,11 +1,12 @@
 """
-Index Engine -- WiredTiger B-Tree backed indexes with a query planner.
+Index engine helpers and query planner (Python).
 
-Each index is its own WiredTiger table. Keys are lexicographically sortable
-encodings of field values + _id, so WiredTiger's natural B-Tree ordering gives
-us O(log n) lookups, range scans, and ordered iteration.
+Default embedded I/O uses **smongo-engine** indexes on **redb** (`RedbLocalCollection`).
+This module still carries **legacy** ``IndexManager`` / ``table:__idx_*`` helpers for
+tests and tooling; keys are lexicographically sortable encodings for B-tree scans.
 
-Supports standard, unique, sparse, TTL, text, hashed, partial, and wildcard indexes.
+Supports standard, unique, sparse, TTL, text, hashed, partial, and wildcard indexes
+where implemented on the active storage path.
 """
 
 import json
@@ -32,7 +33,7 @@ from smongo._smongo_core import (
     sortable_encode as _sortable_encode,
 )
 
-from ._compat import WTError as _WTError
+from ._compat import StorageError as _StorageError
 from ._types import Document, Filter
 from .query import compile_query, get_value
 
@@ -105,7 +106,7 @@ class IndexDef:
 
 
 class IndexManager:
-    """Creates, drops, and maintains WiredTiger-backed indexes for a collection."""
+    """Legacy Python index metadata + ``table:__idx_*`` layout (not the default redb path)."""
 
     def __init__(self, session: Any, db_name: str, coll_name: str) -> None:
         self.session = session
@@ -161,12 +162,10 @@ class IndexManager:
                 idx_type = "hashed"
                 break
             if d in ("2dsphere", "2d"):
-                # WiredTiger 2dsphere / `$near` are implemented on `RustLocalCollection`
-                # (`smongo._smongo_core`); this Python `IndexManager` is for the legacy
-                # pure-Python storage stack only.
+                # Geo indexes are implemented in smongo-engine on `RedbLocalCollection`.
                 raise NotImplementedError(
                     f"{d} indexes are not supported on the Python IndexManager; "
-                    "use RustLocalClient / RustLocalCollection (see ROADMAP.md Part 3 — Geospatial)."
+                    "use MongoClient `local://` / `RedbLocalCollection` (see ROADMAP.md Part 3 — Geospatial)."
                 )
             if _f == "$**":
                 idx_type = "wildcard"
@@ -257,7 +256,7 @@ class IndexManager:
                 cursor.set_key(key)
                 try:
                     cursor.remove()
-                except _WTError:
+                except _StorageError:
                     pass
             cursor.close()
 
@@ -324,7 +323,7 @@ class IndexManager:
         cursor.set_key(key)
         try:
             cursor.remove()
-        except _WTError:
+        except _StorageError:
             pass
         cursor.close()
 
@@ -351,7 +350,7 @@ class IndexManager:
                     cursor.set_key(f"{token}|{doc_id}")
                     try:
                         cursor.remove()
-                    except _WTError:
+                    except _StorageError:
                         pass
         cursor.close()
 
@@ -372,7 +371,7 @@ class IndexManager:
             cursor.set_key(prefix)
             try:
                 exact = cursor.search_near()
-            except _WTError:
+            except _StorageError:
                 cursor.close()
                 id_sets.append(ids)
                 continue
@@ -418,7 +417,7 @@ class IndexManager:
             cursor.set_key(f"{h}|{doc_id}")
             try:
                 cursor.remove()
-            except _WTError:
+            except _StorageError:
                 pass
         cursor.close()
 
@@ -435,7 +434,7 @@ class IndexManager:
         cursor.set_key(prefix)
         try:
             exact = cursor.search_near()
-        except _WTError:
+        except _StorageError:
             cursor.close()
             return ids
         if exact < 0:
@@ -475,7 +474,7 @@ class IndexManager:
             cursor.set_key(f"{path}|{encoded}|{doc_id}")
             try:
                 cursor.remove()
-            except _WTError:
+            except _StorageError:
                 pass
         cursor.close()
 
@@ -492,7 +491,7 @@ class IndexManager:
         cursor.set_key(prefix)
         try:
             exact = cursor.search_near()
-        except _WTError:
+        except _StorageError:
             cursor.close()
             return ids
         if exact < 0:
@@ -514,7 +513,7 @@ class IndexManager:
         cursor.set_key(prefix)
         try:
             exact = cursor.search_near()
-        except _WTError:
+        except _StorageError:
             cursor.close()
             return False
 
@@ -534,7 +533,7 @@ class IndexManager:
                     return True
                 if cursor.next() != 0:
                     break
-        except _WTError:
+        except _StorageError:
             pass
 
         cursor.close()
@@ -671,10 +670,10 @@ class QueryPlanner:
         self, idx: IndexDef, field_conditions: dict[str, Any]
     ) -> tuple[int, tuple[list[tuple[str | None, bool]], list[tuple[str | None, bool]]]]:
         """
-        Score an index against query conditions and compute WT-domain bounds.
+        Score an index against query conditions and compute encoded-key bounds.
 
         Returns (score, (lower_segments, upper_segments)) where each segment
-        is (wt_encoded_value_or_None, inclusive). None means unbounded on
+        is (encoded_value_or_None, inclusive). None means unbounded on
         that side. All encoding/inversion for direction is handled here so
         _build_bound_key just concatenates.
         """
@@ -725,22 +724,22 @@ class QueryPlanner:
                 score += 1
 
                 if direction == 1:
-                    wt_low = _sortable_encode(low_val) if low_val is not None else None
-                    wt_high = _sortable_encode(high_val) if high_val is not None else None
-                    lower_segments.append((wt_low, low_inc))
-                    upper_segments.append((wt_high, high_inc))
+                    enc_low = _sortable_encode(low_val) if low_val is not None else None
+                    enc_high = _sortable_encode(high_val) if high_val is not None else None
+                    lower_segments.append((enc_low, low_inc))
+                    upper_segments.append((enc_high, high_inc))
                 else:
                     # Descending: invert encoding and swap bounds
-                    wt_low = (
+                    enc_low = (
                         _invert_encoded(_sortable_encode(high_val))
                         if high_val is not None
                         else None
                     )
-                    wt_high = (
+                    enc_high = (
                         _invert_encoded(_sortable_encode(low_val)) if low_val is not None else None
                     )
-                    lower_segments.append((wt_low, high_inc))
-                    upper_segments.append((wt_high, low_inc))
+                    lower_segments.append((enc_low, high_inc))
+                    upper_segments.append((enc_high, low_inc))
 
                 if low_val != high_val:
                     break
@@ -749,7 +748,7 @@ class QueryPlanner:
 
     def execute_index_scan(self, plan: QueryPlan, session: Any, table_uri: str) -> list[str]:
         """
-        Run an index scan using WiredTiger cursor range operations.
+        Run an index scan using storage cursor range operations.
         Returns a list of _id strings matching the bounds.
         """
         idx = plan.index_def
@@ -766,7 +765,7 @@ class QueryPlanner:
             cursor.set_key(low_key)
             try:
                 exact = cursor.search_near()
-            except _WTError:
+            except _StorageError:
                 cursor.close()
                 return ids
 
@@ -810,7 +809,7 @@ class QueryPlanner:
             cursor.set_key(prefix)
             try:
                 exact = cursor.search_near()
-            except _WTError:
+            except _StorageError:
                 continue
             if exact < 0:
                 if cursor.next() != 0:
@@ -833,7 +832,7 @@ class QueryPlanner:
         self, segments: list[tuple[str | None, bool]], is_lower: bool
     ) -> str | None:
         """
-        Concatenate pre-encoded WT-domain segments into a single key string.
+        Concatenate pre-encoded index-key segments into a single key string.
         None segments are replaced with min/max sentinels.
         """
         if not segments:

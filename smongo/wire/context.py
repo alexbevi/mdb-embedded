@@ -1,8 +1,8 @@
 """
 Per-connection server context.
 
-Each TCP connection gets its own ConnectionContext which caches LocalDB
-instances (and thus WiredTiger sessions) for the lifetime of the connection.
+Each TCP connection gets its own ConnectionContext which caches database
+handles for the lifetime of the connection.
 Also tracks compression negotiation, logical sessions, per-session transaction
 state with undo-journal rollback, per-connection write result tracking,
 active-operation monitoring, and an operation profiler.
@@ -30,7 +30,7 @@ from smongo._smongo_core import (
     validate_namespace,
 )
 
-from ..storage import LocalClient, LocalCollection, LocalDB
+from ..storage.redb_engine import RedbClient, RedbCollection, RedbDB
 from ..storage.transaction import TransactionSession as _StorageTxnSession
 from . import transactions as _txn
 from .cursors import CursorRegistry
@@ -170,7 +170,7 @@ class ConnectionContext:
 
     def __init__(
         self,
-        local_client: LocalClient,
+        local_client: RedbClient,
         connection_id: int,
         address: tuple[str, int],
         cursor_registry: CursorRegistry,
@@ -189,7 +189,7 @@ class ConnectionContext:
         self.address = address
         self.cursor_registry = cursor_registry
         self.sync_mgr = sync_mgr
-        self._dbs: dict[str, LocalDB] = {}
+        self._dbs: dict[str, RedbDB] = {}
         self.compressor_id: int | None = None
         self.session_registry = session_registry or SessionRegistry()
         self.op_tracker = op_tracker or OperationTracker()
@@ -205,12 +205,12 @@ class ConnectionContext:
         self._txn_sessions: dict[str, SessionTransaction] = {}
         self._txn_number_gen = count(1)
 
-    def get_db(self, db_name: str) -> LocalDB:
+    def get_db(self, db_name: str) -> RedbDB:
         if db_name not in self._dbs:
             self._dbs[db_name] = self.local_client.get_db(db_name)
         return self._dbs[db_name]
 
-    def get_collection(self, db_name: str, coll_name: str) -> LocalCollection:
+    def get_collection(self, db_name: str, coll_name: str) -> RedbCollection:
         validate_namespace(db_name, coll_name)
         return self.get_db(db_name).get_collection(coll_name)
 
@@ -227,12 +227,12 @@ class ConnectionContext:
         return str(lsid)
 
     def start_transaction(self, lsid: Any) -> SessionTransaction:
-        """Begin a new WT-native transaction on the given logical session."""
+        """Begin a new engine transaction on the given logical session."""
         key = self._session_key(lsid)
         existing = self._txn_sessions.get(key)
         if existing and existing.state == TransactionState.ACTIVE:
             raise TransactionError("Transaction already in progress on this session")
-        storage_txn = _StorageTxnSession(self.local_client.conn)
+        storage_txn = _StorageTxnSession(self.local_client)
         storage_txn.activate()
         txn = SessionTransaction(next(self._txn_number_gen), storage_txn)
         self._txn_sessions[key] = txn
@@ -249,7 +249,7 @@ class ConnectionContext:
         return None
 
     def commit_transaction(self, lsid: Any) -> None:
-        """Commit the active transaction and force a WiredTiger checkpoint."""
+        """Commit the active transaction."""
         key = self._session_key(lsid)
         txn = self._txn_sessions.get(key)
         _txn.commit_active_transaction(self.local_client, txn)

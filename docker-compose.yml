@@ -27,7 +27,7 @@ services:
       WIRE_PORT: "27018"
       WIRE_HOST: "0.0.0.0"
     volumes:
-      - wt_data:/app/local_wt_data
+      - redb_data:/app/local_redb_data
 
 volumes:
-  wt_data:
+  redb_data:

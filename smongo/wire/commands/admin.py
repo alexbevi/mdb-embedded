@@ -11,7 +11,7 @@ from typing import Any
 
 from bson import Binary, Int64
 
-from ..._compat import WTError as _WTError
+from ..._compat import StorageError as _StorageError
 from .._types import CommandDoc, DocSequences, ResponseDoc
 from ..bson_codec import normalize_inbound
 from ..context import ConnectionContext, get_virtual_memory_mb
@@ -28,21 +28,6 @@ from ._registry import (
 @_register("listDatabases", help="List all databases with sizes")
 def _cmd_list_databases(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -> ResponseDoc:
     seen_dbs = set(ctx.list_known_dbs())
-
-    try:
-        session = ctx.local_client.conn.open_session()
-        cursor = session.open_cursor("metadata:", None, None)
-        while cursor.next() == 0:
-            uri = cursor.get_key()
-            if uri.startswith("table:") and not uri.startswith("table:__"):
-                table_name = uri[len("table:") :]
-                parts = table_name.split("_", 1)
-                if len(parts) == 2:
-                    seen_dbs.add(parts[0])
-        cursor.close()
-        session.close()
-    except (RuntimeError, OSError, KeyError) as exc:
-        log.debug("listDatabases metadata scan failed: %s", exc)
 
     if not seen_dbs:
         seen_dbs.add("test")
@@ -137,11 +122,11 @@ def _cmd_drop(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -> Re
         for idx in list(coll.list_indexes()):
             try:
                 coll.drop_index(idx["name"])
-            except (KeyError, RuntimeError, OSError, ValueError, _WTError):
+            except (KeyError, RuntimeError, OSError, ValueError, _StorageError):
                 log.debug("drop index %s failed during collection drop", idx.get("name"))
         coll.delete({}, multi=True)
         db.drop_collection(coll_name)
-    except (KeyError, RuntimeError, OSError, ValueError, _WTError) as exc:
+    except (KeyError, RuntimeError, OSError, ValueError, _StorageError) as exc:
         log.debug("drop collection %s.%s failed: %s", db_name, coll_name, exc)
     return {"ns": f"{db_name}.{coll_name}", "nIndexesWas": n_indexes_was, "ok": 1.0}
 
@@ -157,13 +142,13 @@ def _cmd_drop_database(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequenc
                 for idx in list(coll.list_indexes()):
                     try:
                         coll.drop_index(idx["name"])
-                    except (KeyError, RuntimeError, OSError, ValueError, _WTError):
+                    except (KeyError, RuntimeError, OSError, ValueError, _StorageError):
                         pass
                 coll.delete({}, multi=True)
-            except (KeyError, RuntimeError, OSError, ValueError, TypeError, _WTError):
+            except (KeyError, RuntimeError, OSError, ValueError, TypeError, _StorageError):
                 pass
         db._collections.clear()
-    except (KeyError, RuntimeError, OSError, ValueError, TypeError, _WTError) as exc:
+    except (KeyError, RuntimeError, OSError, ValueError, TypeError, _StorageError) as exc:
         log.debug("dropDatabase %s failed: %s", db_name, exc)
     return {"dropped": db_name, "ok": 1.0}
 
@@ -203,7 +188,7 @@ def _cmd_coll_mod(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -
         if not target_name and "keyPattern" in idx_spec:
             kp = idx_spec["keyPattern"]
             for idx in coll.list_indexes():
-                idx_keys = {k: d for k, d in idx.get("keys", [])}
+                idx_keys = dict(idx.get("keys", {}))
                 if idx_keys == kp:
                     target_name = idx["name"]
                     break
@@ -277,7 +262,7 @@ def _cmd_coll_stats(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences)
         "nindexes": stats["nindexes"],
         "totalIndexSize": stats["totalIndexSize"],
         "indexSizes": stats["indexSizes"],
-        "wiredTiger": stats.get("wiredTiger", {}),
+        "storageEngine": stats.get("storageEngine", {"name": "redb"}),
         "ok": 1.0,
     }
 
@@ -353,12 +338,12 @@ def _cmd_server_status(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequenc
     except (ValueError, OSError):
         rss_mb = 0
 
-    wt_stats: dict[str, Any] = {}
+    storage_stats: dict[str, Any] = {}
     try:
         stats_fn = getattr(ctx.local_client, "connection_stats", None)
         if callable(stats_fn):
-            wt_stats = dict(stats_fn())
-    except (_WTError, RuntimeError, OSError, KeyError):
+            storage_stats = dict(stats_fn())
+    except (_StorageError, RuntimeError, OSError, KeyError):
         pass
 
     resp: ResponseDoc = {
@@ -382,9 +367,9 @@ def _cmd_server_status(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequenc
         "logicalSessionRecordCache": {
             "activeSessionsCount": ctx.session_registry.count,
         },
-        "wiredTiger": {
-            "uri": "statistics:",
-            **wt_stats,
+        "storageEngine": {
+            "name": "redb",
+            **storage_stats,
         },
         "ok": 1.0,
     }
@@ -402,25 +387,12 @@ def _cmd_fsync(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -> R
     _async = cmd.get("async", False)
 
     try:
-        session = ctx.local_client.conn.open_session()
-        session.checkpoint()
-        session.close()
-    except (_WTError, RuntimeError, OSError) as exc:
-        log.warning("fsync checkpoint failed: %s", exc)
+        ctx.local_client.checkpoint()
+    except (RuntimeError, OSError) as exc:
+        log.warning("fsync / checkpoint failed: %s", exc)
         return error_response(1, "InternalError", f"checkpoint failed: {exc}")
 
-    tables_flushed = 0
-    try:
-        session = ctx.local_client.conn.open_session()
-        cursor = session.open_cursor("metadata:", None, None)
-        while cursor.next() == 0:
-            uri: str = cursor.get_key()
-            if uri.startswith("table:"):
-                tables_flushed += 1
-        cursor.close()
-        session.close()
-    except (_WTError, RuntimeError, OSError):
-        pass
+    tables_flushed = 1
 
     resp: ResponseDoc = {"numFiles": tables_flushed, "ok": 1.0}
     if lock:

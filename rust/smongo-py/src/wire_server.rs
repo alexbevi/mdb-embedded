@@ -138,15 +138,15 @@ impl RustWireServer {
         )?;
         exc_types.set_item(
             "DuplicateKeyError",
-            py.get_type::<crate::index_manager::DuplicateKeyError>(),
+            py.get_type::<crate::index_helpers::DuplicateKeyError>(),
         )?;
         exc_types.set_item(
             "ValidationError",
             py.get_type::<crate::schema::ValidationError>(),
         )?;
         if let Ok(compat_mod) = py.import("smongo._compat") {
-            if let Ok(wte) = compat_mod.getattr("WTError") {
-                exc_types.set_item("WTError", wte)?;
+            if let Ok(se) = compat_mod.getattr("StorageError") {
+                exc_types.set_item("StorageError", se)?;
             }
         }
         let exception_types = exc_types.unbind();

@@ -1192,6 +1192,66 @@ pub fn stage_sort_stream(input: DocStream, sort_spec: &Bson) -> AggregationResul
     Ok(Box::new(results.into_iter().map(Ok)))
 }
 
+/// Fused `$sort` + `$limit` stage using a BinaryHeap of size `limit`.
+///
+/// Complexity: O(n log k) where k = limit, instead of O(n log n) for a full
+/// sort followed by truncation.
+pub fn stage_sort_limit_stream(
+    input: DocStream,
+    sort_spec: &Bson,
+    limit_spec: &Bson,
+) -> AggregationResult<DocStream> {
+    let sort_doc = sort_spec
+        .as_document()
+        .ok_or_else(|| AggregationError::InvalidStage("$sort requires document".into()))?;
+    let limit = limit_spec
+        .as_i64()
+        .or_else(|| limit_spec.as_i32().map(|i| i as i64))
+        .ok_or_else(|| AggregationError::InvalidStage("$limit requires number".into()))?
+        as usize;
+
+    if limit == 0 {
+        return Ok(Box::new(std::iter::empty()));
+    }
+
+    let docs: Vec<Document> = input.collect::<Result<Vec<_>, _>>()?;
+
+    // Build a comparator closure based on the sort spec.
+    let sort_fields: Vec<(String, i32)> = sort_doc
+        .iter()
+        .map(|(k, v)| (k.clone(), v.as_i32().unwrap_or(1)))
+        .collect();
+
+    let cmp_docs = |a: &Document, b: &Document| -> std::cmp::Ordering {
+        for (field, dir) in &sort_fields {
+            let va = crate::paths::get_value(a, field);
+            let vb = crate::paths::get_value(b, field);
+            let cmp = crate::aggregation::compare_bson(va, vb);
+            let result = if *dir < 0 { cmp.reverse() } else { cmp };
+            if result != std::cmp::Ordering::Equal {
+                return result;
+            }
+        }
+        std::cmp::Ordering::Equal
+    };
+
+    // We want the top-k "smallest" by sort order.  Use a max-heap so we
+    // can evict the "largest" quickly.  OrdWrapper delegates to cmp_docs.
+    // Since BinaryHeap needs Ord, we use an index-based approach.
+    let mut indices: Vec<usize> = (0..docs.len()).collect();
+
+    // Partial sort: keep only the top `limit` using select_nth_unstable_by
+    // when the dataset is larger than limit.
+    if indices.len() > limit {
+        indices.select_nth_unstable_by(limit - 1, |&a, &b| cmp_docs(&docs[a], &docs[b]));
+        indices.truncate(limit);
+    }
+    indices.sort_by(|&a, &b| cmp_docs(&docs[a], &docs[b]));
+
+    let results: Vec<Document> = indices.into_iter().map(|i| docs[i].clone()).collect();
+    Ok(Box::new(results.into_iter().map(Ok)))
+}
+
 pub fn stage_group_stream(input: DocStream, group_spec: &Bson) -> AggregationResult<DocStream> {
     let docs: Vec<Document> = input.collect::<Result<Vec<_>, _>>()?;
     let results = stage_group(docs, group_spec)?;
@@ -1271,4 +1331,264 @@ pub fn stage_set_window_fields_stream(
     let docs: Vec<Document> = input.collect::<Result<Vec<_>, _>>()?;
     let results = stage_set_window_fields(docs, spec)?;
     Ok(Box::new(results.into_iter().map(Ok)))
+}
+
+// ---------------------------------------------------------------------------
+// $unionWith
+// ---------------------------------------------------------------------------
+
+pub fn stage_union_with_stream(
+    input: DocStream,
+    spec: &Bson,
+    resolver: Option<&dyn CollectionResolver>,
+) -> AggregationResult<DocStream> {
+    let docs: Vec<Document> = input.collect::<Result<Vec<_>, _>>()?;
+    let results = stage_union_with(docs, spec, resolver)?;
+    Ok(Box::new(results.into_iter().map(Ok)))
+}
+
+fn stage_union_with(
+    docs: Vec<Document>,
+    spec: &Bson,
+    resolver: Option<&dyn CollectionResolver>,
+) -> AggregationResult<Vec<Document>> {
+    let resolver = resolver
+        .ok_or_else(|| AggregationError::Other("$unionWith requires a CollectionResolver".into()))?;
+
+    let (coll_name, sub_pipeline) = match spec {
+        Bson::String(name) => (name.as_str(), Vec::new()),
+        Bson::Document(d) => {
+            let name = d
+                .get_str("coll")
+                .map_err(|_| AggregationError::MissingField("$unionWith.coll required".into()))?;
+            let pipeline: Vec<Document> = d
+                .get_array("pipeline")
+                .unwrap_or(&Vec::new())
+                .iter()
+                .filter_map(|s| s.as_document().cloned())
+                .collect();
+            (name, pipeline)
+        }
+        _ => {
+            return Err(AggregationError::InvalidStage(
+                "$unionWith requires string or document".into(),
+            ));
+        }
+    };
+
+    let mut foreign_docs = resolver.resolve(coll_name, None)?;
+
+    if !sub_pipeline.is_empty() {
+        foreign_docs =
+            super::aggregate_with_resolver(foreign_docs, &sub_pipeline, Some(resolver))?;
+    }
+
+    let mut result = docs;
+    result.extend(foreign_docs);
+    Ok(result)
+}
+
+// ---------------------------------------------------------------------------
+// $out / $merge (streaming stubs — actual writes go through execute_out/execute_merge)
+// ---------------------------------------------------------------------------
+
+pub fn stage_out_stream(input: DocStream, _spec: &Bson) -> AggregationResult<DocStream> {
+    Ok(input)
+}
+
+pub fn stage_merge_stream(input: DocStream, _spec: &Bson) -> AggregationResult<DocStream> {
+    Ok(input)
+}
+
+pub fn execute_out(
+    spec: &Bson,
+    docs: &[Document],
+    mutator: &dyn super::DatabaseMutator,
+) -> AggregationResult<()> {
+    let target = match spec {
+        Bson::String(name) => name.as_str(),
+        Bson::Document(d) => d
+            .get_str("coll")
+            .or_else(|_| d.get_str("db"))
+            .unwrap_or(""),
+        _ => {
+            return Err(AggregationError::InvalidStage(
+                "$out requires string or document".into(),
+            ));
+        }
+    };
+    if target.is_empty() {
+        return Err(AggregationError::MissingField("$out target collection required".into()));
+    }
+    mutator.drop_and_insert(target, docs)
+}
+
+pub fn execute_merge(
+    spec: &Bson,
+    docs: &[Document],
+    mutator: &dyn super::DatabaseMutator,
+) -> AggregationResult<()> {
+    let merge_doc = spec
+        .as_document()
+        .ok_or_else(|| AggregationError::InvalidStage("$merge requires document".into()))?;
+
+    let into = merge_doc.get("into").ok_or_else(|| {
+        AggregationError::MissingField("$merge.into required".into())
+    })?;
+    let target = match into {
+        Bson::String(s) => s.as_str(),
+        Bson::Document(d) => d.get_str("coll").unwrap_or(""),
+        _ => "",
+    };
+    if target.is_empty() {
+        return Err(AggregationError::MissingField("$merge target collection required".into()));
+    }
+
+    let on_fields: Vec<String> = match merge_doc.get("on") {
+        Some(Bson::String(s)) => vec![s.clone()],
+        Some(Bson::Array(arr)) => arr.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+        _ => vec!["_id".to_string()],
+    };
+
+    let when_matched = merge_doc
+        .get_str("whenMatched")
+        .unwrap_or("replace");
+
+    mutator.upsert(target, &on_fields, docs, when_matched)
+}
+
+// ---------------------------------------------------------------------------
+// $vectorSearch
+// ---------------------------------------------------------------------------
+
+pub fn stage_vector_search_stream(
+    input: DocStream,
+    spec: &Bson,
+) -> AggregationResult<DocStream> {
+    let docs: Vec<Document> = input.collect::<Result<Vec<_>, _>>()?;
+    let results = super::vector::vector_search_stage(docs, spec)?;
+    Ok(Box::new(results.into_iter().map(Ok)))
+}
+
+// ---------------------------------------------------------------------------
+// $geoNear
+// ---------------------------------------------------------------------------
+
+pub fn stage_geo_near_stream(input: DocStream, spec: &Bson) -> AggregationResult<DocStream> {
+    let docs: Vec<Document> = input.collect::<Result<Vec<_>, _>>()?;
+    let results = stage_geo_near(docs, spec)?;
+    Ok(Box::new(results.into_iter().map(Ok)))
+}
+
+fn stage_geo_near(docs: Vec<Document>, spec: &Bson) -> AggregationResult<Vec<Document>> {
+    let gn_doc = spec
+        .as_document()
+        .ok_or_else(|| AggregationError::InvalidStage("$geoNear requires document".into()))?;
+
+    let near = gn_doc
+        .get("near")
+        .ok_or_else(|| AggregationError::MissingField("$geoNear.near required".into()))?;
+
+    let (near_lon, near_lat) = crate::geo::extract_lon_lat(Some(near)).ok_or_else(|| {
+        AggregationError::InvalidStage("$geoNear.near must be a GeoJSON Point or [lon, lat]".into())
+    })?;
+
+    let distance_field = gn_doc
+        .get_str("distanceField")
+        .map_err(|_| AggregationError::MissingField("$geoNear.distanceField required".into()))?;
+
+    let key = gn_doc.get_str("key").unwrap_or("location");
+    let max_distance = gn_doc
+        .get("maxDistance")
+        .and_then(|v| v.as_f64().or_else(|| v.as_i64().map(|i| i as f64)));
+    let min_distance = gn_doc
+        .get("minDistance")
+        .and_then(|v| v.as_f64().or_else(|| v.as_i64().map(|i| i as f64)));
+    let distance_multiplier = gn_doc
+        .get("distanceMultiplier")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(1.0);
+    let include_locs = gn_doc.get_str("includeLocs").ok();
+    let limit = gn_doc
+        .get("limit")
+        .and_then(|v| v.as_i64().or_else(|| v.as_i32().map(|i| i as i64)));
+    let query_filter = gn_doc.get_document("query").ok();
+
+    // When limit is specified, use a BinaryHeap-style top-k selection:
+    // O(n log k) instead of O(n log n).  We store all prepared docs in a Vec
+    // and keep only the k smallest-distance indices in a max-heap.
+    use std::collections::BinaryHeap;
+    use super::total_ord::TotalF64;
+
+    let use_heap = limit.map(|l| l as usize);
+
+    // (distance, seq) max-heap — seq breaks ties deterministically
+    let mut heap: BinaryHeap<(TotalF64, usize)> = BinaryHeap::new();
+    let mut prepared: Vec<(f64, Document)> = Vec::new();
+
+    for doc in docs {
+        if let Some(filter) = query_filter {
+            if !eval_query(&doc, filter).unwrap_or(false) {
+                continue;
+            }
+        }
+
+        let loc = get_value(&doc, key);
+        let coords = crate::geo::extract_lon_lat(loc);
+        let Some((doc_lon, doc_lat)) = coords else {
+            continue;
+        };
+
+        let dist = crate::geo::haversine_meters(near_lon, near_lat, doc_lon, doc_lat);
+
+        if let Some(max_d) = max_distance {
+            if dist > max_d {
+                continue;
+            }
+        }
+        if let Some(min_d) = min_distance {
+            if dist < min_d {
+                continue;
+            }
+        }
+
+        let mut result_doc = doc;
+        let _ = set_value(
+            &mut result_doc,
+            distance_field,
+            Bson::Double(dist * distance_multiplier),
+        );
+        if let Some(locs_field) = include_locs {
+            if let Some(loc_val) = get_value(&result_doc, key).cloned() {
+                let _ = set_value(&mut result_doc, locs_field, loc_val);
+            }
+        }
+
+        let idx = prepared.len();
+        prepared.push((dist, result_doc));
+
+        if let Some(k) = use_heap {
+            let d = TotalF64(dist);
+            if heap.len() < k {
+                heap.push((d, idx));
+            } else if let Some(&(ref max_dist, _)) = heap.peek() {
+                if d < *max_dist {
+                    heap.pop();
+                    heap.push((d, idx));
+                }
+            }
+        }
+    }
+
+    if let Some(_k) = use_heap {
+        let mut top: Vec<(f64, usize)> = heap.into_iter().map(|(d, i)| (d.0, i)).collect();
+        top.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        Ok(top
+            .into_iter()
+            .map(|(_, i)| prepared[i].1.clone())
+            .collect())
+    } else {
+        prepared.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        Ok(prepared.into_iter().map(|(_, doc)| doc).collect())
+    }
 }

@@ -164,7 +164,7 @@ _HANDLERS[command_name](ctx, body_doc, doc_sequences)
 response_doc → encode_msg() → send over TCP
 ```
 
-**Performance / Rust dispatch:** Wire `find` and `aggregate` bypass the Python aggregation `Cursor` entirely. For `find`, sort, skip, limit, and projection are applied in Rust before the first batch is sent; for `aggregate`, the handler calls the Rust `aggregate_pipeline` directly. Admin and diagnostic paths that touch WiredTiger for metadata, statistics, user tables, and checkpoints likewise use typed Rust borrow on `RustWtSession` / `RustWtCursor` instead of per-call Python method dispatch on WT cursors.
+**Performance / Rust dispatch:** Wire `find` and `aggregate` bypass the Python aggregation `Cursor` entirely. For `find`, sort, skip, limit, and projection are applied in Rust before the first batch is sent; for `aggregate`, the handler calls the Rust `aggregate_pipeline` directly. Admin and diagnostic paths use typed **`RedbLocalCollection`** / Rust handlers where possible instead of per-call Python `getattr` on hot paths.
 
 ### Registered Commands (80+)
 
@@ -221,7 +221,7 @@ This guarantees the wire layer always returns valid BSON -- it never drops a con
 
 ## BSON Boundary Normalization
 
-The wire protocol operates in BSON land (binary BSON over TCP). The embedded engine operates in Python dict land (with `smongo.ObjectId`, floats, regex dicts). Since P8, a **single-pass raw BSON codec** (`rust/src/raw_bson.rs`) handles the conversion directly between wire bytes and engine-ready Python dicts, without intermediate `bson::Document` allocation.
+The wire protocol operates in BSON land (binary BSON over TCP). The embedded engine operates in Python dict land (with `smongo.ObjectId`, floats, regex dicts). Since P8, a **single-pass raw BSON codec** (`rust/smongo-py/src/raw_bson.rs`) handles the conversion directly between wire bytes and engine-ready Python dicts, without intermediate `bson::Document` allocation.
 
 ### Decode (Wire bytes → Engine dicts)
 
@@ -268,7 +268,7 @@ The Python-facing `normalize_inbound` / `normalize_outbound` functions remain av
 │  ┌───────────────┐    ┌───────────────────────────────────┐  │
 │  │ Accept Thread  │    │ Shared State                       │ │
 │  │ (1 per server)│    │                                     │ │
-│  │               │    │  RustLocalClient (WiredTiger via FFI) │ │
+│  │               │    │  RedbLocalClient (smongo-engine + redb) │ │
 │  │ Accepts TCP   │    │  CursorRegistry (cross-connection)  │ │
 │  │ connections   │    │  SyncManager (optional)              │ │
 │  └───────┬───────┘    └───────────────────────────────────┘  │
@@ -286,12 +286,12 @@ The Python-facing `normalize_inbound` / `normalize_outbound` functions remain av
 └──────────────────────────────────────────────────────────────┘
 ```
 
-Each TCP connection is handled by a Tokio async task with its own `ConnectionContext`. The context caches `RustLocalDB` instances (and thus WiredTiger sessions) for the lifetime of the connection. A `Semaphore` limits concurrent connections.
+Each TCP connection is handled by a Tokio async task with its own `ConnectionContext`. The context caches **`RedbLocalDB`** handles for the lifetime of the connection. A `Semaphore` limits concurrent connections.
 
-The server shares a single `RustLocalClient` and `CursorRegistry` across all connections. Thread safety comes from:
-- Per-collection `ReadWriteLock` in `RustLocalCollection`
+The server shares a single **`RedbLocalClient`** and `CursorRegistry` across all connections. Thread safety comes from:
+- Engine-side locking on **`RedbLocalCollection`**
 - `Mutex`-guarded state in `CursorRegistry`
-- `Mutex`-guarded collection cache in `RustLocalDB`
+- `Mutex`-guarded collection cache in **`RedbLocalDB`**
 
 ---
 
@@ -355,7 +355,9 @@ Wire version 0-21 tells the driver this server supports the full modern protocol
 
 ## Authentication
 
-Embedded mode has no authentication. When a driver attempts SASL authentication (`saslStart`), the server returns a clear error:
+smongo has two wire server implementations with different authentication capabilities:
+
+**Python `WireServer` (default):** No authentication. When a driver attempts SASL authentication (`saslStart`), the server returns a clear error:
 
 ```python
 {
@@ -367,6 +369,8 @@ Embedded mode has no authentication. When a driver attempts SASL authentication 
 ```
 
 Drivers that connect without credentials in the URI work immediately.
+
+**Rust `RustWireServer`:** Supports **SCRAM-SHA-256** authentication (RFC 7677) with PBKDF2-hashed credentials persisted in the local engine (`__users` KV table). RBAC role checks enforce authorization on all commands (handshake commands exempted). **TLS** is available via [rustls](https://github.com/rustls/rustls) when `tls_cert_file`/`tls_key_file` are provided.
 
 ---
 

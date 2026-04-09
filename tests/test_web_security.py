@@ -1,7 +1,7 @@
 """Tests for web_app.py security hardening: auth, rate limiting, input validation, CSP.
 
 These tests import web_app once and patch module-level globals to avoid
-conflicting WiredTiger connections.
+conflicting embedded database handles.
 """
 
 import json
@@ -13,11 +13,11 @@ from smongo import MongoClient as EmbeddedClient
 
 @pytest.fixture
 def _web_app(tmp_path):
-    """Import web_app once per test and rewire to an isolated WT dir."""
+    """Import web_app once per test and rewire to an isolated data directory."""
     try:
         import web_app as wa
     except RuntimeError:
-        pytest.skip("web_app requires exclusive WiredTiger access to local_wt_data")
+        pytest.skip("web_app requires exclusive access to its local data directory")
 
     old_client = wa.client
     old_cache = wa._collections_cache.copy()
@@ -25,7 +25,7 @@ def _web_app(tmp_path):
     old_key = wa._API_KEY
     old_limiter = wa._limiter
 
-    wa.client = EmbeddedClient(f"local+wt://{tmp_path}/web_sec_wt")
+    wa.client = EmbeddedClient(f"local://{tmp_path}/web_sec_redb")
     wa._collections_cache.clear()
     wa._watch_streams.clear()
 

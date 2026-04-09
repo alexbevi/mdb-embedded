@@ -50,7 +50,7 @@ def _check_perf_threshold(request, benchmark):  # type: ignore[no-untyped-def]
 
 @pytest.fixture
 def perf_client(tmp_path):
-    return MongoClient(f"local+wt://{tmp_path}/perf_wt")
+    return MongoClient(f"local://{tmp_path}/perf_redb")
 
 
 @pytest.fixture

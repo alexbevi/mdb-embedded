@@ -16,7 +16,7 @@ from smongo._smongo_core import doc_checksum as _doc_checksum
 from smongo._smongo_core import from_bson as _from_bson
 from smongo._smongo_core import to_bson as _to_bson
 
-from ._compat import WTError as _WTError
+from ._compat import StorageError as _StorageError
 from ._types import Document, Pipeline
 
 log = logging.getLogger("smongo.oplog")
@@ -26,7 +26,7 @@ class OplogHub:
     """Instance-scoped listener registry for oplog change notifications.
 
     One hub is created per ``LocalClient`` and shared by all collections under
-    that engine, ensuring listeners are isolated per WiredTiger connection.
+    that engine, ensuring listeners are isolated per embedded client instance.
     """
 
     def __init__(self) -> None:
@@ -57,7 +57,7 @@ class OplogHub:
 
 
 class OplogWriter:
-    """Appends structured operations to a WiredTiger oplog table."""
+    """Appends structured operations to the storage-backed oplog table."""
 
     def __init__(
         self,
@@ -136,7 +136,7 @@ class OplogWriter:
                 cursor.set_key(k)
                 try:
                     cursor.remove()
-                except _WTError as exc:
+                except _StorageError as exc:
                     log.debug("Oplog truncate_before: failed to remove key %s: %s", k, exc)
             cursor.close()
         return len(to_remove)
@@ -158,7 +158,7 @@ class OplogWriter:
             cursor.set_key(k)
             try:
                 cursor.remove()
-            except _WTError as exc:
+            except _StorageError as exc:
                 log.debug("Oplog truncate_count: failed to remove key %s: %s", k, exc)
         cursor.close()
         return excess
@@ -204,7 +204,7 @@ class OplogReader:
             cursor.set_key(checkpoint_key)
             try:
                 exact = cursor.search_near()
-            except _WTError:
+            except _StorageError:
                 cursor.close()
                 return entries
             if exact == 0:

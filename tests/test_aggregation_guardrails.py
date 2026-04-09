@@ -98,9 +98,9 @@ class TestBatchedOut:
         assert _OUT_BATCH_SIZE == 1_000
 
     def test_out_stage_writes_all_docs(self, populated_collection, local_db):
-        target = local_db.get_collection("out_target")
+        target = local_db.collection("out_target")
         docs = populated_collection.get_all()
-        getter = lambda name: local_db.get_collection(name)
+        getter = lambda name: local_db.collection(name)
         out_stage(docs, "out_target", collection_getter=getter)
         assert len(target.get_all()) == len(docs)
 
@@ -116,8 +116,8 @@ class TestFacetLimitPropagation:
 
 class TestLookupOptimization:
     def test_lookup_uses_indexed_path(self, local_db):
-        main = local_db.get_collection("orders")
-        foreign = local_db.get_collection("products")
+        main = local_db.collection("orders")
+        foreign = local_db.collection("products")
         foreign.create_index("sku")
         foreign.insert_many(
             [
@@ -132,7 +132,7 @@ class TestLookupOptimization:
                 {"_id": "o3", "product_sku": "C"},
             ]
         )
-        getter = lambda name: local_db.get_collection(name)
+        getter = lambda name: local_db.collection(name)
         result = Cursor(main.get_all(), collection_getter=getter).aggregate(
             [
                 {
@@ -154,11 +154,11 @@ class TestLookupOptimization:
         assert found_c[0]["product"] == []
 
     def test_lookup_hash_fallback(self, local_db):
-        main = local_db.get_collection("main_fb")
-        foreign = local_db.get_collection("foreign_fb")
+        main = local_db.collection("main_fb")
+        foreign = local_db.collection("foreign_fb")
         foreign.insert_many([{"k": "x", "v": 1}])
         main.insert_many([{"_id": "1", "fk": "x"}])
-        getter = lambda name: local_db.get_collection(name)
+        getter = lambda name: local_db.collection(name)
         result = Cursor(main.get_all(), collection_getter=getter).aggregate(
             [
                 {

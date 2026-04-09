@@ -66,13 +66,13 @@ def main() -> None:
 
     texts = [
         "LangChain is a framework for developing applications powered by language models.",
-        "smongo is an embedded MongoDB engine that runs locally on WiredTiger B-trees.",
+        "smongo is an embedded MongoDB engine that runs locally using redb storage.",
         "Vector search finds semantically similar documents using cosine similarity.",
         "Retrieval-Augmented Generation grounds LLM answers in real data from a knowledge base.",
         "Agents use LLMs to decide what actions to take and which tools to call.",
         "MongoDB Atlas provides a fully managed cloud database service with vector search.",
         "The wire protocol lets any MongoDB driver connect to smongo over TCP.",
-        "WiredTiger provides MVCC concurrency and crash-safe storage with WAL journaling.",
+        "The engine provides MVCC-style concurrency and durable on-disk storage.",
     ]
 
     native = SmongoClient(f"local://{db_path}")

@@ -1,4 +1,6 @@
 //! PyO3 extension module exposing Rust-accelerated MongoDB internals to Python.
+#![forbid(unsafe_code)]
+
 mod aggregation;
 mod aggregation_joins;
 mod bson_helpers;
@@ -6,16 +8,15 @@ mod geo_s2;
 mod geo_polygon;
 mod geo_query;
 mod cached_modules;
+mod engine_errors;
 mod index_encoding;
-mod index_manager;
-mod local_collection;
+mod index_helpers;
 mod locking;
 mod objectid;
 mod oplog;
 mod paths;
 mod query_compiler;
 mod query_expressions;
-mod query_planner;
 mod query_update;
 mod raw_bson;
 pub(crate) mod rbac;
@@ -24,8 +25,6 @@ mod results;
 pub(crate) mod schema;
 pub(crate) mod scram;
 mod storage;
-mod storage_engine;
-mod streaming;
 mod sync_manager;
 mod sync_utils;
 mod transaction;
@@ -40,23 +39,8 @@ mod wire_profiler;
 mod wire_server;
 mod wire_sessions;
 mod wire_transactions;
-mod wt_bridge;
-mod wt_safe;
-mod wt_storage_adapter;
 
 use pyo3::prelude::*;
-
-/// WiredTiger table URI (e.g. `"table:mydb_mycoll"`).
-pub(crate) type TableUri = String;
-
-/// Database name as used in `db_name.collection_name` namespaces.
-pub(crate) type DbName = String;
-
-/// Collection name within a database.
-pub(crate) type CollectionName = String;
-
-/// Fully-qualified namespace (`"db_name.collection_name"`).
-pub(crate) type Namespace = String;
 
 fn register_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<objectid::ObjectId>()?;
@@ -97,22 +81,16 @@ fn register_storage(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(storage::cursor_get_doc, m)?)?;
     m.add_function(wrap_pyfunction!(storage::doc_to_bson, m)?)?;
     m.add_function(wrap_pyfunction!(storage::match_doc, m)?)?;
-    m.add_class::<storage_engine::RustLocalClient>()?;
-    m.add_class::<storage_engine::RustLocalDB>()?;
-    m.add_class::<local_collection::RustLocalCollection>()?;
     m.add_class::<redb_client::RedbLocalClient>()?;
     m.add_class::<redb_client::RedbLocalDB>()?;
     m.add_class::<redb_client::RedbLocalCollection>()?;
-    m.add_class::<index_manager::RustIndexManager>()?;
     m.add(
         "DuplicateKeyError",
-        m.py().get_type::<index_manager::DuplicateKeyError>(),
+        m.py().get_type::<index_helpers::DuplicateKeyError>(),
     )?;
-    m.add_function(wrap_pyfunction!(index_manager::rs_tokenize, m)?)?;
-    m.add_function(wrap_pyfunction!(index_manager::rs_hash_value, m)?)?;
-    m.add_function(wrap_pyfunction!(index_manager::rs_flatten_doc, m)?)?;
-    m.add_class::<query_planner::RustQueryPlanner>()?;
-    m.add_class::<streaming::RustStreamingCursor>()?;
+    m.add_function(wrap_pyfunction!(index_helpers::rs_tokenize, m)?)?;
+    m.add_function(wrap_pyfunction!(index_helpers::rs_hash_value, m)?)?;
+    m.add_function(wrap_pyfunction!(index_helpers::rs_flatten_doc, m)?)?;
     Ok(())
 }
 
@@ -147,8 +125,6 @@ fn register_aggregation(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
 fn register_sync(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<oplog::OplogHub>()?;
-    m.add_class::<oplog::OplogWriter>()?;
-    m.add_class::<oplog::OplogReader>()?;
     m.add_class::<oplog::ChangeStream>()?;
     m.add_class::<sync_utils::VectorClock>()?;
     m.add_class::<sync_utils::TombstoneRegistry>()?;
@@ -248,12 +224,9 @@ fn register_wire(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-fn register_wt_bridge(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<wt_bridge::RustWtSession>()?;
-    m.add_class::<wt_bridge::RustWtCursor>()?;
-    m.add_class::<transaction::RustTransactionSession>()?;
-    m.add_function(wrap_pyfunction!(transaction::get_active_txn_session, m)?)?;
-    Ok(())
+#[pyfunction]
+fn __build_version__() -> &'static str {
+    env!("CARGO_PKG_VERSION")
 }
 
 #[pymodule(gil_used = false)]
@@ -263,6 +236,7 @@ fn _smongo_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     register_aggregation(m)?;
     register_sync(m)?;
     register_wire(m)?;
-    register_wt_bridge(m)?;
+    m.add_function(wrap_pyfunction!(transaction::get_active_txn_session, m)?)?;
+    m.add_function(wrap_pyfunction!(__build_version__, m)?)?;
     Ok(())
 }

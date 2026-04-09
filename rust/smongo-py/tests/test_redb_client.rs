@@ -1,14 +1,13 @@
-//! Integration tests for RedbLocalClient (redb-backed, no WiredTiger).
+//! Integration tests for RedbLocalClient (redb-backed).
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use tempfile::TempDir;
 
 #[test]
+#[ignore = "requires a Python that can import _smongo_core (e.g. maturin develop + PYTHONPATH)"]
 fn test_redb_client_basic_crud() -> PyResult<()> {
-    pyo3::prepare_freethreaded_python();
-
-    Python::with_gil(|py| {
+    Python::try_attach(|py| -> PyResult<()> {
         let tempdir = TempDir::new().unwrap();
         let db_path = tempdir.path().to_str().unwrap();
 
@@ -27,7 +26,7 @@ fn test_redb_client_basic_crud() -> PyResult<()> {
         doc.set_item("age", 30)?;
         let result = coll.call_method1("insert_one", (doc,))?;
         let inserted_id = result.get_item("inserted_id")?;
-        assert!(inserted_id.is_some());
+        assert!(!inserted_id.is_none());
 
         // Find
         let filter = PyDict::new(py);
@@ -73,13 +72,14 @@ fn test_redb_client_basic_crud() -> PyResult<()> {
 
         Ok(())
     })
+    .expect("Python interpreter not available for tests")?;
+    Ok(())
 }
 
 #[test]
+#[ignore = "requires a Python that can import _smongo_core (e.g. maturin develop + PYTHONPATH)"]
 fn test_redb_client_indexes() -> PyResult<()> {
-    pyo3::prepare_freethreaded_python();
-
-    Python::with_gil(|py| {
+    Python::try_attach(|py| -> PyResult<()> {
         let tempdir = TempDir::new().unwrap();
         let db_path = tempdir.path().to_str().unwrap();
 
@@ -93,7 +93,7 @@ fn test_redb_client_indexes() -> PyResult<()> {
         // Create index
         let keys = PyDict::new(py);
         keys.set_item("email", 1)?;
-        let index_name: String = coll.call_method1("create_index", (keys, py.None()))?.extract()?;
+        let index_name: String = coll.call_method1("create_index", (keys,))?.extract()?;
         assert!(index_name.contains("email"));
 
         // List indexes
@@ -107,4 +107,6 @@ fn test_redb_client_indexes() -> PyResult<()> {
 
         Ok(())
     })
+    .expect("Python interpreter not available for tests")?;
+    Ok(())
 }

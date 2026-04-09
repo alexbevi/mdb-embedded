@@ -54,7 +54,7 @@ def main() -> None:
             {"role": "user", "content": "What is smongo?", "ts": now},
             {
                 "role": "assistant",
-                "content": "smongo is a local-first embedded MongoDB engine built on WiredTiger.",
+                "content": "smongo is a local-first embedded MongoDB engine built on redb and Rust.",
                 "ts": now + 1,
             },
             {"role": "user", "content": "Does it support transactions?", "ts": now + 2},

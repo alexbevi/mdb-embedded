@@ -120,9 +120,11 @@ fn cmd_aggregate(
                 let idx_sizes = stats_dict
                     .get_item("indexSizes")?
                     .unwrap_or_else(|| PyDict::new(py).into_any());
-                let wt = stats_dict
-                    .get_item("wiredTiger")?
-                    .unwrap_or_else(|| PyDict::new(py).into_any());
+                let se = stats_dict.get_item("storageEngine")?.unwrap_or_else(|| {
+                    let d = PyDict::new(py);
+                    let _ = d.set_item("name", "redb");
+                    d.into_any()
+                });
 
                 let doc = PyDict::new(py);
                 doc.set_item("ns", &ns)?;
@@ -144,7 +146,7 @@ fn cmd_aggregate(
                     ss.set_item("totalSize", storage_size + total_idx_size)?;
                     ss.set_item("indexSizes", idx_sizes)?;
                     ss.set_item("scaleFactor", 1)?;
-                    ss.set_item("wiredTiger", wt)?;
+                    ss.set_item("storageEngine", se)?;
                     doc.set_item("storageStats", ss)?;
                 }
                 if spec_dict
@@ -202,9 +204,6 @@ fn cmd_aggregate(
     let coll_typed = get_collection_typed(ctx, &db_name, &coll_name)?;
     let docs = coll_typed.bind(py).borrow().get_all_typed(py)?;
 
-    let db_py = ctx.borrow().get_db_typed(py, &db_name)?;
-    let coll_getter_fn = db_py.bind(py).getattr("get_collection")?;
-
     let constants_mod = crate::cached_modules::smongo_agg_constants(py)?;
     let max_docs: usize = constants_mod
         .getattr("DEFAULT_MAX_PIPELINE_DOCS")?
@@ -219,7 +218,8 @@ fn cmd_aggregate(
         py,
         docs.bind(py),
         pipeline,
-        Some(&coll_getter_fn),
+        None,
+        Some(coll_typed.bind(py).as_any()),
         max_docs,
         false,
         mem_limit,

@@ -248,7 +248,7 @@ impl<B: StorageBackend> Database<B> {
             .filter(|t| t == &table_name || t.starts_with(&child_prefix))
             .collect();
         // Drop `users.idx_*` / `users.indexes_metadata` before `users`.
-        owned.sort_by(|a, b| b.len().cmp(&a.len()));
+        owned.sort_by_key(|t| std::cmp::Reverse(t.len()));
 
         let session = self.backend.open_session()?;
         for t in owned {

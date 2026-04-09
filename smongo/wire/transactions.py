@@ -1,8 +1,8 @@
-"""Transaction state and commit/abort helpers using WT-native sessions.
+"""Transaction state and commit/abort helpers for embedded engine sessions.
 
 Each active transaction holds a reference to a TransactionSession whose
-underlying WiredTiger session spans all collection operations on the
-current thread.  ``commit`` / ``abort`` map directly to WiredTiger
+underlying engine transaction spans all collection operations on the
+current thread.  ``commit`` / ``abort`` map directly to the storage
 ``commit_transaction`` / ``rollback_transaction``.
 
 Implementation lives in Rust (_smongo_core); this module re-exports it.

@@ -39,10 +39,7 @@ pub(super) fn collect_ids_geo_cells<S: StorageSession>(
             Err(_) => continue,
         }
         loop {
-            let key_str = match cursor.get_key_str() {
-                Ok(s) => s,
-                Err(e) => return Err(e.into()),
-            };
+            let key_str = cursor.get_key_str()?;
             let Some(cid) = crate::geo::index_key_cell_id(&key_str) else {
                 if cursor.next().is_err() {
                     break;
