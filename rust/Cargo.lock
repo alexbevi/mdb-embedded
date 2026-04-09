@@ -327,6 +327,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
+name = "console_error_panic_hook"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a06aeb73f470f66dcdbf7223caeebb85984942f22f1adb2a088cf9668146bbbc"
+dependencies = [
+ "cfg-if",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "convert_case"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1373,17 +1383,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde-wasm-bindgen"
-version = "0.6.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8302e169f0eddcc139c70f139d19d6467353af16f9fce27e8c30158036a1e16b"
-dependencies = [
- "js-sys",
- "serde",
- "wasm-bindgen",
-]
-
-[[package]]
 name = "serde_bytes"
 version = "0.11.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1483,7 +1482,7 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
 name = "smongo-c"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "bson",
  "cbindgen",
@@ -1492,10 +1491,11 @@ dependencies = [
 
 [[package]]
 name = "smongo-engine"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "bson",
  "chrono",
+ "console_error_panic_hook",
  "getrandom 0.2.17",
  "js-sys",
  "parking_lot",
@@ -1505,7 +1505,6 @@ dependencies = [
  "roaring",
  "s2",
  "serde",
- "serde-wasm-bindgen",
  "serde_json",
  "tempfile",
  "uuid",
@@ -1515,7 +1514,7 @@ dependencies = [
 
 [[package]]
 name = "smongo-node"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "bson",
  "napi",
@@ -1527,7 +1526,7 @@ dependencies = [
 
 [[package]]
 name = "smongo-py"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "base64",
  "bson",

@@ -56,15 +56,73 @@ export function wipeOpfsDatabaseDirectory(dbName: string): Promise<void>;
 /** BSON-shaped results from the engine; narrow in application code as needed. */
 export type OpfsBsonDoc = Record<string, unknown>;
 
+export interface OpfsFindOptions {
+  limit?: number;
+  skip?: number;
+  sort?: OpfsBsonDoc;
+  projection?: OpfsBsonDoc;
+}
+
+export interface OpfsIndexOptions {
+  name?: string;
+  unique?: boolean;
+  sparse?: boolean;
+  background?: boolean;
+  expireAfterSeconds?: number;
+  partialFilterExpression?: OpfsBsonDoc;
+  collation?: OpfsBsonDoc;
+}
+
+export interface OpfsIndexSpec {
+  name: string;
+  keys: OpfsBsonDoc;
+  unique: boolean;
+  sparse: boolean;
+}
+
+export interface OpfsInsertOneResult {
+  insertedId: unknown;
+}
+
+export interface OpfsInsertManyResult {
+  insertedIds: unknown[];
+}
+
+export interface OpfsUpdateResult {
+  matchedCount: number;
+  modifiedCount: number;
+}
+
+export interface OpfsDeleteResult {
+  deletedCount: number;
+}
+
+export interface OpfsDatabaseStats {
+  collectionCount: number;
+  sizeBytes: number;
+}
+
 export class OpfsDatabase {
   constructor(dbName: string, options?: { mode?: 'owner' | 'client' });
   collection(name: string): OpfsCollection;
+  listCollectionNames(): Promise<string[]>;
+  dropCollection(name: string): Promise<void>;
+  stats(): Promise<OpfsDatabaseStats>;
 }
 
 export class OpfsCollection {
-  insertOne(doc: OpfsBsonDoc): Promise<OpfsBsonDoc>;
+  insertOne(doc: OpfsBsonDoc): Promise<OpfsInsertOneResult>;
+  insertMany(docs: OpfsBsonDoc[]): Promise<OpfsInsertManyResult>;
+  findOne(filter?: OpfsBsonDoc): Promise<OpfsBsonDoc | null>;
   find(filter?: OpfsBsonDoc): Promise<OpfsBsonDoc[]>;
+  findWithOptions(filter: OpfsBsonDoc, options: OpfsFindOptions): Promise<OpfsBsonDoc[]>;
   countDocuments(filter?: OpfsBsonDoc): Promise<number>;
-  deleteMany(filter: OpfsBsonDoc): Promise<OpfsBsonDoc>;
-  updateMany(filter: OpfsBsonDoc, update: OpfsBsonDoc): Promise<OpfsBsonDoc>;
+  updateOne(filter: OpfsBsonDoc, update: OpfsBsonDoc): Promise<OpfsUpdateResult>;
+  updateMany(filter: OpfsBsonDoc, update: OpfsBsonDoc): Promise<OpfsUpdateResult>;
+  deleteOne(filter: OpfsBsonDoc): Promise<OpfsDeleteResult>;
+  deleteMany(filter: OpfsBsonDoc): Promise<OpfsDeleteResult>;
+  aggregate(pipeline: OpfsBsonDoc[]): Promise<OpfsBsonDoc[]>;
+  createIndex(keys: OpfsBsonDoc, options?: OpfsIndexOptions): Promise<string>;
+  dropIndex(indexName: string): Promise<void>;
+  listIndexes(): Promise<OpfsIndexSpec[]>;
 }

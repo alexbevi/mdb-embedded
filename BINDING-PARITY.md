@@ -104,7 +104,23 @@ the pure-Python `smongo` package. They are not part of the binding contract.
 
 ## WASM Notes
 
-The WASM surface (`wasm_bindings.rs`) is intentionally minimal: `insert_one`,
-`find`, `count_documents`, `delete_many`, `update_many` over both `MemBackend`
-and `OpfsBackend`. OPFS transactions are no-ops at the storage level. Expanding
-WASM toward embedded tier parity is tracked separately from this document.
+The WASM surface (`wasm_bindings.rs`) covers core CRUD, aggregation, and index
+management over both `MemBackend` and `OpfsBackend`:
+
+**Collection:** `insert_one`, `insert_many`, `find_one`, `find`, `find_with_options`
+(limit/skip/sort/projection), `count_documents`, `update_one`, `update_many`,
+`delete_one`, `delete_many`, `aggregate`, `create_index`, `drop_index`, `list_indexes`.
+
+**Database:** `collection`, `list_collection_names`, `drop_collection`, `stats`.
+
+OPFS transactions are no-ops at the storage level. The BSON-bytes-at-boundary
+pattern avoids expensive JS object marshalling; `Uint8Array` is passed directly
+to WASM without intermediate copies.
+
+**Intentionally excluded on WASM:**
+
+- 2dsphere / geo indexes (`s2` crate not available on wasm32)
+- Bitmap, text, and vector index types (stubs only on wasm32)
+- Sessions / multi-document transactions
+- Cursors (`find_iter` / streaming)
+- `aggregate_stream`

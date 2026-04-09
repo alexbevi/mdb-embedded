@@ -1,46 +1,99 @@
 //! WASM bindings for smongo-engine: browser-compatible database API
 //!
-//! Exposes a minimal JavaScript API over wasm-bindgen. Follows the C ABI pattern:
+//! Exposes a JavaScript API over wasm-bindgen. Follows the C ABI pattern:
 //! raw BSON bytes at every boundary to avoid expensive type marshalling.
 //!
 //! # Design
 //!
-//! - `WasmDatabase` wraps `Database<MemBackend>` (no file I/O on WASM)
-//! - `WasmCollection` wraps `Collection<MemBackend>`
+//! - `WasmDatabase` wraps `Database<MemBackend>` (ephemeral in-memory)
+//! - `WasmOpfsDatabase` wraps `Database<OpfsBackend>` (persistent via OPFS)
 //! - All document parameters and results are BSON byte arrays (`Vec<u8>`)
 //! - JavaScript layer uses MongoDB's `bson` package for serialization
 //!
 //! # Example (from JavaScript)
 //!
 //! ```javascript
-//! import init, { WasmDatabase } from './pkg/smongo_engine.js';
-//! import { BSON } from 'bson';
+//! import { initSmongo, Database } from './smongo-browser.js';
 //!
-//! await init();
-//! const db = new WasmDatabase('mydb');
+//! await initSmongo();
+//! const db = new Database('mydb');
 //! const coll = db.collection('users');
 //!
 //! // Insert
-//! const doc = { name: 'Alice', age: 30 };
-//! const docBytes = BSON.serialize(doc);
-//! const resultBytes = coll.insert_one(Array.from(docBytes));
-//! const result = BSON.deserialize(new Uint8Array(resultBytes));
+//! coll.insertOne({ name: 'Alice', age: 30 });
 //!
-//! // Find
-//! const filterBytes = BSON.serialize({ name: 'Alice' });
-//! const docsBytes = coll.find(Array.from(filterBytes));
-//! const docs = BSON.deserialize(new Uint8Array(docsBytes)).results;
+//! // Find with options
+//! const docs = coll.find({ age: { $gte: 18 } }, { limit: 10, sort: { age: -1 } });
+//!
+//! // Aggregate
+//! const results = coll.aggregate([{ $match: { age: { $gte: 18 } } }, { $sort: { age: -1 } }]);
 //! ```
 
 use wasm_bindgen::prelude::*;
-use bson::{doc, from_slice, to_vec};
+use bson::{doc, from_slice, to_vec, Bson, Document};
 use std::collections::BTreeMap;
 use js_sys::{Map, Iterator};
 use web_sys::FileSystemSyncAccessHandle;
 
-use crate::collection::Collection;
+use crate::collection::{Collection, FindOptions};
 use crate::database::Database;
+use crate::index::IndexOptions;
 use crate::storage::{MemBackend, MemSession, OpfsBackend, OpfsSession};
+
+/// Called automatically when the WASM module loads. Installs a panic hook that
+/// forwards Rust panic messages to `console.error` instead of the opaque
+/// `RuntimeError: unreachable` default.
+#[wasm_bindgen(start)]
+pub fn wasm_init() {
+    console_error_panic_hook::set_once();
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn js_err(msg: String) -> JsValue {
+    JsValue::from_str(&msg)
+}
+
+fn parse_find_options(opts_bytes: &[u8]) -> Result<FindOptions, JsValue> {
+    let opts_doc: Document = from_slice(opts_bytes)
+        .map_err(|e| js_err(format!("BSON parse error (options): {}", e)))?;
+
+    Ok(FindOptions {
+        sort: opts_doc.get_document("sort").ok().cloned(),
+        limit: opts_doc.get_i64("limit").ok().or_else(|| opts_doc.get_i32("limit").ok().map(i64::from)),
+        skip: opts_doc.get_i64("skip").ok().or_else(|| opts_doc.get_i32("skip").ok().map(i64::from)),
+        projection: opts_doc.get_document("projection").ok().cloned(),
+    })
+}
+
+fn parse_index_options(opts_bytes: &[u8]) -> Result<IndexOptions, JsValue> {
+    let opts_doc: Document = from_slice(opts_bytes)
+        .map_err(|e| js_err(format!("BSON parse error (index options): {}", e)))?;
+
+    Ok(IndexOptions {
+        name: opts_doc.get_str("name").ok().map(String::from),
+        unique: opts_doc.get_bool("unique").unwrap_or(false),
+        sparse: opts_doc.get_bool("sparse").unwrap_or(false),
+        background: opts_doc.get_bool("background").unwrap_or(false),
+        expire_after_seconds: opts_doc
+            .get_i64("expireAfterSeconds")
+            .ok()
+            .or_else(|| opts_doc.get_i32("expireAfterSeconds").ok().map(i64::from))
+            .map(|v| v as u64),
+        partial_filter_expression: opts_doc.get_document("partialFilterExpression").ok().cloned(),
+        collation: opts_doc.get_document("collation").ok().cloned(),
+        index_type: None,
+        vector_options: None,
+        text_options: None,
+        prefix_options: None,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// WasmDatabase (in-memory)
+// ---------------------------------------------------------------------------
 
 /// WASM-compatible database handle.
 ///
@@ -54,13 +107,6 @@ pub struct WasmDatabase {
 
 #[wasm_bindgen]
 impl WasmDatabase {
-    /// Create a new in-memory database.
-    ///
-    /// # Arguments
-    /// * `name` - Database name (used for oplog namespacing)
-    ///
-    /// # Returns
-    /// `WasmDatabase` handle
     #[wasm_bindgen(constructor)]
     pub fn new(name: String) -> WasmDatabase {
         let backend = MemBackend::new();
@@ -68,28 +114,42 @@ impl WasmDatabase {
         WasmDatabase { inner: db }
     }
 
-    /// Get a collection handle.
-    ///
-    /// # Arguments
-    /// * `name` - Collection name
-    ///
-    /// # Returns
-    /// `WasmCollection` handle (collection is created lazily on first write)
-    ///
-    /// # Errors
-    /// Returns `JsValue` error if collection creation fails
     pub fn collection(&self, name: String) -> Result<WasmCollection, JsValue> {
-        let coll = self
-            .inner
-            .collection(&name)
-            .map_err(|e| JsValue::from_str(&format!("Collection error: {}", e)))?;
+        let coll = self.inner.collection(&name)
+            .map_err(|e| js_err(format!("Collection error: {}", e)))?;
         Ok(WasmCollection { inner: coll })
+    }
+
+    pub fn list_collection_names(&self) -> Result<Vec<JsValue>, JsValue> {
+        let names = self.inner.list_collection_names()
+            .map_err(|e| js_err(format!("list_collection_names error: {}", e)))?;
+        Ok(names.into_iter().map(|n| JsValue::from_str(&n)).collect())
+    }
+
+    pub fn drop_collection(&self, name: String) -> Result<(), JsValue> {
+        self.inner.drop_collection(&name)
+            .map_err(|e| js_err(format!("drop_collection error: {}", e)))
+    }
+
+    pub fn stats(&self) -> Result<Vec<u8>, JsValue> {
+        let s = self.inner.stats()
+            .map_err(|e| js_err(format!("stats error: {}", e)))?;
+        let result_doc = doc! {
+            "collectionCount": s.collection_count as i64,
+            "sizeBytes": s.size_bytes as i64
+        };
+        to_vec(&result_doc)
+            .map_err(|e| js_err(format!("BSON serialize error: {}", e)))
     }
 }
 
-/// WASM-compatible collection handle.
+// ---------------------------------------------------------------------------
+// WasmCollection (in-memory)
+// ---------------------------------------------------------------------------
+
+/// WASM-compatible collection handle (in-memory backend).
 ///
-/// All methods accept and return raw BSON bytes.
+/// All document methods accept and return raw BSON bytes.
 #[wasm_bindgen]
 pub struct WasmCollection {
     inner: Collection<MemSession>,
@@ -97,137 +157,177 @@ pub struct WasmCollection {
 
 #[wasm_bindgen]
 impl WasmCollection {
-    /// Insert a single document.
-    ///
-    /// # Arguments
-    /// * `doc_bytes` - Raw BSON bytes representing the document to insert
-    ///
-    /// # Returns
-    /// Raw BSON bytes containing `{ insertedId: ObjectId }` on success
-    ///
-    /// # Errors
-    /// Returns `JsValue` error if BSON parsing or insert fails
     pub fn insert_one(&self, doc_bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
-        let doc = from_slice(&doc_bytes)
-            .map_err(|e| JsValue::from_str(&format!("BSON parse error: {}", e)))?;
-
-        let result = self
-            .inner
-            .insert_one(doc)
-            .map_err(|e| JsValue::from_str(&format!("Insert error: {}", e)))?;
-
+        let document = from_slice(&doc_bytes)
+            .map_err(|e| js_err(format!("BSON parse error: {}", e)))?;
+        let result = self.inner.insert_one(document)
+            .map_err(|e| js_err(format!("Insert error: {}", e)))?;
         let result_doc = doc! { "insertedId": result.inserted_id };
         to_vec(&result_doc)
-            .map_err(|e| JsValue::from_str(&format!("BSON serialize error: {}", e)))
+            .map_err(|e| js_err(format!("BSON serialize error: {}", e)))
     }
 
-    /// Find documents matching a filter.
-    ///
-    /// # Arguments
-    /// * `filter_bytes` - Raw BSON bytes representing the query filter (empty doc matches all)
-    ///
-    /// # Returns
-    /// Raw BSON bytes containing `{ results: [doc1, doc2, ...] }` on success
-    ///
-    /// # Errors
-    /// Returns `JsValue` error if BSON parsing or query fails
+    pub fn insert_many(&self, docs_bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+        let wrapper: Document = from_slice(&docs_bytes)
+            .map_err(|e| js_err(format!("BSON parse error: {}", e)))?;
+        let docs_bson = wrapper.get_array("documents")
+            .map_err(|e| js_err(format!("Missing 'documents' array: {}", e)))?;
+        let documents: Vec<Document> = docs_bson.iter().filter_map(|b| {
+            if let Bson::Document(d) = b { Some(d.clone()) } else { None }
+        }).collect();
+        let result = self.inner.insert_many(documents)
+            .map_err(|e| js_err(format!("InsertMany error: {}", e)))?;
+        let ids: Vec<Bson> = result.inserted_ids;
+        let result_doc = doc! { "insertedIds": ids };
+        to_vec(&result_doc)
+            .map_err(|e| js_err(format!("BSON serialize error: {}", e)))
+    }
+
+    pub fn find_one(&self, filter_bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+        let filter = from_slice(&filter_bytes)
+            .map_err(|e| js_err(format!("BSON parse error: {}", e)))?;
+        let maybe_doc = self.inner.find_one(filter)
+            .map_err(|e| js_err(format!("FindOne error: {}", e)))?;
+        match maybe_doc {
+            Some(d) => to_vec(&d).map_err(|e| js_err(format!("BSON serialize error: {}", e))),
+            None => {
+                let null_doc = doc! { "__null": true };
+                to_vec(&null_doc).map_err(|e| js_err(format!("BSON serialize error: {}", e)))
+            }
+        }
+    }
+
     pub fn find(&self, filter_bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
         let filter = from_slice(&filter_bytes)
-            .map_err(|e| JsValue::from_str(&format!("BSON parse error: {}", e)))?;
-
-        let docs = self
-            .inner
-            .find(filter)
-            .map_err(|e| JsValue::from_str(&format!("Find error: {}", e)))?;
-
-        // Wrap in object with "results" key for consistent return format
+            .map_err(|e| js_err(format!("BSON parse error: {}", e)))?;
+        let docs = self.inner.find(filter)
+            .map_err(|e| js_err(format!("Find error: {}", e)))?;
         let result = doc! { "results": docs };
         to_vec(&result)
-            .map_err(|e| JsValue::from_str(&format!("BSON serialize error: {}", e)))
+            .map_err(|e| js_err(format!("BSON serialize error: {}", e)))
     }
 
-    /// Count documents matching a filter.
-    ///
-    /// # Arguments
-    /// * `filter_bytes` - Raw BSON bytes representing the query filter
-    ///
-    /// # Returns
-    /// Count as f64 (JavaScript number)
-    ///
-    /// # Errors
-    /// Returns `JsValue` error if BSON parsing or count fails
-    pub fn count_documents(&self, filter_bytes: Vec<u8>) -> Result<f64, JsValue> {
+    pub fn find_with_options(&self, filter_bytes: Vec<u8>, options_bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
         let filter = from_slice(&filter_bytes)
-            .map_err(|e| JsValue::from_str(&format!("BSON parse error: {}", e)))?;
+            .map_err(|e| js_err(format!("BSON parse error: {}", e)))?;
+        let options = parse_find_options(&options_bytes)?;
+        let docs = self.inner.find_with_options(filter, options)
+            .map_err(|e| js_err(format!("Find error: {}", e)))?;
+        let result = doc! { "results": docs };
+        to_vec(&result)
+            .map_err(|e| js_err(format!("BSON serialize error: {}", e)))
+    }
 
-        let count = self
-            .inner
-            .count_documents(filter)
-            .map_err(|e| JsValue::from_str(&format!("Count error: {}", e)))?;
-
+    pub fn count_documents(&self, filter_bytes: Vec<u8>) -> Result<f64, JsValue> {
+        let filter: Document = from_slice(&filter_bytes)
+            .map_err(|e| js_err(format!("BSON parse error: {}", e)))?;
+        let count = self.inner.count_documents(Some(filter))
+            .map_err(|e| js_err(format!("Count error: {}", e)))?;
         Ok(count as f64)
     }
 
-    /// Delete documents matching a filter.
-    ///
-    /// # Arguments
-    /// * `filter_bytes` - Raw BSON bytes representing the query filter
-    ///
-    /// # Returns
-    /// Raw BSON bytes containing `{ deletedCount: i64 }` on success
-    ///
-    /// # Errors
-    /// Returns `JsValue` error if BSON parsing or delete fails
-    pub fn delete_many(&self, filter_bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+    pub fn update_one(&self, filter_bytes: Vec<u8>, update_bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
         let filter = from_slice(&filter_bytes)
-            .map_err(|e| JsValue::from_str(&format!("BSON parse error: {}", e)))?;
-
-        let result = self
-            .inner
-            .delete_many(filter)
-            .map_err(|e| JsValue::from_str(&format!("Delete error: {}", e)))?;
-
-        let result_doc = doc! { "deletedCount": result.deleted_count as i64 };
-        to_vec(&result_doc)
-            .map_err(|e| JsValue::from_str(&format!("BSON serialize error: {}", e)))
-    }
-
-    /// Update documents matching a filter.
-    ///
-    /// # Arguments
-    /// * `filter_bytes` - Raw BSON bytes representing the query filter
-    /// * `update_bytes` - Raw BSON bytes representing the update operators (e.g., `{ "$set": { ... } }`)
-    ///
-    /// # Returns
-    /// Raw BSON bytes containing `{ matchedCount: i64, modifiedCount: i64 }` on success
-    ///
-    /// # Errors
-    /// Returns `JsValue` error if BSON parsing or update fails
-    pub fn update_many(
-        &self,
-        filter_bytes: Vec<u8>,
-        update_bytes: Vec<u8>,
-    ) -> Result<Vec<u8>, JsValue> {
-        let filter = from_slice(&filter_bytes)
-            .map_err(|e| JsValue::from_str(&format!("BSON parse error (filter): {}", e)))?;
-
+            .map_err(|e| js_err(format!("BSON parse error (filter): {}", e)))?;
         let update = from_slice(&update_bytes)
-            .map_err(|e| JsValue::from_str(&format!("BSON parse error (update): {}", e)))?;
-
-        let result = self
-            .inner
-            .update_many(filter, update)
-            .map_err(|e| JsValue::from_str(&format!("Update error: {}", e)))?;
-
+            .map_err(|e| js_err(format!("BSON parse error (update): {}", e)))?;
+        let result = self.inner.update_one(filter, update)
+            .map_err(|e| js_err(format!("Update error: {}", e)))?;
         let result_doc = doc! {
             "matchedCount": result.matched_count as i64,
             "modifiedCount": result.modified_count as i64
         };
         to_vec(&result_doc)
-            .map_err(|e| JsValue::from_str(&format!("BSON serialize error: {}", e)))
+            .map_err(|e| js_err(format!("BSON serialize error: {}", e)))
+    }
+
+    pub fn update_many(&self, filter_bytes: Vec<u8>, update_bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+        let filter = from_slice(&filter_bytes)
+            .map_err(|e| js_err(format!("BSON parse error (filter): {}", e)))?;
+        let update = from_slice(&update_bytes)
+            .map_err(|e| js_err(format!("BSON parse error (update): {}", e)))?;
+        let result = self.inner.update_many(filter, update)
+            .map_err(|e| js_err(format!("Update error: {}", e)))?;
+        let result_doc = doc! {
+            "matchedCount": result.matched_count as i64,
+            "modifiedCount": result.modified_count as i64
+        };
+        to_vec(&result_doc)
+            .map_err(|e| js_err(format!("BSON serialize error: {}", e)))
+    }
+
+    pub fn delete_one(&self, filter_bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+        let filter = from_slice(&filter_bytes)
+            .map_err(|e| js_err(format!("BSON parse error: {}", e)))?;
+        let result = self.inner.delete_one(filter)
+            .map_err(|e| js_err(format!("Delete error: {}", e)))?;
+        let result_doc = doc! { "deletedCount": result.deleted_count as i64 };
+        to_vec(&result_doc)
+            .map_err(|e| js_err(format!("BSON serialize error: {}", e)))
+    }
+
+    pub fn delete_many(&self, filter_bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+        let filter = from_slice(&filter_bytes)
+            .map_err(|e| js_err(format!("BSON parse error: {}", e)))?;
+        let result = self.inner.delete_many(filter)
+            .map_err(|e| js_err(format!("Delete error: {}", e)))?;
+        let result_doc = doc! { "deletedCount": result.deleted_count as i64 };
+        to_vec(&result_doc)
+            .map_err(|e| js_err(format!("BSON serialize error: {}", e)))
+    }
+
+    pub fn aggregate(&self, pipeline_bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+        let wrapper: Document = from_slice(&pipeline_bytes)
+            .map_err(|e| js_err(format!("BSON parse error: {}", e)))?;
+        let stages_bson = wrapper.get_array("pipeline")
+            .map_err(|e| js_err(format!("Missing 'pipeline' array: {}", e)))?;
+        let pipeline: Vec<Document> = stages_bson.iter().filter_map(|b| {
+            if let Bson::Document(d) = b { Some(d.clone()) } else { None }
+        }).collect();
+        let docs = self.inner.aggregate(pipeline)
+            .map_err(|e| js_err(format!("Aggregate error: {}", e)))?;
+        let result = doc! { "results": docs };
+        to_vec(&result)
+            .map_err(|e| js_err(format!("BSON serialize error: {}", e)))
+    }
+
+    pub fn create_index(&self, keys_bytes: Vec<u8>, options_bytes: Vec<u8>) -> Result<String, JsValue> {
+        let keys: Document = from_slice(&keys_bytes)
+            .map_err(|e| js_err(format!("BSON parse error (keys): {}", e)))?;
+        let options = if options_bytes.is_empty() {
+            None
+        } else {
+            Some(parse_index_options(&options_bytes)?)
+        };
+        self.inner.create_index(keys, options)
+            .map_err(|e| js_err(format!("CreateIndex error: {}", e)))
+    }
+
+    pub fn drop_index(&self, index_name: String) -> Result<(), JsValue> {
+        self.inner.drop_index(&index_name)
+            .map_err(|e| js_err(format!("DropIndex error: {}", e)))
+    }
+
+    pub fn list_indexes(&self) -> Result<Vec<u8>, JsValue> {
+        let indexes = self.inner.list_indexes()
+            .map_err(|e| js_err(format!("ListIndexes error: {}", e)))?;
+        let idx_docs: Vec<Bson> = indexes.into_iter().map(|spec| {
+            Bson::Document(doc! {
+                "name": spec.name,
+                "keys": spec.keys,
+                "unique": spec.options.unique,
+                "sparse": spec.options.sparse,
+            })
+        }).collect();
+        let result = doc! { "indexes": idx_docs };
+        to_vec(&result)
+            .map_err(|e| js_err(format!("BSON serialize error: {}", e)))
     }
 }
-// OPFS persistent storage variants
+
+// ---------------------------------------------------------------------------
+// WasmOpfsDatabase (persistent OPFS)
+// ---------------------------------------------------------------------------
 
 #[wasm_bindgen]
 pub struct WasmOpfsDatabase {
@@ -246,7 +346,7 @@ impl WasmOpfsDatabase {
 
         loop {
             let next = Iterator::next(&iter)
-                .map_err(|e| JsValue::from_str(&format!("Iterator error: {:?}", e)))?;
+                .map_err(|e| js_err(format!("Iterator error: {:?}", e)))?;
 
             if next.done() {
                 break;
@@ -269,10 +369,36 @@ impl WasmOpfsDatabase {
 
     pub fn collection(&self, name: String) -> Result<WasmOpfsCollection, JsValue> {
         let coll = self.inner.collection(&name)
-            .map_err(|e| JsValue::from_str(&format!("Collection error: {}", e)))?;
+            .map_err(|e| js_err(format!("Collection error: {}", e)))?;
         Ok(WasmOpfsCollection { inner: coll })
     }
+
+    pub fn list_collection_names(&self) -> Result<Vec<JsValue>, JsValue> {
+        let names = self.inner.list_collection_names()
+            .map_err(|e| js_err(format!("list_collection_names error: {}", e)))?;
+        Ok(names.into_iter().map(|n| JsValue::from_str(&n)).collect())
+    }
+
+    pub fn drop_collection(&self, name: String) -> Result<(), JsValue> {
+        self.inner.drop_collection(&name)
+            .map_err(|e| js_err(format!("drop_collection error: {}", e)))
+    }
+
+    pub fn stats(&self) -> Result<Vec<u8>, JsValue> {
+        let s = self.inner.stats()
+            .map_err(|e| js_err(format!("stats error: {}", e)))?;
+        let result_doc = doc! {
+            "collectionCount": s.collection_count as i64,
+            "sizeBytes": s.size_bytes as i64
+        };
+        to_vec(&result_doc)
+            .map_err(|e| js_err(format!("BSON serialize error: {}", e)))
+    }
 }
+
+// ---------------------------------------------------------------------------
+// WasmOpfsCollection (persistent OPFS)
+// ---------------------------------------------------------------------------
 
 #[wasm_bindgen]
 pub struct WasmOpfsCollection {
@@ -282,55 +408,169 @@ pub struct WasmOpfsCollection {
 #[wasm_bindgen]
 impl WasmOpfsCollection {
     pub fn insert_one(&self, doc_bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
-        let doc = from_slice(&doc_bytes)
-            .map_err(|e| JsValue::from_str(&format!("BSON parse error: {}", e)))?;
-        let result = self.inner.insert_one(doc)
-            .map_err(|e| JsValue::from_str(&format!("Insert error: {}", e)))?;
+        let document = from_slice(&doc_bytes)
+            .map_err(|e| js_err(format!("BSON parse error: {}", e)))?;
+        let result = self.inner.insert_one(document)
+            .map_err(|e| js_err(format!("Insert error: {}", e)))?;
         let result_doc = doc! { "insertedId": result.inserted_id };
         to_vec(&result_doc)
-            .map_err(|e| JsValue::from_str(&format!("BSON serialize error: {}", e)))
+            .map_err(|e| js_err(format!("BSON serialize error: {}", e)))
+    }
+
+    pub fn insert_many(&self, docs_bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+        let wrapper: Document = from_slice(&docs_bytes)
+            .map_err(|e| js_err(format!("BSON parse error: {}", e)))?;
+        let docs_bson = wrapper.get_array("documents")
+            .map_err(|e| js_err(format!("Missing 'documents' array: {}", e)))?;
+        let documents: Vec<Document> = docs_bson.iter().filter_map(|b| {
+            if let Bson::Document(d) = b { Some(d.clone()) } else { None }
+        }).collect();
+        let result = self.inner.insert_many(documents)
+            .map_err(|e| js_err(format!("InsertMany error: {}", e)))?;
+        let ids: Vec<Bson> = result.inserted_ids;
+        let result_doc = doc! { "insertedIds": ids };
+        to_vec(&result_doc)
+            .map_err(|e| js_err(format!("BSON serialize error: {}", e)))
+    }
+
+    pub fn find_one(&self, filter_bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+        let filter = from_slice(&filter_bytes)
+            .map_err(|e| js_err(format!("BSON parse error: {}", e)))?;
+        let maybe_doc = self.inner.find_one(filter)
+            .map_err(|e| js_err(format!("FindOne error: {}", e)))?;
+        match maybe_doc {
+            Some(d) => to_vec(&d).map_err(|e| js_err(format!("BSON serialize error: {}", e))),
+            None => {
+                let null_doc = doc! { "__null": true };
+                to_vec(&null_doc).map_err(|e| js_err(format!("BSON serialize error: {}", e)))
+            }
+        }
     }
 
     pub fn find(&self, filter_bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
         let filter = from_slice(&filter_bytes)
-            .map_err(|e| JsValue::from_str(&format!("BSON parse error: {}", e)))?;
+            .map_err(|e| js_err(format!("BSON parse error: {}", e)))?;
         let docs = self.inner.find(filter)
-            .map_err(|e| JsValue::from_str(&format!("Find error: {}", e)))?;
+            .map_err(|e| js_err(format!("Find error: {}", e)))?;
         let result = doc! { "results": docs };
         to_vec(&result)
-            .map_err(|e| JsValue::from_str(&format!("BSON serialize error: {}", e)))
+            .map_err(|e| js_err(format!("BSON serialize error: {}", e)))
+    }
+
+    pub fn find_with_options(&self, filter_bytes: Vec<u8>, options_bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+        let filter = from_slice(&filter_bytes)
+            .map_err(|e| js_err(format!("BSON parse error: {}", e)))?;
+        let options = parse_find_options(&options_bytes)?;
+        let docs = self.inner.find_with_options(filter, options)
+            .map_err(|e| js_err(format!("Find error: {}", e)))?;
+        let result = doc! { "results": docs };
+        to_vec(&result)
+            .map_err(|e| js_err(format!("BSON serialize error: {}", e)))
     }
 
     pub fn count_documents(&self, filter_bytes: Vec<u8>) -> Result<f64, JsValue> {
-        let filter = from_slice(&filter_bytes)
-            .map_err(|e| JsValue::from_str(&format!("BSON parse error: {}", e)))?;
-        let count = self.inner.count_documents(filter)
-            .map_err(|e| JsValue::from_str(&format!("Count error: {}", e)))?;
+        let filter: Document = from_slice(&filter_bytes)
+            .map_err(|e| js_err(format!("BSON parse error: {}", e)))?;
+        let count = self.inner.count_documents(Some(filter))
+            .map_err(|e| js_err(format!("Count error: {}", e)))?;
         Ok(count as f64)
     }
 
-    pub fn delete_many(&self, filter_bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+    pub fn update_one(&self, filter_bytes: Vec<u8>, update_bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
         let filter = from_slice(&filter_bytes)
-            .map_err(|e| JsValue::from_str(&format!("BSON parse error: {}", e)))?;
-        let result = self.inner.delete_many(filter)
-            .map_err(|e| JsValue::from_str(&format!("Delete error: {}", e)))?;
-        let result_doc = doc! { "deletedCount": result.deleted_count as i64 };
-        to_vec(&result_doc)
-            .map_err(|e| JsValue::from_str(&format!("BSON serialize error: {}", e)))
-    }
-
-    pub fn update_many(&self, filter_bytes: Vec<u8>, update_bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
-        let filter = from_slice(&filter_bytes)
-            .map_err(|e| JsValue::from_str(&format!("BSON parse error (filter): {}", e)))?;
+            .map_err(|e| js_err(format!("BSON parse error (filter): {}", e)))?;
         let update = from_slice(&update_bytes)
-            .map_err(|e| JsValue::from_str(&format!("BSON parse error (update): {}", e)))?;
-        let result = self.inner.update_many(filter, update)
-            .map_err(|e| JsValue::from_str(&format!("Update error: {}", e)))?;
+            .map_err(|e| js_err(format!("BSON parse error (update): {}", e)))?;
+        let result = self.inner.update_one(filter, update)
+            .map_err(|e| js_err(format!("Update error: {}", e)))?;
         let result_doc = doc! {
             "matchedCount": result.matched_count as i64,
             "modifiedCount": result.modified_count as i64
         };
         to_vec(&result_doc)
-            .map_err(|e| JsValue::from_str(&format!("BSON serialize error: {}", e)))
+            .map_err(|e| js_err(format!("BSON serialize error: {}", e)))
+    }
+
+    pub fn update_many(&self, filter_bytes: Vec<u8>, update_bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+        let filter = from_slice(&filter_bytes)
+            .map_err(|e| js_err(format!("BSON parse error (filter): {}", e)))?;
+        let update = from_slice(&update_bytes)
+            .map_err(|e| js_err(format!("BSON parse error (update): {}", e)))?;
+        let result = self.inner.update_many(filter, update)
+            .map_err(|e| js_err(format!("Update error: {}", e)))?;
+        let result_doc = doc! {
+            "matchedCount": result.matched_count as i64,
+            "modifiedCount": result.modified_count as i64
+        };
+        to_vec(&result_doc)
+            .map_err(|e| js_err(format!("BSON serialize error: {}", e)))
+    }
+
+    pub fn delete_one(&self, filter_bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+        let filter = from_slice(&filter_bytes)
+            .map_err(|e| js_err(format!("BSON parse error: {}", e)))?;
+        let result = self.inner.delete_one(filter)
+            .map_err(|e| js_err(format!("Delete error: {}", e)))?;
+        let result_doc = doc! { "deletedCount": result.deleted_count as i64 };
+        to_vec(&result_doc)
+            .map_err(|e| js_err(format!("BSON serialize error: {}", e)))
+    }
+
+    pub fn delete_many(&self, filter_bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+        let filter = from_slice(&filter_bytes)
+            .map_err(|e| js_err(format!("BSON parse error: {}", e)))?;
+        let result = self.inner.delete_many(filter)
+            .map_err(|e| js_err(format!("Delete error: {}", e)))?;
+        let result_doc = doc! { "deletedCount": result.deleted_count as i64 };
+        to_vec(&result_doc)
+            .map_err(|e| js_err(format!("BSON serialize error: {}", e)))
+    }
+
+    pub fn aggregate(&self, pipeline_bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+        let wrapper: Document = from_slice(&pipeline_bytes)
+            .map_err(|e| js_err(format!("BSON parse error: {}", e)))?;
+        let stages_bson = wrapper.get_array("pipeline")
+            .map_err(|e| js_err(format!("Missing 'pipeline' array: {}", e)))?;
+        let pipeline: Vec<Document> = stages_bson.iter().filter_map(|b| {
+            if let Bson::Document(d) = b { Some(d.clone()) } else { None }
+        }).collect();
+        let docs = self.inner.aggregate(pipeline)
+            .map_err(|e| js_err(format!("Aggregate error: {}", e)))?;
+        let result = doc! { "results": docs };
+        to_vec(&result)
+            .map_err(|e| js_err(format!("BSON serialize error: {}", e)))
+    }
+
+    pub fn create_index(&self, keys_bytes: Vec<u8>, options_bytes: Vec<u8>) -> Result<String, JsValue> {
+        let keys: Document = from_slice(&keys_bytes)
+            .map_err(|e| js_err(format!("BSON parse error (keys): {}", e)))?;
+        let options = if options_bytes.is_empty() {
+            None
+        } else {
+            Some(parse_index_options(&options_bytes)?)
+        };
+        self.inner.create_index(keys, options)
+            .map_err(|e| js_err(format!("CreateIndex error: {}", e)))
+    }
+
+    pub fn drop_index(&self, index_name: String) -> Result<(), JsValue> {
+        self.inner.drop_index(&index_name)
+            .map_err(|e| js_err(format!("DropIndex error: {}", e)))
+    }
+
+    pub fn list_indexes(&self) -> Result<Vec<u8>, JsValue> {
+        let indexes = self.inner.list_indexes()
+            .map_err(|e| js_err(format!("ListIndexes error: {}", e)))?;
+        let idx_docs: Vec<Bson> = indexes.into_iter().map(|spec| {
+            Bson::Document(doc! {
+                "name": spec.name,
+                "keys": spec.keys,
+                "unique": spec.options.unique,
+                "sparse": spec.options.sparse,
+            })
+        }).collect();
+        let result = doc! { "indexes": idx_docs };
+        to_vec(&result)
+            .map_err(|e| js_err(format!("BSON serialize error: {}", e)))
     }
 }

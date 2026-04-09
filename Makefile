@@ -102,6 +102,29 @@ test-perf: ## Run performance benchmarks
 test-all: test-rust test test-integration ## Run everything: Rust + unit + integration
 
 # ---------------------------------------------------------------------------
+# WASM
+# ---------------------------------------------------------------------------
+WASM_ENGINE := rust/smongo-engine
+
+.PHONY: check-wasm build-wasm test-wasm
+
+check-wasm: ## Type-check WASM target (fast, no artifacts)
+	cd $(ROOT) && $(CARGO) check --manifest-path $(RUST) -p smongo-engine --target wasm32-unknown-unknown
+
+build-wasm: ## Build WASM bundle (release + wasm-opt)
+	cd $(ROOT) && wasm-pack build $(WASM_ENGINE) --target web --out-dir wasm/pkg --release
+	@if command -v wasm-opt >/dev/null 2>&1; then \
+		wasm-opt -Oz $(WASM_ENGINE)/wasm/pkg/smongo_engine_bg.wasm \
+			-o $(WASM_ENGINE)/wasm/pkg/smongo_engine_bg.wasm; \
+		echo "  wasm-opt applied"; \
+	else \
+		echo "  wasm-opt not found — skipping (install binaryen for smaller binaries)"; \
+	fi
+
+test-wasm: build-wasm ## Run WASM Playwright e2e tests
+	cd $(ROOT)/$(WASM_ENGINE)/wasm && npm install && npx playwright install chromium && npx playwright test
+
+# ---------------------------------------------------------------------------
 # Coverage
 # ---------------------------------------------------------------------------
 .PHONY: coverage coverage-html

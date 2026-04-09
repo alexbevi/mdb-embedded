@@ -38,11 +38,11 @@ def _run(orders) -> None:
     stop = threading.Event()
 
     def listener():
-        with orders.watch() as stream:
-            for event in stream:
-                events.append(event)
-                if stop.is_set():
-                    break
+        stream = orders.watch()
+        for event in stream:
+            events.append(event)
+            if stop.is_set():
+                break
 
     t = threading.Thread(target=listener, daemon=True)
     t.start()

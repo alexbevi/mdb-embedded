@@ -23,7 +23,6 @@ export async function initSmongo() {
  */
 export class Database {
   /**
-   * Create a new database.
    * @param {string} name - Database name
    */
   constructor(name) {
@@ -31,7 +30,6 @@ export class Database {
   }
 
   /**
-   * Get a collection handle.
    * @param {string} name - Collection name
    * @returns {Collection}
    */
@@ -39,10 +37,26 @@ export class Database {
     const wasmColl = this._db.collection(name);
     return new Collection(wasmColl);
   }
+
+  /** @returns {string[]} */
+  listCollectionNames() {
+    return this._db.list_collection_names();
+  }
+
+  /** @param {string} name */
+  dropCollection(name) {
+    this._db.drop_collection(name);
+  }
+
+  /** @returns {Object} */
+  stats() {
+    const resultBytes = this._db.stats();
+    return BSON.deserialize(new Uint8Array(resultBytes));
+  }
 }
 
 /**
- * Collection handle for CRUD operations.
+ * Collection handle for CRUD, aggregation, and index operations.
  */
 export class Collection {
   constructor(wasmColl) {
@@ -50,59 +64,145 @@ export class Collection {
   }
 
   /**
-   * Insert a single document.
-   * @param {Object} doc - Document to insert (plain JS object)
+   * @param {Object} doc
    * @returns {Object} Result with insertedId field
    */
   insertOne(doc) {
     const bytes = BSON.serialize(doc);
-    const resultBytes = this._coll.insert_one(Array.from(bytes));
+    const resultBytes = this._coll.insert_one(bytes);
     return BSON.deserialize(new Uint8Array(resultBytes));
   }
 
   /**
-   * Find documents matching a filter.
-   * @param {Object} filter - Query filter (empty object matches all)
-   * @returns {Array<Object>} Array of matching documents
+   * @param {Object[]} docs
+   * @returns {Object} Result with insertedIds array
+   */
+  insertMany(docs) {
+    const bytes = BSON.serialize({ documents: docs });
+    const resultBytes = this._coll.insert_many(bytes);
+    return BSON.deserialize(new Uint8Array(resultBytes));
+  }
+
+  /**
+   * @param {Object} filter
+   * @returns {Object|null}
+   */
+  findOne(filter = {}) {
+    const bytes = BSON.serialize(filter);
+    const resultBytes = this._coll.find_one(bytes);
+    const result = BSON.deserialize(new Uint8Array(resultBytes));
+    if (result.__null) return null;
+    return result;
+  }
+
+  /**
+   * @param {Object} filter
+   * @returns {Object[]}
    */
   find(filter = {}) {
     const bytes = BSON.serialize(filter);
-    const resultBytes = this._coll.find(Array.from(bytes));
+    const resultBytes = this._coll.find(bytes);
     const result = BSON.deserialize(new Uint8Array(resultBytes));
     return result.results;
   }
 
   /**
-   * Count documents matching a filter.
-   * @param {Object} filter - Query filter
-   * @returns {number} Document count
+   * @param {Object} filter
+   * @param {Object} options - { limit?, skip?, sort?, projection? }
+   * @returns {Object[]}
    */
-  countDocuments(filter = {}) {
-    const bytes = BSON.serialize(filter);
-    return this._coll.count_documents(Array.from(bytes));
+  findWithOptions(filter, options) {
+    const filterBytes = BSON.serialize(filter);
+    const optionsBytes = BSON.serialize(options);
+    const resultBytes = this._coll.find_with_options(filterBytes, optionsBytes);
+    const result = BSON.deserialize(new Uint8Array(resultBytes));
+    return result.results;
   }
 
   /**
-   * Delete documents matching a filter.
-   * @param {Object} filter - Query filter
-   * @returns {Object} Result with deletedCount field
+   * @param {Object} filter
+   * @returns {number}
    */
-  deleteMany(filter) {
+  countDocuments(filter = {}) {
     const bytes = BSON.serialize(filter);
-    const resultBytes = this._coll.delete_many(Array.from(bytes));
+    return this._coll.count_documents(bytes);
+  }
+
+  /**
+   * @param {Object} filter
+   * @param {Object} update
+   * @returns {Object} Result with matchedCount and modifiedCount
+   */
+  updateOne(filter, update) {
+    const filterBytes = BSON.serialize(filter);
+    const updateBytes = BSON.serialize(update);
+    const resultBytes = this._coll.update_one(filterBytes, updateBytes);
     return BSON.deserialize(new Uint8Array(resultBytes));
   }
 
   /**
-   * Update documents matching a filter.
-   * @param {Object} filter - Query filter
-   * @param {Object} update - Update operators (e.g., { "$set": { ... } })
-   * @returns {Object} Result with matchedCount and modifiedCount fields
+   * @param {Object} filter
+   * @param {Object} update
+   * @returns {Object} Result with matchedCount and modifiedCount
    */
   updateMany(filter, update) {
     const filterBytes = BSON.serialize(filter);
     const updateBytes = BSON.serialize(update);
-    const resultBytes = this._coll.update_many(Array.from(filterBytes), Array.from(updateBytes));
+    const resultBytes = this._coll.update_many(filterBytes, updateBytes);
     return BSON.deserialize(new Uint8Array(resultBytes));
+  }
+
+  /**
+   * @param {Object} filter
+   * @returns {Object} Result with deletedCount
+   */
+  deleteOne(filter) {
+    const bytes = BSON.serialize(filter);
+    const resultBytes = this._coll.delete_one(bytes);
+    return BSON.deserialize(new Uint8Array(resultBytes));
+  }
+
+  /**
+   * @param {Object} filter
+   * @returns {Object} Result with deletedCount
+   */
+  deleteMany(filter) {
+    const bytes = BSON.serialize(filter);
+    const resultBytes = this._coll.delete_many(bytes);
+    return BSON.deserialize(new Uint8Array(resultBytes));
+  }
+
+  /**
+   * @param {Object[]} pipeline - Array of aggregation stage documents
+   * @returns {Object[]}
+   */
+  aggregate(pipeline) {
+    const bytes = BSON.serialize({ pipeline });
+    const resultBytes = this._coll.aggregate(bytes);
+    const result = BSON.deserialize(new Uint8Array(resultBytes));
+    return result.results;
+  }
+
+  /**
+   * @param {Object} keys - Index key specification (e.g. { name: 1 })
+   * @param {Object} [options] - Index options (unique, sparse, etc.)
+   * @returns {string} Index name
+   */
+  createIndex(keys, options = {}) {
+    const keysBytes = BSON.serialize(keys);
+    const optionsBytes = BSON.serialize(options);
+    return this._coll.create_index(keysBytes, optionsBytes);
+  }
+
+  /** @param {string} indexName */
+  dropIndex(indexName) {
+    this._coll.drop_index(indexName);
+  }
+
+  /** @returns {Object[]} */
+  listIndexes() {
+    const resultBytes = this._coll.list_indexes();
+    const result = BSON.deserialize(new Uint8Array(resultBytes));
+    return result.indexes;
   }
 }

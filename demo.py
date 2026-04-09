@@ -30,22 +30,22 @@ def main():
     )
     db = client["demo"]
     try:
-        users = db.create_collection(
-            "users",
-            validator={
-                "$jsonSchema": {
-                    "required": ["name", "age", "dept"],
-                    "properties": {
-                        "name": {"type": "string", "minLength": 2},
-                        "age": {"type": "int", "minimum": 18},
-                        "dept": {"type": "string"},
-                    },
-                }
-            },
-        )
-    except (RuntimeError, ValueError, OSError):
-        users = db["users"]
-    users.delete_many({})
+        db.drop_collection("users")
+    except Exception:
+        pass
+    users = db.create_collection(
+        "users",
+        validator={
+            "$jsonSchema": {
+                "required": ["name", "age", "dept"],
+                "properties": {
+                    "name": {"type": "string", "minLength": 2},
+                    "age": {"type": "int", "minimum": 18},
+                    "dept": {"type": "string"},
+                },
+            }
+        },
+    )
 
     # ── 1. Indexes ────────────────────────────────────────────
     banner(1, "B-TREE INDEXES")
@@ -59,7 +59,7 @@ def main():
 
     index_count = 0
     for idx in users.list_indexes():
-        flag = "  UNIQUE" if idx["unique"] else ""
+        flag = "  UNIQUE" if idx.get("unique") else ""
         print(f"    {idx['name']:25s} keys={idx['keys']}{flag}")
         index_count += 1
 

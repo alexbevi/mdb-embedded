@@ -21,6 +21,37 @@ from .helpers import log
 from .results import DeleteResult, InsertResult, UpdateResult
 
 
+class _ChangeStreamWrapper:
+    """Thin wrapper around the Rust RedbChangeStream that adds Python protocols."""
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    def try_next(self) -> dict[str, Any] | None:
+        return self._inner.try_next()
+
+    def close(self) -> None:
+        self._inner.close()
+
+    def __enter__(self) -> _ChangeStreamWrapper:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    def __iter__(self) -> _ChangeStreamWrapper:
+        return self
+
+    def __next__(self) -> dict[str, Any]:
+        import time
+        for _ in range(100):
+            ev = self._inner.try_next()
+            if ev is not None:
+                return ev
+            time.sleep(0.05)
+        raise StopIteration
+
+
 def _is_pk_equality_filter(query: dict[str, Any]) -> bool:
     qid = query.get("_id")
     if qid is None:
@@ -221,9 +252,9 @@ class RedbCollection:
                 out.append(doc)
         return out
 
-    def watch(self, pipeline: list[Any] | None = None) -> Any:
+    def watch(self, pipeline: list[Any] | None = None) -> _ChangeStreamWrapper:
         """Local change stream over the redb oplog hub."""
-        return self._rust_coll.watch(pipeline)
+        return _ChangeStreamWrapper(self._rust_coll.watch(pipeline))
 
     # CRUD operations - delegate directly to Rust
 

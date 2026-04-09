@@ -15,11 +15,21 @@ Ship **one WASM binary**; pick storage by import and API:
 
 ## Build
 
-From `rust/smongo-engine`:
+From the repo root:
+
+```bash
+make build-wasm
+```
+
+Or manually from `rust/smongo-engine`:
 
 ```bash
 wasm-pack build --target web --out-dir wasm/pkg --release
+# Optional: shrink binary ~10-20%
+wasm-opt -Oz wasm/pkg/smongo_engine_bg.wasm -o wasm/pkg/smongo_engine_bg.wasm
 ```
+
+**Requirements:** `wasm-pack`, Rust with `wasm32-unknown-unknown` target. Optional: `binaryen` (provides `wasm-opt`).
 
 ## Run locally
 
@@ -67,26 +77,62 @@ import {
   closeOpfsDatabase,
   wipeOpfsDatabaseDirectory,
   reconnectOpfsDatabase,
-  assertValidDbName,
-  OpfsError,
-  OPFS_ERROR_CODES,
-  OPFS_RPC_LIMITS,
-  isOpfsError,
-  configureOpfsDebug,
 } from './smongo-browser.js';
 
-const db = await initOpfsDatabase('myDb', ['collectionA']);
-await db.collection('collectionA').insertOne({ x: 1 });
+// --- In-memory (sync, main thread) ---
+await initSmongo();
+const memDb = new Database('mydb');
+const coll = memDb.collection('users');
 
-// Release lock + worker without deleting files (another tab can become owner)
+coll.insertOne({ name: 'Alice', age: 30 });
+coll.insertMany([{ name: 'Bob' }, { name: 'Carol' }]);
+
+const alice = coll.findOne({ name: 'Alice' });
+const young = coll.findWithOptions({ age: { $gte: 18 } }, { limit: 10, sort: { age: -1 } });
+const count = coll.countDocuments({});
+
+coll.updateOne({ name: 'Alice' }, { $set: { age: 31 } });
+coll.deleteOne({ name: 'Bob' });
+
+const results = coll.aggregate([
+  { $match: { age: { $gte: 18 } } },
+  { $group: { _id: null, avgAge: { $avg: '$age' } } },
+]);
+
+coll.createIndex({ name: 1 }, { unique: true });
+const indexes = coll.listIndexes();
+coll.dropIndex('name_1');
+
+const names = memDb.listCollectionNames();
+const stats = memDb.stats();
+
+// --- OPFS (async, dedicated worker) ---
+const opfsDb = await initOpfsDatabase('myDb', ['collectionA']);
+const opfsColl = opfsDb.collection('collectionA');
+await opfsColl.insertOne({ x: 1 });
+await opfsColl.aggregate([{ $group: { _id: null, total: { $sum: '$x' } } }]);
+
 await closeOpfsDatabase('myDb');
-
-// Close handles then delete OPFS directory (owner or client via RPC)
 await wipeOpfsDatabaseDirectory('myDb');
-
-// After owner tab closed or RPC failures: full re-handshake (owner closes worker+lock first)
 await reconnectOpfsDatabase('myDb', ['collectionA']);
 ```
+
+### Full API surface
+
+**Database** (sync for memory, async for OPFS):
+- `collection(name)` — get collection handle
+- `listCollectionNames()` — list all collections
+- `dropCollection(name)` — drop a collection
+- `stats()` — `{ collectionCount, sizeBytes }`
+
+**Collection** (sync for memory, async for OPFS):
+- `insertOne(doc)` / `insertMany(docs)`
+- `findOne(filter)` / `find(filter)` / `findWithOptions(filter, { limit, skip, sort, projection })`
+- `countDocuments(filter)`
+- `updateOne(filter, update)` / `updateMany(filter, update)`
+- `deleteOne(filter)` / `deleteMany(filter)`
+- `aggregate(pipeline)`
+- `createIndex(keys, options)` / `dropIndex(name)` / `listIndexes()`
 
 ### Enterprise / production notes
 
@@ -95,10 +141,18 @@ await reconnectOpfsDatabase('myDb', ['collectionA']);
 - **Limits:** See `OPFS_RPC_LIMITS` (payload weight, nesting, client RPC concurrency, ping/backoff, **worker message timeout**). Hung worker replies no longer block the main thread indefinitely.
 - **Multi-database:** In-flight RPC waiters are **scoped per `dbName`**; losing one owner does not reject pending calls for another database in the same tab.
 - **Debug:** `configureOpfsDebug({ enabled: true })` turns on verbose internal logging (default off).
+- **Panic hook:** Rust panics now produce readable `console.error` output via `console_error_panic_hook`, replacing the opaque `RuntimeError: unreachable`.
 
 ## Automation
 
 ```bash
+# From repo root:
+make check-wasm    # Fast: cargo check against wasm32
+make build-wasm    # Full: wasm-pack build + wasm-opt
+make test-wasm     # Build + Playwright e2e
+
+# Or directly:
+cd rust/smongo-engine/wasm
 npm run test:e2e
 ```
 
@@ -109,6 +163,7 @@ Playwright serves this directory and loads `tests/opfs-multitab-harness.html`.
 - **`smongo-browser.js`** (+ **`smongo-browser.d.ts`**) — **canonical app entry**; memory + OPFS
 - `wrapper.js` / `wrapper.d.ts` — BSON + `WasmDatabase` (in-memory only)
 - `opfs-wrapper.js` / `opfs-wrapper.d.ts` / `opfs-worker.js` — OPFS + `WasmOpfsDatabase`
+- `nginx.conf` — ensures `application/wasm` MIME type for streaming compilation
 - `pkg/` — `wasm-pack` output (not committed in some setups)
 - `docker-compose.yml` — static `nginx:alpine` on port 8080
 

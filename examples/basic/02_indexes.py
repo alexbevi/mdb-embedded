@@ -70,7 +70,7 @@ def _run(emp) -> None:
     print()
     print("── list_indexes ──")
     for idx in emp.list_indexes():
-        unique_flag = "  UNIQUE" if idx["unique"] else ""
+        unique_flag = "  UNIQUE" if idx.get("unique") else ""
         print(f"  {idx['name']:25s}  keys={idx['keys']}{unique_flag}")
 
     # ── After indexes: query planner picks index scans ────────

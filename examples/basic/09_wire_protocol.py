@@ -18,6 +18,7 @@ Run:
 
 import os
 import shutil
+import sys
 import tempfile
 import time
 
@@ -32,6 +33,7 @@ def main() -> None:
 
     _run(db_path)
     shutil.rmtree(db_path, ignore_errors=True)
+    sys.stdout.flush()
     os._exit(0)
 
 
@@ -53,14 +55,13 @@ def _run(db_path: str) -> None:
     employees.create_index([("city", 1)])
     employees.create_index([("dept", 1), ("salary", -1)])
     print(f"  {employees.count_documents({})} employees seeded with 2 indexes\n")
-    native.close()
 
     # ── Start the embedded wire server ─────────────────────────
     print("── starting wire protocol server ──")
     print(f"  listening on localhost:{PORT}")
     print("  (Compass / mongosh can connect to mongodb://localhost:27018)\n")
 
-    with WireServer(db_path, port=PORT) as _srv:
+    with WireServer(db_path, port=PORT, local_client=native.get_local_client()) as _srv:
         time.sleep(0.3)
 
         # ── Connect with the real PyMongo driver ───────────────
@@ -97,6 +98,7 @@ def _run(db_path: str) -> None:
 
         client.close()
 
+    native.close()
     print()
     print("Every query above went through the real MongoDB binary protocol (OP_MSG).")
     print(f"Connect Compass or mongosh to mongodb://localhost:{PORT} while the server runs.")

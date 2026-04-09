@@ -121,9 +121,44 @@ self.onmessage = async (e) => {
         }
         const coll = db.collection(collection);
         const bytes = BSON.serialize(doc);
-        const resultBytes = coll.insert_one(Array.from(bytes));
+        const resultBytes = coll.insert_one(bytes);
         const result = BSON.deserialize(new Uint8Array(resultBytes));
         self.postMessage({ id, result });
+        break;
+      }
+
+      case 'insertMany': {
+        if (!requireDb(id)) break;
+        const { collection, docs } = p;
+        if (!validCollName(collection) || !Array.isArray(docs)) {
+          postErr(id, new Error('insertMany: invalid collection or docs'), 'OPFS_INVALID_PAYLOAD');
+          break;
+        }
+        const coll = db.collection(collection);
+        const bytes = BSON.serialize({ documents: docs });
+        const resultBytes = coll.insert_many(bytes);
+        const result = BSON.deserialize(new Uint8Array(resultBytes));
+        self.postMessage({ id, result });
+        break;
+      }
+
+      case 'findOne': {
+        if (!requireDb(id)) break;
+        const { collection, filter } = p;
+        if (!validCollName(collection)) {
+          postErr(id, new Error('findOne: invalid collection'), 'OPFS_INVALID_COLLECTION');
+          break;
+        }
+        const f = filter === undefined ? {} : filter;
+        if (typeof f !== 'object' || f === null || Array.isArray(f)) {
+          postErr(id, new Error('findOne: filter must be an object'), 'OPFS_INVALID_PAYLOAD');
+          break;
+        }
+        const coll = db.collection(collection);
+        const bytes = BSON.serialize(f);
+        const resultBytes = coll.find_one(bytes);
+        const result = BSON.deserialize(new Uint8Array(resultBytes));
+        self.postMessage({ id, result: result.__null ? null : result });
         break;
       }
 
@@ -141,7 +176,33 @@ self.onmessage = async (e) => {
         }
         const coll = db.collection(collection);
         const bytes = BSON.serialize(f);
-        const resultBytes = coll.find(Array.from(bytes));
+        const resultBytes = coll.find(bytes);
+        const result = BSON.deserialize(new Uint8Array(resultBytes));
+        self.postMessage({ id, result: result.results });
+        break;
+      }
+
+      case 'findWithOptions': {
+        if (!requireDb(id)) break;
+        const { collection, filter, options } = p;
+        if (!validCollName(collection)) {
+          postErr(id, new Error('findWithOptions: invalid collection'), 'OPFS_INVALID_COLLECTION');
+          break;
+        }
+        const f = filter === undefined ? {} : filter;
+        const o = options === undefined ? {} : options;
+        if (typeof f !== 'object' || f === null || Array.isArray(f)) {
+          postErr(id, new Error('findWithOptions: filter must be an object'), 'OPFS_INVALID_PAYLOAD');
+          break;
+        }
+        if (typeof o !== 'object' || o === null || Array.isArray(o)) {
+          postErr(id, new Error('findWithOptions: options must be an object'), 'OPFS_INVALID_PAYLOAD');
+          break;
+        }
+        const coll = db.collection(collection);
+        const filterBytes = BSON.serialize(f);
+        const optionsBytes = BSON.serialize(o);
+        const resultBytes = coll.find_with_options(filterBytes, optionsBytes);
         const result = BSON.deserialize(new Uint8Array(resultBytes));
         self.postMessage({ id, result: result.results });
         break;
@@ -161,25 +222,30 @@ self.onmessage = async (e) => {
         }
         const coll = db.collection(collection);
         const bytes = BSON.serialize(f);
-        const count = coll.count_documents(Array.from(bytes));
+        const count = coll.count_documents(bytes);
         self.postMessage({ id, result: count });
         break;
       }
 
-      case 'deleteMany': {
+      case 'updateOne': {
         if (!requireDb(id)) break;
-        const { collection, filter } = p;
+        const { collection, filter, update } = p;
         if (!validCollName(collection)) {
-          postErr(id, new Error('deleteMany: invalid collection'), 'OPFS_INVALID_COLLECTION');
+          postErr(id, new Error('updateOne: invalid collection'), 'OPFS_INVALID_COLLECTION');
           break;
         }
         if (typeof filter !== 'object' || filter === null || Array.isArray(filter)) {
-          postErr(id, new Error('deleteMany: filter must be an object'), 'OPFS_INVALID_PAYLOAD');
+          postErr(id, new Error('updateOne: invalid filter'), 'OPFS_INVALID_PAYLOAD');
+          break;
+        }
+        if (typeof update !== 'object' || update === null || Array.isArray(update)) {
+          postErr(id, new Error('updateOne: invalid update'), 'OPFS_INVALID_PAYLOAD');
           break;
         }
         const coll = db.collection(collection);
-        const bytes = BSON.serialize(filter);
-        const resultBytes = coll.delete_many(Array.from(bytes));
+        const filterBytes = BSON.serialize(filter);
+        const updateBytes = BSON.serialize(update);
+        const resultBytes = coll.update_one(filterBytes, updateBytes);
         const result = BSON.deserialize(new Uint8Array(resultBytes));
         self.postMessage({ id, result });
         break;
@@ -203,7 +269,141 @@ self.onmessage = async (e) => {
         const coll = db.collection(collection);
         const filterBytes = BSON.serialize(filter);
         const updateBytes = BSON.serialize(update);
-        const resultBytes = coll.update_many(Array.from(filterBytes), Array.from(updateBytes));
+        const resultBytes = coll.update_many(filterBytes, updateBytes);
+        const result = BSON.deserialize(new Uint8Array(resultBytes));
+        self.postMessage({ id, result });
+        break;
+      }
+
+      case 'deleteOne': {
+        if (!requireDb(id)) break;
+        const { collection, filter } = p;
+        if (!validCollName(collection)) {
+          postErr(id, new Error('deleteOne: invalid collection'), 'OPFS_INVALID_COLLECTION');
+          break;
+        }
+        if (typeof filter !== 'object' || filter === null || Array.isArray(filter)) {
+          postErr(id, new Error('deleteOne: filter must be an object'), 'OPFS_INVALID_PAYLOAD');
+          break;
+        }
+        const coll = db.collection(collection);
+        const bytes = BSON.serialize(filter);
+        const resultBytes = coll.delete_one(bytes);
+        const result = BSON.deserialize(new Uint8Array(resultBytes));
+        self.postMessage({ id, result });
+        break;
+      }
+
+      case 'deleteMany': {
+        if (!requireDb(id)) break;
+        const { collection, filter } = p;
+        if (!validCollName(collection)) {
+          postErr(id, new Error('deleteMany: invalid collection'), 'OPFS_INVALID_COLLECTION');
+          break;
+        }
+        if (typeof filter !== 'object' || filter === null || Array.isArray(filter)) {
+          postErr(id, new Error('deleteMany: filter must be an object'), 'OPFS_INVALID_PAYLOAD');
+          break;
+        }
+        const coll = db.collection(collection);
+        const bytes = BSON.serialize(filter);
+        const resultBytes = coll.delete_many(bytes);
+        const result = BSON.deserialize(new Uint8Array(resultBytes));
+        self.postMessage({ id, result });
+        break;
+      }
+
+      case 'aggregate': {
+        if (!requireDb(id)) break;
+        const { collection, pipeline } = p;
+        if (!validCollName(collection)) {
+          postErr(id, new Error('aggregate: invalid collection'), 'OPFS_INVALID_COLLECTION');
+          break;
+        }
+        if (!Array.isArray(pipeline)) {
+          postErr(id, new Error('aggregate: pipeline must be an array'), 'OPFS_INVALID_PAYLOAD');
+          break;
+        }
+        const coll = db.collection(collection);
+        const bytes = BSON.serialize({ pipeline });
+        const resultBytes = coll.aggregate(bytes);
+        const result = BSON.deserialize(new Uint8Array(resultBytes));
+        self.postMessage({ id, result: result.results });
+        break;
+      }
+
+      case 'createIndex': {
+        if (!requireDb(id)) break;
+        const { collection, keys, options } = p;
+        if (!validCollName(collection)) {
+          postErr(id, new Error('createIndex: invalid collection'), 'OPFS_INVALID_COLLECTION');
+          break;
+        }
+        if (typeof keys !== 'object' || keys === null || Array.isArray(keys)) {
+          postErr(id, new Error('createIndex: keys must be an object'), 'OPFS_INVALID_PAYLOAD');
+          break;
+        }
+        const coll = db.collection(collection);
+        const keysBytes = BSON.serialize(keys);
+        const optionsBytes = options ? BSON.serialize(options) : new Uint8Array(0);
+        const indexName = coll.create_index(keysBytes, optionsBytes);
+        self.postMessage({ id, result: indexName });
+        break;
+      }
+
+      case 'dropIndex': {
+        if (!requireDb(id)) break;
+        const { collection, indexName } = p;
+        if (!validCollName(collection)) {
+          postErr(id, new Error('dropIndex: invalid collection'), 'OPFS_INVALID_COLLECTION');
+          break;
+        }
+        if (typeof indexName !== 'string' || indexName.length === 0) {
+          postErr(id, new Error('dropIndex: indexName must be a non-empty string'), 'OPFS_INVALID_PAYLOAD');
+          break;
+        }
+        const coll = db.collection(collection);
+        coll.drop_index(indexName);
+        self.postMessage({ id, result: { success: true } });
+        break;
+      }
+
+      case 'listIndexes': {
+        if (!requireDb(id)) break;
+        const { collection } = p;
+        if (!validCollName(collection)) {
+          postErr(id, new Error('listIndexes: invalid collection'), 'OPFS_INVALID_COLLECTION');
+          break;
+        }
+        const coll = db.collection(collection);
+        const resultBytes = coll.list_indexes();
+        const result = BSON.deserialize(new Uint8Array(resultBytes));
+        self.postMessage({ id, result: result.indexes });
+        break;
+      }
+
+      case 'listCollectionNames': {
+        if (!requireDb(id)) break;
+        const names = db.list_collection_names();
+        self.postMessage({ id, result: names });
+        break;
+      }
+
+      case 'dropCollection': {
+        if (!requireDb(id)) break;
+        const { name } = p;
+        if (!validCollName(name)) {
+          postErr(id, new Error('dropCollection: invalid name'), 'OPFS_INVALID_COLLECTION');
+          break;
+        }
+        db.drop_collection(name);
+        self.postMessage({ id, result: { success: true } });
+        break;
+      }
+
+      case 'stats': {
+        if (!requireDb(id)) break;
+        const resultBytes = db.stats();
         const result = BSON.deserialize(new Uint8Array(resultBytes));
         self.postMessage({ id, result });
         break;

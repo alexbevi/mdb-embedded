@@ -97,7 +97,16 @@ function dlog(...args) {
   }
 }
 
-const WORKER_OPS = new Set(['insertOne', 'find', 'countDocuments', 'deleteMany', 'updateMany']);
+const WORKER_OPS = new Set([
+  'insertOne', 'insertMany',
+  'findOne', 'find', 'findWithOptions',
+  'countDocuments',
+  'updateOne', 'updateMany',
+  'deleteOne', 'deleteMany',
+  'aggregate',
+  'createIndex', 'dropIndex', 'listIndexes',
+  'listCollectionNames', 'dropCollection', 'stats',
+]);
 const OWNER_LOCAL_OPS = new Set(['ping', 'closeDb']);
 
 let worker = null;
@@ -274,6 +283,15 @@ function validateAndWeighPayload(payload) {
  * @param {Record<string, unknown>} p
  */
 function validateWorkerPayloadShape(op, p) {
+  // Database-level ops don't require a collection field
+  if (op === 'listCollectionNames' || op === 'stats') {
+    return;
+  }
+  if (op === 'dropCollection') {
+    assertValidCollectionName(typeof p.name === 'string' ? p.name : '');
+    return;
+  }
+
   const coll = p.collection;
   assertValidCollectionName(typeof coll === 'string' ? coll : '');
 
@@ -285,8 +303,17 @@ function validateWorkerPayloadShape(op, p) {
       estimatePayloadWeight(p.doc, 0);
       break;
     }
+    case 'insertMany': {
+      if (!Array.isArray(p.docs)) {
+        throw new OpfsError('insertMany requires a docs array', OPFS_ERROR_CODES.INVALID_PAYLOAD);
+      }
+      estimatePayloadWeight(p.docs, 0);
+      break;
+    }
+    case 'findOne':
     case 'find':
     case 'countDocuments':
+    case 'deleteOne':
     case 'deleteMany': {
       const f = p.filter;
       if (f === undefined) break;
@@ -296,19 +323,56 @@ function validateWorkerPayloadShape(op, p) {
       estimatePayloadWeight(f, 0);
       break;
     }
+    case 'findWithOptions': {
+      const f = p.filter;
+      if (f !== undefined && (typeof f !== 'object' || f === null || Array.isArray(f))) {
+        throw new OpfsError('findWithOptions filter must be a plain object', OPFS_ERROR_CODES.INVALID_PAYLOAD);
+      }
+      if (f !== undefined) estimatePayloadWeight(f, 0);
+      const o = p.options;
+      if (o !== undefined && (typeof o !== 'object' || o === null || Array.isArray(o))) {
+        throw new OpfsError('findWithOptions options must be a plain object', OPFS_ERROR_CODES.INVALID_PAYLOAD);
+      }
+      if (o !== undefined) estimatePayloadWeight(o, 0);
+      break;
+    }
+    case 'updateOne':
     case 'updateMany': {
       const f = p.filter;
       const u = p.update;
       if (typeof f !== 'object' || f === null || Array.isArray(f)) {
-        throw new OpfsError('updateMany requires a plain object filter', OPFS_ERROR_CODES.INVALID_PAYLOAD);
+        throw new OpfsError(`${op} requires a plain object filter`, OPFS_ERROR_CODES.INVALID_PAYLOAD);
       }
       if (typeof u !== 'object' || u === null || Array.isArray(u)) {
-        throw new OpfsError('updateMany requires a plain object update', OPFS_ERROR_CODES.INVALID_PAYLOAD);
+        throw new OpfsError(`${op} requires a plain object update`, OPFS_ERROR_CODES.INVALID_PAYLOAD);
       }
       estimatePayloadWeight(f, 0);
       estimatePayloadWeight(u, 0);
       break;
     }
+    case 'aggregate': {
+      if (!Array.isArray(p.pipeline)) {
+        throw new OpfsError('aggregate requires a pipeline array', OPFS_ERROR_CODES.INVALID_PAYLOAD);
+      }
+      estimatePayloadWeight(p.pipeline, 0);
+      break;
+    }
+    case 'createIndex': {
+      if (!p.keys || typeof p.keys !== 'object' || Array.isArray(p.keys)) {
+        throw new OpfsError('createIndex requires a keys object', OPFS_ERROR_CODES.INVALID_PAYLOAD);
+      }
+      estimatePayloadWeight(p.keys, 0);
+      if (p.options !== undefined) estimatePayloadWeight(p.options, 0);
+      break;
+    }
+    case 'dropIndex': {
+      if (typeof p.indexName !== 'string' || p.indexName.length === 0) {
+        throw new OpfsError('dropIndex requires a non-empty indexName string', OPFS_ERROR_CODES.INVALID_PAYLOAD);
+      }
+      break;
+    }
+    case 'listIndexes':
+      break;
     default:
       break;
   }
@@ -1000,6 +1064,30 @@ export class OpfsDatabase {
   collection(name) {
     return new OpfsCollection(name, this._name, this._mode);
   }
+
+  async listCollectionNames() {
+    if (this._mode === 'client') {
+      return await rpcCall(this._name, 'listCollectionNames', {});
+    }
+    validateWorkerPayloadShape('listCollectionNames', {});
+    return await sendMessage('listCollectionNames', {});
+  }
+
+  async dropCollection(name) {
+    if (this._mode === 'client') {
+      return await rpcCall(this._name, 'dropCollection', { name });
+    }
+    validateWorkerPayloadShape('dropCollection', { name });
+    return await sendMessage('dropCollection', { name });
+  }
+
+  async stats() {
+    if (this._mode === 'client') {
+      return await rpcCall(this._name, 'stats', {});
+    }
+    validateWorkerPayloadShape('stats', {});
+    return await sendMessage('stats', {});
+  }
 }
 
 export class OpfsCollection {
@@ -1022,12 +1110,36 @@ export class OpfsCollection {
     return await sendMessage('insertOne', { collection: this._name, doc });
   }
 
+  async insertMany(docs) {
+    if (this._mode === 'client') {
+      return await rpcCall(this._dbName, 'insertMany', { collection: this._name, docs });
+    }
+    validateWorkerPayloadShape('insertMany', { collection: this._name, docs });
+    return await sendMessage('insertMany', { collection: this._name, docs });
+  }
+
+  async findOne(filter = {}) {
+    if (this._mode === 'client') {
+      return await rpcCall(this._dbName, 'findOne', { collection: this._name, filter });
+    }
+    validateWorkerPayloadShape('findOne', { collection: this._name, filter });
+    return await sendMessage('findOne', { collection: this._name, filter });
+  }
+
   async find(filter = {}) {
     if (this._mode === 'client') {
       return await rpcCall(this._dbName, 'find', { collection: this._name, filter });
     }
     validateWorkerPayloadShape('find', { collection: this._name, filter });
     return await sendMessage('find', { collection: this._name, filter });
+  }
+
+  async findWithOptions(filter, options) {
+    if (this._mode === 'client') {
+      return await rpcCall(this._dbName, 'findWithOptions', { collection: this._name, filter, options });
+    }
+    validateWorkerPayloadShape('findWithOptions', { collection: this._name, filter, options });
+    return await sendMessage('findWithOptions', { collection: this._name, filter, options });
   }
 
   async countDocuments(filter = {}) {
@@ -1038,12 +1150,12 @@ export class OpfsCollection {
     return await sendMessage('countDocuments', { collection: this._name, filter });
   }
 
-  async deleteMany(filter) {
+  async updateOne(filter, update) {
     if (this._mode === 'client') {
-      return await rpcCall(this._dbName, 'deleteMany', { collection: this._name, filter });
+      return await rpcCall(this._dbName, 'updateOne', { collection: this._name, filter, update });
     }
-    validateWorkerPayloadShape('deleteMany', { collection: this._name, filter });
-    return await sendMessage('deleteMany', { collection: this._name, filter });
+    validateWorkerPayloadShape('updateOne', { collection: this._name, filter, update });
+    return await sendMessage('updateOne', { collection: this._name, filter, update });
   }
 
   async updateMany(filter, update) {
@@ -1052,5 +1164,53 @@ export class OpfsCollection {
     }
     validateWorkerPayloadShape('updateMany', { collection: this._name, filter, update });
     return await sendMessage('updateMany', { collection: this._name, filter, update });
+  }
+
+  async deleteOne(filter) {
+    if (this._mode === 'client') {
+      return await rpcCall(this._dbName, 'deleteOne', { collection: this._name, filter });
+    }
+    validateWorkerPayloadShape('deleteOne', { collection: this._name, filter });
+    return await sendMessage('deleteOne', { collection: this._name, filter });
+  }
+
+  async deleteMany(filter) {
+    if (this._mode === 'client') {
+      return await rpcCall(this._dbName, 'deleteMany', { collection: this._name, filter });
+    }
+    validateWorkerPayloadShape('deleteMany', { collection: this._name, filter });
+    return await sendMessage('deleteMany', { collection: this._name, filter });
+  }
+
+  async aggregate(pipeline) {
+    if (this._mode === 'client') {
+      return await rpcCall(this._dbName, 'aggregate', { collection: this._name, pipeline });
+    }
+    validateWorkerPayloadShape('aggregate', { collection: this._name, pipeline });
+    return await sendMessage('aggregate', { collection: this._name, pipeline });
+  }
+
+  async createIndex(keys, options = {}) {
+    if (this._mode === 'client') {
+      return await rpcCall(this._dbName, 'createIndex', { collection: this._name, keys, options });
+    }
+    validateWorkerPayloadShape('createIndex', { collection: this._name, keys, options });
+    return await sendMessage('createIndex', { collection: this._name, keys, options });
+  }
+
+  async dropIndex(indexName) {
+    if (this._mode === 'client') {
+      return await rpcCall(this._dbName, 'dropIndex', { collection: this._name, indexName });
+    }
+    validateWorkerPayloadShape('dropIndex', { collection: this._name, indexName });
+    return await sendMessage('dropIndex', { collection: this._name, indexName });
+  }
+
+  async listIndexes() {
+    if (this._mode === 'client') {
+      return await rpcCall(this._dbName, 'listIndexes', { collection: this._name });
+    }
+    validateWorkerPayloadShape('listIndexes', { collection: this._name });
+    return await sendMessage('listIndexes', { collection: this._name });
   }
 }

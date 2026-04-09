@@ -249,6 +249,14 @@ class Database:
             return self.db.list_collection_names()  # type: ignore[no-any-return]
         return self.db.list_collection_names()  # type: ignore[no-any-return]
 
+    def drop_collection(self, name: str) -> None:
+        """Drop a collection and all its indexes."""
+        self._collections.pop(name, None)
+        if self.mode == "remote":
+            self.db.drop_collection(name)
+        else:
+            self.db.drop_collection(name)
+
     def create_collection(self, name: str, **kwargs: Any) -> Collection:
         """Create a collection, optionally with a validator."""
         if self.mode == "remote":

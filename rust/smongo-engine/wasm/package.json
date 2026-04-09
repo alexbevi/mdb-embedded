@@ -1,6 +1,6 @@
 {
   "name": "smongo-wasm-test",
-  "version": "0.9.4",
+  "version": "0.9.6",
   "type": "module",
   "description": "WASM smoke tests for smongo-engine Phase 2",
   "scripts": {
