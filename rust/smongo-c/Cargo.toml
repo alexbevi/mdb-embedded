@@ -1,0 +1,20 @@
+[package]
+name = "smongo-c"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "C ABI for smongo embedded database engine"
+
+[lib]
+name = "smongo_c"
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+smongo-engine = { path = "../smongo-engine" }
+bson = "2"
+
+[build-dependencies]
+cbindgen = "0.28"
+
+[lints]
+workspace = true

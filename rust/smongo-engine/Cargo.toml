@@ -1,0 +1,48 @@
+[package]
+name = "smongo-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Pure Rust MongoDB-compatible embedded database engine"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+bson = "2"
+chrono = "0.4"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+rand = "0.8"
+wasm-bindgen = "0.2"
+serde-wasm-bindgen = "0.6"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+redb = "2.3"
+parking_lot = "0.12.5"
+s2 = "0.0.13"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "console",
+    "FileSystemDirectoryHandle",
+    "FileSystemFileHandle",
+    "FileSystemReadWriteOptions",
+    "FileSystemSyncAccessHandle",
+    "FileSystemGetDirectoryOptions",
+    "FileSystemGetFileOptions",
+    "FileSystemCreateWritableOptions",
+    "StorageManager",
+    "Navigator",
+    "Window",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

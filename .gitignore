@@ -222,5 +222,11 @@ rust/globtest*
 *.prof
 *.tmp
 
+# Ad-hoc local DB dirs / JS deps / scratch (do not commit)
+test_redb_default/
+test_wt_legacy/
+node_modules/
+PATH_TO_REMOVEWT.md
+
 # macOS
 .DS_Store

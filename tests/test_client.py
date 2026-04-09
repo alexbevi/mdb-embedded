@@ -8,7 +8,7 @@ from smongo.client import Collection, Database, MongoClient
 
 class TestMongoClient:
     def test_local_uri_client(self, tmp_path):
-        client = MongoClient(f"local://{tmp_path}/wt")
+        client = MongoClient(f"local+wt://{tmp_path}/wt")
         assert client.mode == "local"
         assert client.get_local_client() is not None
 
@@ -19,7 +19,7 @@ class TestMongoClient:
         client.close()
 
     def test_get_db(self, tmp_path):
-        client = MongoClient(f"local://{tmp_path}/wt")
+        client = MongoClient(f"local+wt://{tmp_path}/wt")
         db = client["mydb"]
         assert isinstance(db, Database)
 
@@ -32,20 +32,20 @@ class TestMongoClient:
 
 class TestDatabase:
     def test_get_collection(self, tmp_path):
-        client = MongoClient(f"local://{tmp_path}/wt")
+        client = MongoClient(f"local+wt://{tmp_path}/wt")
         db = client["mydb"]
         coll = db["users"]
         assert isinstance(coll, Collection)
 
     def test_collection_cached(self, tmp_path):
-        client = MongoClient(f"local://{tmp_path}/wt")
+        client = MongoClient(f"local+wt://{tmp_path}/wt")
         db = client["mydb"]
         c1 = db["users"]
         c2 = db["users"]
         assert c1 is c2
 
     def test_list_collection_names_local_cache(self, tmp_path):
-        client = MongoClient(f"local://{tmp_path}/wt")
+        client = MongoClient(f"local+wt://{tmp_path}/wt")
         db = client["mydb"]
         db["users"]
         db["orders"]
@@ -53,7 +53,7 @@ class TestDatabase:
         assert set(names) == {"users", "orders"}
 
     def test_create_collection_validator(self, tmp_path):
-        client = MongoClient(f"local://{tmp_path}/wt")
+        client = MongoClient(f"local+wt://{tmp_path}/wt")
         db = client["mydb"]
         coll = db.create_collection(
             "strict",
@@ -66,7 +66,7 @@ class TestDatabase:
 
 class TestCollectionFacade:
     def test_insert_and_find(self, tmp_path):
-        client = MongoClient(f"local://{tmp_path}/wt")
+        client = MongoClient(f"local+wt://{tmp_path}/wt")
         coll = client["mydb"]["users"]
         r = coll.insert_one({"name": "Alice", "age": 30})
         assert len(r.inserted_ids) == 1
@@ -75,7 +75,7 @@ class TestCollectionFacade:
         assert docs[0]["age"] == 30
 
     def test_find_projection_returns_cursor(self, tmp_path):
-        client = MongoClient(f"local://{tmp_path}/wt")
+        client = MongoClient(f"local+wt://{tmp_path}/wt")
         coll = client["mydb"]["users"]
         coll.insert_one({"name": "Alice", "age": 30})
         c = coll.find({}, {"name": 1})
@@ -85,7 +85,7 @@ class TestCollectionFacade:
         assert "age" not in doc
 
     def test_find_one(self, tmp_path):
-        client = MongoClient(f"local://{tmp_path}/wt")
+        client = MongoClient(f"local+wt://{tmp_path}/wt")
         coll = client["mydb"]["users"]
         coll.insert_one({"name": "Bob"})
         doc = coll.find_one({"name": "Bob"})
@@ -93,7 +93,7 @@ class TestCollectionFacade:
         assert doc["name"] == "Bob"
 
     def test_aggregate(self, tmp_path):
-        client = MongoClient(f"local://{tmp_path}/wt")
+        client = MongoClient(f"local+wt://{tmp_path}/wt")
         coll = client["mydb"]["users"]
         coll.insert_many([{"city": "NYC"}, {"city": "SF"}, {"city": "NYC"}])
         result = coll.aggregate([{"$group": {"_id": "$city", "count": {"$sum": 1}}}])
@@ -101,19 +101,19 @@ class TestCollectionFacade:
         assert nyc["count"] == 2
 
     def test_count_documents(self, tmp_path):
-        client = MongoClient(f"local://{tmp_path}/wt")
+        client = MongoClient(f"local+wt://{tmp_path}/wt")
         coll = client["mydb"]["users"]
         coll.insert_many([{"x": 1}, {"x": 1}, {"x": 2}])
         assert coll.count_documents({"x": 1}) == 2
 
     def test_explain(self, tmp_path):
-        client = MongoClient(f"local://{tmp_path}/wt")
+        client = MongoClient(f"local+wt://{tmp_path}/wt")
         coll = client["mydb"]["users"]
         plan = coll.explain({"x": 1})
         assert "plan" in plan
 
     def test_watch(self, tmp_path):
-        client = MongoClient(f"local://{tmp_path}/wt")
+        client = MongoClient(f"local+wt://{tmp_path}/wt")
         coll = client["mydb"]["users"]
         stream = coll.watch()
         coll.insert_one({"name": "watch-me"})
@@ -123,7 +123,7 @@ class TestCollectionFacade:
         assert event["operationType"] == "insert"
 
     def test_update_one_and_many(self, tmp_path):
-        client = MongoClient(f"local://{tmp_path}/wt")
+        client = MongoClient(f"local+wt://{tmp_path}/wt")
         coll = client["mydb"]["users"]
         coll.insert_many([{"x": 1}, {"x": 1}, {"x": 2}])
         r1 = coll.update_one({"x": 1}, {"$set": {"x": 9}})
@@ -132,7 +132,7 @@ class TestCollectionFacade:
         assert r2.modified_count >= 0
 
     def test_delete_one_and_many(self, tmp_path):
-        client = MongoClient(f"local://{tmp_path}/wt")
+        client = MongoClient(f"local+wt://{tmp_path}/wt")
         coll = client["mydb"]["users"]
         coll.insert_many([{"x": 1}, {"x": 1}, {"x": 2}])
         r1 = coll.delete_one({"x": 1})
@@ -141,7 +141,7 @@ class TestCollectionFacade:
         assert r2.deleted_count >= 0
 
     def test_index_methods(self, tmp_path):
-        client = MongoClient(f"local://{tmp_path}/wt")
+        client = MongoClient(f"local+wt://{tmp_path}/wt")
         coll = client["mydb"]["users"]
         name = coll.create_index([("age", 1)])
         assert name == "age_1"
@@ -152,20 +152,20 @@ class TestCollectionFacade:
         assert not any(i["name"] == "age_1" for i in indexes2)
 
     def test_get_oplog_local(self, tmp_path):
-        client = MongoClient(f"local://{tmp_path}/wt")
+        client = MongoClient(f"local+wt://{tmp_path}/wt")
         coll = client["mydb"]["users"]
         coll.insert_one({"x": 1})
         oplog = coll.get_oplog()
         assert len(oplog) >= 1
 
     def test_get_local_collection(self, tmp_path):
-        client = MongoClient(f"local://{tmp_path}/wt")
+        client = MongoClient(f"local+wt://{tmp_path}/wt")
         coll = client["mydb"]["users"]
         local_coll = coll.get_local_collection()
         assert local_coll is not None
 
     def test_find_one_and_update(self, tmp_path):
-        client = MongoClient(f"local://{tmp_path}/wt")
+        client = MongoClient(f"local+wt://{tmp_path}/wt")
         coll = client["mydb"]["users"]
         coll.insert_one({"_id": "fau", "x": 1})
         before = coll.find_one_and_update({"_id": "fau"}, {"$set": {"x": 99}})
@@ -173,7 +173,7 @@ class TestCollectionFacade:
         assert coll.find_one({"_id": "fau"})["x"] == 99
 
     def test_find_one_and_delete(self, tmp_path):
-        client = MongoClient(f"local://{tmp_path}/wt")
+        client = MongoClient(f"local+wt://{tmp_path}/wt")
         coll = client["mydb"]["users"]
         coll.insert_one({"_id": "fad", "x": 1})
         deleted = coll.find_one_and_delete({"_id": "fad"})
@@ -181,7 +181,7 @@ class TestCollectionFacade:
         assert coll.find_one({"_id": "fad"}) is None
 
     def test_find_one_and_replace(self, tmp_path):
-        client = MongoClient(f"local://{tmp_path}/wt")
+        client = MongoClient(f"local+wt://{tmp_path}/wt")
         coll = client["mydb"]["users"]
         coll.insert_one({"_id": "far", "x": 1, "y": 2})
         before = coll.find_one_and_replace({"_id": "far"}, {"x": 99})
@@ -193,7 +193,7 @@ class TestCollectionFacade:
     def test_bulk_write_mixed_operations(self, tmp_path):
         from smongo.client import DeleteOne, InsertOne, UpdateOne
 
-        client = MongoClient(f"local://{tmp_path}/wt")
+        client = MongoClient(f"local+wt://{tmp_path}/wt")
         coll = client["mydb"]["users"]
         coll.insert_many([{"_id": "bw1", "x": 1}, {"_id": "bw2", "x": 2}])
         result = coll.bulk_write(
@@ -213,7 +213,7 @@ class TestCollectionFacade:
     def test_bulk_write_upsert(self, tmp_path):
         from smongo.client import ReplaceOne, UpdateOne
 
-        client = MongoClient(f"local://{tmp_path}/wt")
+        client = MongoClient(f"local+wt://{tmp_path}/wt")
         coll = client["mydb"]["users"]
         result = coll.bulk_write(
             [
@@ -227,14 +227,57 @@ class TestCollectionFacade:
         assert coll.find_one({"_id": "up2"})["x"] == 2
 
     def test_update_one_upsert(self, tmp_path):
-        client = MongoClient(f"local://{tmp_path}/wt")
+        client = MongoClient(f"local+wt://{tmp_path}/wt")
         coll = client["mydb"]["users"]
         r = coll.update_one({"_id": "new"}, {"$set": {"val": 42}}, upsert=True)
         assert r.upserted_id is not None
         assert coll.find_one({"_id": "new"})["val"] == 42
 
     def test_database_cached(self, tmp_path):
-        client = MongoClient(f"local://{tmp_path}/wt")
+        client = MongoClient(f"local+wt://{tmp_path}/wt")
         db1 = client["mydb"]
         db2 = client["mydb"]
         assert db1 is db2
+
+
+class TestClientRedbDefault:
+    """Smoke tests for ``local://`` (redb) — distinct from WiredTiger ``local+wt://`` facade tests above."""
+
+    def test_insert_find_inserted_ids_shape(self, tmp_path):
+        client = MongoClient(f"local://{tmp_path}/rdb")
+        try:
+            coll = client["db"]["users"]
+            r = coll.insert_one({"name": "Zed", "n": 1})
+            assert len(r.inserted_ids) == 1
+            docs = list(coll.find({"name": "Zed"}))
+            assert len(docs) == 1 and docs[0]["n"] == 1
+        finally:
+            client.close()
+
+    def test_find_one_projection_redb(self, tmp_path):
+        client = MongoClient(f"local://{tmp_path}/rdb")
+        try:
+            coll = client["db"]["c"]
+            coll.insert_one({"a": 1, "b": 2})
+            doc = coll.find_one({}, {"a": 1})
+            assert doc is not None
+            assert doc["a"] == 1
+            assert "b" not in doc
+        finally:
+            client.close()
+
+    def test_aggregate_and_explain_redb(self, tmp_path):
+        """``Collection.aggregate`` uses ``find_streaming`` on the backend; redb must implement it."""
+        client = MongoClient(f"local://{tmp_path}/rdb")
+        try:
+            coll = client["db"]["c"]
+            coll.insert_many([{"city": "NYC"}, {"city": "SF"}, {"city": "NYC"}])
+            rows = list(
+                coll.aggregate([{"$group": {"_id": "$city", "count": {"$sum": 1}}}])
+            )
+            nyc = next(r for r in rows if r["_id"] == "NYC")
+            assert nyc["count"] == 2
+            plan = coll.explain({"city": 1})
+            assert "plan" in plan
+        finally:
+            client.close()

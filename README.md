@@ -16,7 +16,8 @@ thing, with no translation layer in between.
 from smongo import MongoClient
 
 # Flip the URI -- same code, different backend
-client = MongoClient("local://data")                              # embedded WiredTiger
+client = MongoClient("local://data")                              # embedded (redb by default)
+# client = MongoClient("local+wt://data")                          # explicit WiredTiger
 # client = MongoClient("mongodb+srv://...")                        # Atlas / any mongod
 # client = MongoClient("local://data", sync="mongodb+srv://...")   # local-first + auto sync
 
@@ -34,6 +35,12 @@ results = users.aggregate([
     {"$sort": {"avg_age": -1}},
 ])
 ```
+
+---
+
+## Documentation
+
+**Roadmap and design notes:** everything lives in one place — **[ROADMAP.md](ROADMAP.md)** (engine, WASM/browser, geospatial / time series / graph, Python sync, wire-path interop). **Browser / WASM demos:** [rust/smongo-engine/wasm/README.md](rust/smongo-engine/wasm/README.md).
 
 ---
 
@@ -343,6 +350,8 @@ python demo.py
 
 Runs the full embedded engine locally -- indexes, queries, aggregation, oplog -- no MongoDB server. The Rust extension is built automatically by the maturin build backend.
 
+**Development install:** Run `pip install` / `make install-dev` from the **repository root** (next to `pyproject.toml`). That file pins `[tool.maturin]` — `manifest-path = rust/smongo-py/Cargo.toml` and `module-name = smongo._smongo_core`. Running `maturin develop` only inside `rust/smongo-py/` can install an extension that does not match the editable `smongo` package, so you see missing methods on `RedbLocalCollection` and similar foot-guns. Use `make install-dev`, `pip install -e ".[dev,all]"`, or `make build-debug` (rebuild extension only, still from root). For a release build of the extension: from root, `python -m maturin develop --release --manifest-path rust/smongo-py/Cargo.toml`.
+
 ---
 
 ## Wire Protocol Server
@@ -478,12 +487,12 @@ docker-compose.yml   App + MongoDB for the full sync experience
 ## Dev Commands
 
 ```bash
-make install-test   # install test/lint dependencies
+make install-dev    # editable smongo + dev/optional extras + Rust extension
 make lint           # ruff checks
 make format         # ruff formatter
-make test           # unit suite (1,090 tests)
-make integration    # docker-backed integration suite
-make perf           # benchmark suite
+make test           # unit suite (pytest default addopts)
+make test-integration   # docker-backed integration suite
+make test-perf      # benchmark suite
 make coverage       # coverage report (70% enforced)
 make typecheck      # mypy strict
 ```

@@ -1,11 +1,12 @@
 """
-Sync Layer -- bidirectional sync between the local WiredTiger engine and MongoDB Atlas.
+Sync Layer -- bidirectional sync between the local embedded engine and MongoDB Atlas.
 
 Architecture:
     - Background thread tails the local oplog and pushes mutations to Atlas
     - Optionally pulls remote changes via change streams or timestamp polling
     - Conflict resolution strategies: LWW, local-wins, remote-wins, or custom callable
-    - Checkpoint stored in a dedicated WiredTiger table so sync survives restarts
+    - Checkpoints, DLQ, and tombstones: WiredTiger tables when using ``local+wt://``,
+      or redb KV / atomic truncate when using ``local://`` (default redb backend)
     - Exponential backoff on consecutive errors, per-collection selective filters
     - MQL-native sync rules with $$NOW, $$NODE_ID, and user-defined variable substitution
 """
@@ -176,8 +177,10 @@ class TombstoneRegistry:
     """Track deleted document IDs with timestamps for tombstone expiry.
 
     When *session* and *uri* are provided, tombstones are persisted in a
-    WiredTiger table and survive process restarts.  Otherwise falls back to
-    an in-memory dict (useful for unit tests without a WT connection).
+    WiredTiger table and survive process restarts.  When *redb_client* and
+    *uri* are provided (hybrid sync with :class:`~smongo.storage.redb_engine.RedbClient`),
+    persistence uses the Rust redb KV helpers on the same file as the engine.
+    Otherwise falls back to an in-memory dict (useful for unit tests).
     """
 
     def __init__(
@@ -185,19 +188,26 @@ class TombstoneRegistry:
         ttl_sec: int = DEFAULT_TOMBSTONE_TTL_SEC,
         session: Any = None,
         uri: str | None = None,
+        redb_client: Any = None,
     ) -> None:
         self._ttl = ttl_sec
         self._lock = threading.Lock()
         self._session = session
         self._uri = uri
-        self._persistent = session is not None and uri is not None
+        self._redb_client = redb_client
+        self._persistent_wt = session is not None and uri is not None
+        self._persistent_redb = redb_client is not None and uri is not None
+        self._persistent = self._persistent_wt or self._persistent_redb
         if not self._persistent:
             self._tombstones: dict[str, float] = {}
 
     def mark_deleted(self, doc_id: Any) -> None:
         key = str(doc_id)
         with self._lock:
-            if self._persistent:
+            if self._persistent_redb:
+                assert self._uri is not None and self._redb_client is not None
+                self._redb_client.sync_kv_put(self._uri, key, str(time.time()))
+            elif self._persistent_wt:
                 cursor = self._session.open_cursor(self._uri, None, "overwrite=true")
                 cursor[key] = str(time.time())
                 cursor.close()
@@ -207,7 +217,10 @@ class TombstoneRegistry:
     def is_tombstoned(self, doc_id: Any) -> bool:
         key = str(doc_id)
         with self._lock:
-            if self._persistent:
+            if self._persistent_redb:
+                assert self._uri is not None and self._redb_client is not None
+                return self._redb_client.sync_kv_get(self._uri, key) is not None
+            if self._persistent_wt:
                 cursor = self._session.open_cursor(self._uri, None, None)
                 cursor.set_key(key)
                 found = bool(cursor.search() == 0)
@@ -218,7 +231,14 @@ class TombstoneRegistry:
     def expire(self) -> int:
         now = time.time()
         with self._lock:
-            if self._persistent:
+            if self._persistent_redb:
+                assert self._uri is not None and self._redb_client is not None
+                rows = self._redb_client.sync_kv_scan(self._uri)
+                to_remove = [k for k, v in rows if now - float(v) > self._ttl]
+                for k in to_remove:
+                    self._redb_client.sync_kv_remove(self._uri, k)
+                return len(to_remove)
+            if self._persistent_wt:
                 cursor = self._session.open_cursor(self._uri, None, None)
                 to_remove: list[str] = []
                 while cursor.next() == 0:
@@ -241,7 +261,12 @@ class TombstoneRegistry:
 
     def to_dict(self) -> dict[str, float]:
         with self._lock:
-            if self._persistent:
+            if self._persistent_redb:
+                assert self._uri is not None and self._redb_client is not None
+                return {
+                    k: float(v) for k, v in self._redb_client.sync_kv_scan(self._uri)
+                }
+            if self._persistent_wt:
                 result: dict[str, float] = {}
                 cursor = self._session.open_cursor(self._uri, None, None)
                 while cursor.next() == 0:
@@ -252,7 +277,11 @@ class TombstoneRegistry:
 
     def load(self, data: dict[str, float]) -> None:
         with self._lock:
-            if self._persistent:
+            if self._persistent_redb:
+                assert self._uri is not None and self._redb_client is not None
+                for k, v in data.items():
+                    self._redb_client.sync_kv_put(self._uri, k, str(v))
+            elif self._persistent_wt:
                 cursor = self._session.open_cursor(self._uri, None, "overwrite=true")
                 for k, v in data.items():
                     cursor[k] = str(v)
@@ -450,25 +479,43 @@ class SyncManager:
         self._last_cycle_pushed = 0
         self._last_cycle_pulled = 0
 
-        wt_conn = local_client.client.conn
-        self._ck_session: Any = wt_conn.open_session()
         self._ck_lock = threading.Lock()
         self._ck_uri = "table:__sync_checkpoint"
-        self._ck_session.create(self._ck_uri, "key_format=S,value_format=S")
-
         self._ts_uri = "table:__tombstones"
-        self._ck_session.create(self._ts_uri, "key_format=S,value_format=S")
-
         self._dlq_uri = "table:__sync_dlq"
-        self._ck_session.create(self._dlq_uri, "key_format=S,value_format=S")
+
+        try:
+            from smongo.storage.redb_engine import RedbClient as _RedbClient
+        except ImportError:
+            _RedbClient = None  # type: ignore[misc, assignment]
+
+        inner = getattr(local_client, "client", None)
+        self._redb_sync = bool(
+            _RedbClient is not None and isinstance(inner, _RedbClient)
+        )
+        if self._redb_sync:
+            self._rust = inner._rust_client
+            self._ck_session = None
+            self._tombstones = TombstoneRegistry(
+                ttl_sec=int(cfg.get("tombstone_ttl_sec", DEFAULT_TOMBSTONE_TTL_SEC)),
+                redb_client=self._rust,
+                uri=self._ts_uri,
+            )
+        else:
+            wt_conn = local_client.client.conn
+            self._rust = None
+            self._ck_session = wt_conn.open_session()
+            self._ck_session.create(self._ck_uri, "key_format=S,value_format=S")
+            self._ck_session.create(self._ts_uri, "key_format=S,value_format=S")
+            self._ck_session.create(self._dlq_uri, "key_format=S,value_format=S")
+            self._tombstones = TombstoneRegistry(
+                ttl_sec=int(cfg.get("tombstone_ttl_sec", DEFAULT_TOMBSTONE_TTL_SEC)),
+                session=self._ck_session,
+                uri=self._ts_uri,
+            )
 
         self._tracked: dict[str, tuple[Any, Any, Predicate | None]] = {}
         self._local_field_history: dict[tuple[str, Any], set[str]] = {}
-        self._tombstones = TombstoneRegistry(
-            ttl_sec=int(cfg.get("tombstone_ttl_sec", DEFAULT_TOMBSTONE_TTL_SEC)),
-            session=self._ck_session,
-            uri=self._ts_uri,
-        )
         self._vector_clocks: dict[str, VectorClock] = {}
         self._node_id: str = cfg.get("node_id", "local")
         self._crdt_fields: dict[str, str] = cfg.get("crdt_fields", {})
@@ -824,9 +871,21 @@ class SyncManager:
 
         Both operations run inside a single WiredTiger transaction so a crash
         between checkpoint write and oplog truncation cannot cause duplicate
-        ops on restart.
+        ops on restart.  With redb, the engine uses one write transaction for
+        the same effect.
         """
         with self._ck_lock:
+            if self._redb_sync:
+                assert self._rust is not None
+                self._rust.sync_atomic_checkpoint_truncate(
+                    self._ck_uri,
+                    f"push:{ns}",
+                    safe_key,
+                    oplog_uri,
+                    safe_key,
+                )
+                return
+            assert self._ck_session is not None
             self._ck_session.begin_transaction()
             try:
                 cursor = self._ck_session.open_cursor(self._ck_uri, None, "overwrite=true")
@@ -918,6 +977,11 @@ class SyncManager:
             default=str,
         )
         with self._ck_lock:
+            if self._redb_sync:
+                assert self._rust is not None
+                self._rust.sync_kv_put(self._dlq_uri, key, value)
+                return
+            assert self._ck_session is not None
             cursor = self._ck_session.open_cursor(self._dlq_uri, None, "overwrite=true")
             cursor[key] = value
             cursor.close()
@@ -929,17 +993,26 @@ class SyncManager:
         backoff_base = float(self._config.get("dlq_backoff_base_sec", 30))
         backoff_max = float(self._config.get("max_backoff_sec", 300))
 
-        eligible: list[tuple[str, dict[str, Any]]] = []
+        rows: list[tuple[str, str]]
         with self._ck_lock:
-            cursor = self._ck_session.open_cursor(self._dlq_uri, None, None)
-            while cursor.next() == 0:
-                k: str = cursor.get_key()
-                v: dict[str, Any] = json.loads(cursor.get_value())
-                if v.get("permanently_failed"):
-                    continue
-                if v["next_retry_ts"] <= now:
-                    eligible.append((k, v))
-            cursor.close()
+            if self._redb_sync:
+                assert self._rust is not None
+                rows = self._rust.sync_kv_scan(self._dlq_uri)
+            else:
+                assert self._ck_session is not None
+                rows = []
+                cursor = self._ck_session.open_cursor(self._dlq_uri, None, None)
+                while cursor.next() == 0:
+                    rows.append((cursor.get_key(), cursor.get_value()))
+                cursor.close()
+
+        eligible: list[tuple[str, dict[str, Any]]] = []
+        for k, v_raw in rows:
+            v: dict[str, Any] = json.loads(v_raw)
+            if v.get("permanently_failed"):
+                continue
+            if v["next_retry_ts"] <= now:
+                eligible.append((k, v))
 
         if not eligible:
             return
@@ -1026,6 +1099,14 @@ class SyncManager:
 
     def _dlq_remove(self, key: str) -> None:
         with self._ck_lock:
+            if self._redb_sync:
+                assert self._rust is not None
+                try:
+                    self._rust.sync_kv_remove(self._dlq_uri, key)
+                except Exception:
+                    pass
+                return
+            assert self._ck_session is not None
             cursor = self._ck_session.open_cursor(self._dlq_uri, None, "overwrite=true")
             cursor.set_key(key)
             try:
@@ -1036,12 +1117,31 @@ class SyncManager:
 
     def _dlq_update(self, key: str, value: dict[str, Any]) -> None:
         with self._ck_lock:
+            if self._redb_sync:
+                assert self._rust is not None
+                self._rust.sync_kv_put(
+                    self._dlq_uri, key, json.dumps(value, default=str)
+                )
+                return
+            assert self._ck_session is not None
             cursor = self._ck_session.open_cursor(self._dlq_uri, None, "overwrite=true")
             cursor[key] = json.dumps(value, default=str)
             cursor.close()
 
     def _dlq_count(self, *, permanent_only: bool = False) -> int:
         with self._ck_lock:
+            if self._redb_sync:
+                assert self._rust is not None
+                rows = self._rust.sync_kv_scan(self._dlq_uri)
+                if not permanent_only:
+                    return len(rows)
+                n = 0
+                for _k, v_raw in rows:
+                    v = json.loads(v_raw)
+                    if v.get("permanently_failed"):
+                        n += 1
+                return n
+            assert self._ck_session is not None
             cursor = self._ck_session.open_cursor(self._dlq_uri, None, None)
             n = 0
             while cursor.next() == 0:
@@ -1418,6 +1518,10 @@ class SyncManager:
 
     def _get_checkpoint(self, key: str) -> str | None:
         with self._ck_lock:
+            if self._redb_sync:
+                assert self._rust is not None
+                return self._rust.sync_kv_get(self._ck_uri, key)
+            assert self._ck_session is not None
             cursor = self._ck_session.open_cursor(self._ck_uri, None, None)
             cursor.set_key(key)
             val: str | None = None
@@ -1428,6 +1532,11 @@ class SyncManager:
 
     def _set_checkpoint(self, key: str, value: str) -> None:
         with self._ck_lock:
+            if self._redb_sync:
+                assert self._rust is not None
+                self._rust.sync_kv_put(self._ck_uri, key, value)
+                return
+            assert self._ck_session is not None
             cursor = self._ck_session.open_cursor(self._ck_uri, None, "overwrite=true")
             cursor[key] = value
             cursor.close()

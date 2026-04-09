@@ -307,7 +307,7 @@ fn eval_op<'py>(
             format!("{op} requires a 2dsphere index (not yet supported); use the $geoNear aggregation stage instead")
         )),
         "$geoWithin" | "$geoIntersects" => Err(pyo3::exceptions::PyNotImplementedError::new_err(
-            format!("{op} is planned but not yet implemented; see WHATSNEXT.md for the geospatial roadmap")
+            format!("{op} is planned but not yet implemented; see ROADMAP.md (Part 3 — Geospatial)")
         )),
         _ => Err(PyValueError::new_err(format!(
             "unknown query operator: {op}"

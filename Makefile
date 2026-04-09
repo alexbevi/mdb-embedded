@@ -1,6 +1,9 @@
 PYTHON  ?= python3
 CARGO   ?= cargo
 RUST    := rust/Cargo.toml
+# Repository root (Makefile lives here). All maturin/pip installs must run from here
+# so pyproject.toml [tool.maturin] (manifest-path, module-name) stays consistent.
+ROOT    := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
 SRC     := smongo web_app.py demo.py
 TESTS   := tests
@@ -20,29 +23,30 @@ help: ## Show this help
 # ---------------------------------------------------------------------------
 .PHONY: install setup install-dev
 
-install: ## Install smongo (builds Rust extension via maturin)
-	pip install maturin
-	maturin develop --release
+install: ## Editable install: smongo + PyO3 extension (run from repo root)
+	cd $(ROOT) && $(PYTHON) -m pip install maturin
+	cd $(ROOT) && $(PYTHON) -m pip install -e .
 
-install-dev: install ## Install with dev + all optional deps
-	$(PYTHON) -m pip install -e ".[dev,all]"
+install-dev: ## Editable install with dev + optional extras (flask, vector, …)
+	cd $(ROOT) && $(PYTHON) -m pip install maturin
+	cd $(ROOT) && $(PYTHON) -m pip install -e ".[dev,all]"
 
 setup: install-dev ## Full dev setup: deps + pre-commit hooks
-	pre-commit install
+	cd $(ROOT) && pre-commit install
 
 # ---------------------------------------------------------------------------
 # Build
 # ---------------------------------------------------------------------------
 .PHONY: build build-rust build-debug
 
-build: build-rust install ## Full build: Rust + Python package
+build: build-rust install ## Full build: Rust workspace tests + editable Python package
 
-build-rust: ## Build and lint the Rust crate
-	$(CARGO) test --manifest-path $(RUST)
-	$(CARGO) clippy --manifest-path $(RUST) -- -D warnings
+build-rust: ## Build and lint the Rust workspace
+	cd $(ROOT) && $(CARGO) test --manifest-path $(RUST)
+	cd $(ROOT) && $(CARGO) clippy --manifest-path $(RUST) -- -D warnings
 
-build-debug: ## Build Rust extension in debug mode (faster compile)
-	maturin develop
+build-debug: ## Rebuild only the PyO3 extension (debug, fast iteration)
+	cd $(ROOT) && $(PYTHON) -m maturin develop --manifest-path rust/smongo-py/Cargo.toml
 
 # ---------------------------------------------------------------------------
 # Quality
@@ -50,13 +54,13 @@ build-debug: ## Build Rust extension in debug mode (faster compile)
 .PHONY: lint format typecheck check
 
 lint: ## Run ruff linter
-	$(PYTHON) -m ruff check $(SRC)
+	cd $(ROOT) && $(PYTHON) -m ruff check $(SRC)
 
 format: ## Run ruff formatter
-	$(PYTHON) -m ruff format $(SRC) $(TESTS)
+	cd $(ROOT) && $(PYTHON) -m ruff format $(SRC) $(TESTS)
 
 typecheck: ## Run mypy strict type checking
-	$(PYTHON) -m mypy smongo/ web_app.py
+	cd $(ROOT) && $(PYTHON) -m mypy smongo/ web_app.py
 
 check: lint typecheck build-rust ## Run all static checks (lint + types + Rust)
 
@@ -66,19 +70,19 @@ check: lint typecheck build-rust ## Run all static checks (lint + types + Rust)
 .PHONY: test test-rust test-unit test-integration test-perf test-all
 
 test: ## Run unit test suite (no Docker, no network)
-	pytest tests -q
+	cd $(ROOT) && $(PYTHON) -m pytest tests -q
 
 test-rust: ## Run Rust-only tests (cargo test + clippy)
-	$(CARGO) test --manifest-path $(RUST)
-	$(CARGO) clippy --manifest-path $(RUST) -- -D warnings
+	cd $(ROOT) && $(CARGO) test --manifest-path $(RUST)
+	cd $(ROOT) && $(CARGO) clippy --manifest-path $(RUST) -- -D warnings
 
 test-unit: test ## Alias for `make test`
 
 test-integration: ## Run integration tests (requires Docker MongoDB)
-	pytest tests/integration -m integration -v --override-ini="addopts="
+	cd $(ROOT) && $(PYTHON) -m pytest tests/integration -m integration -v --override-ini="addopts="
 
 test-perf: ## Run performance benchmarks
-	pytest tests/performance -m performance --benchmark-only -q --override-ini="addopts="
+	cd $(ROOT) && $(PYTHON) -m pytest tests/performance -m performance --benchmark-only -q --override-ini="addopts="
 
 test-all: test-rust test test-integration ## Run everything: Rust + unit + integration
 
@@ -88,12 +92,12 @@ test-all: test-rust test test-integration ## Run everything: Rust + unit + integ
 .PHONY: coverage coverage-html
 
 coverage: ## Run tests with coverage report (70% enforced)
-	pytest tests -m "not performance" \
+	cd $(ROOT) && $(PYTHON) -m pytest tests -m "not performance" \
 		--cov=smongo --cov=web_app \
 		--cov-report=term-missing
 
 coverage-html: ## Generate HTML coverage report
-	pytest tests -m "not performance" \
+	cd $(ROOT) && $(PYTHON) -m pytest tests -m "not performance" \
 		--cov=smongo --cov=web_app \
 		--cov-report=html --cov-report=term-missing
 	@echo "  open htmlcov/index.html"
@@ -120,13 +124,13 @@ docker-build: ## Build Docker image only
 .PHONY: demo web wire
 
 demo: ## Run the standalone CLI demo
-	$(PYTHON) demo.py
+	cd $(ROOT) && $(PYTHON) demo.py
 
 web: ## Start the web dashboard (localhost:5000)
-	$(PYTHON) web_app.py
+	cd $(ROOT) && $(PYTHON) web_app.py
 
 wire: ## Start the wire protocol server (localhost:27017)
-	$(PYTHON) -m smongo.wire --port 27017
+	cd $(ROOT) && $(PYTHON) -m smongo.wire --port 27017
 
 # ---------------------------------------------------------------------------
 # Clean
@@ -134,13 +138,13 @@ wire: ## Start the wire protocol server (localhost:27017)
 .PHONY: clean clean-rust clean-all
 
 clean: ## Remove Python build artifacts and caches
-	rm -rf build/ dist/ *.egg-info .eggs
-	rm -rf .pytest_cache .mypy_cache .ruff_cache
-	rm -rf htmlcov .coverage
-	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
-	find . -type f -name '*.pyc' -delete 2>/dev/null || true
+	cd $(ROOT) && rm -rf build/ dist/ *.egg-info .eggs
+	cd $(ROOT) && rm -rf .pytest_cache .mypy_cache .ruff_cache
+	cd $(ROOT) && rm -rf htmlcov .coverage
+	cd $(ROOT) && find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+	cd $(ROOT) && find . -type f -name '*.pyc' -delete 2>/dev/null || true
 
 clean-rust: ## Remove Rust build artifacts
-	$(CARGO) clean --manifest-path $(RUST)
+	cd $(ROOT) && $(CARGO) clean --manifest-path $(RUST)
 
 clean-all: clean clean-rust ## Remove all build artifacts (Python + Rust)

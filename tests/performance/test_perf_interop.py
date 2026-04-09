@@ -10,7 +10,7 @@ from smongo.objectid import ObjectId
 @pytest.fixture
 def wire_client(tmp_path):
     """Client with a small dataset for dispatch-level benchmarks."""
-    c = MongoClient(f"local://{tmp_path}/interop_wt")
+    c = MongoClient(f"local+wt://{tmp_path}/interop_wt")
     coll = c["bench"]["items"]
     coll.insert_many([{"_id": f"d{i}", "x": i, "tag": f"t{i % 5}"} for i in range(200)])
     coll.create_index([("x", 1)])

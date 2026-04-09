@@ -161,10 +161,12 @@ class IndexManager:
                 idx_type = "hashed"
                 break
             if d in ("2dsphere", "2d"):
+                # WiredTiger 2dsphere / `$near` are implemented on `RustLocalCollection`
+                # (`smongo._smongo_core`); this Python `IndexManager` is for the legacy
+                # pure-Python storage stack only.
                 raise NotImplementedError(
-                    f"{d} indexes are planned but not yet implemented; "
-                    "$geoNear aggregation works without an index. "
-                    "See WHATSNEXT.md for the geospatial roadmap."
+                    f"{d} indexes are not supported on the Python IndexManager; "
+                    "use RustLocalClient / RustLocalCollection (see ROADMAP.md Part 3 — Geospatial)."
                 )
             if _f == "$**":
                 idx_type = "wildcard"

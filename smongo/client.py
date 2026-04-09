@@ -1,13 +1,15 @@
 """
-Connection Layer -- the magic switch between remote MongoDB and local WiredTiger.
+Connection Layer -- the magic switch between remote MongoDB, redb, and WiredTiger.
 
 MongoClient("mongodb://...")   -> real PyMongo
-MongoClient("local://./path")  -> embedded WiredTiger engine
+MongoClient("local://./path")  -> embedded redb engine (NEW DEFAULT)
+MongoClient("local+wt://path") -> embedded WiredTiger engine (legacy)
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, cast
 
 try:
@@ -27,6 +29,7 @@ from .storage import (
     LocalCollection,
     UpdateResult,
 )
+from .storage.redb_engine import RedbClient, RedbCollection
 from .sync import SyncManager
 
 log = logging.getLogger("smongo.client")
@@ -111,12 +114,26 @@ class MongoClient:
 
     def __init__(
         self,
-        uri: str = "local://local_wt_data",
+        uri: str = "local://local_data",
         sync: str | None = None,
         sync_config: dict[str, Any] | None = None,
         *,
         durable: bool = True,
+        backend: str | None = None,
     ) -> None:
+        """
+        Create a MongoDB client.
+
+        Args:
+            uri: Connection URI. Supported formats:
+                - "mongodb://" or "mongodb+srv://" - Remote MongoDB
+                - "local://path" - Embedded redb (default)
+                - "local+wt://path" - Embedded WiredTiger (legacy)
+            sync: Remote MongoDB URI for hybrid sync mode
+            sync_config: Configuration for sync manager
+            durable: Enable durable writes (default: True)
+            backend: Force backend ("redb" or "wiredtiger"). If None, determined from URI.
+        """
         self.uri = uri
         self._sync_mgr: SyncManager | None = None
         self._databases: dict[str, Database] = {}
@@ -128,9 +145,36 @@ class MongoClient:
             self.client: Any = _PyMongoClient(uri)
         else:
             self.mode = "hybrid" if sync else "local"
-            db_path = uri.split("://")[1] if "://" in uri else uri
-            db_path = db_path or "local_wt_data"
-            self.client = LocalClient(db_path, durable=durable)
+
+            # Determine backend from URI or parameter or env var
+            if backend is None:
+                if uri.startswith("local+wt://"):
+                    backend = "wiredtiger"
+                elif os.environ.get("SMONGO_BACKEND", "").lower() == "wiredtiger":
+                    backend = "wiredtiger"
+                    log.info("Using WiredTiger backend (SMONGO_BACKEND=wiredtiger)")
+                else:
+                    backend = "redb"
+
+            # Extract path
+            if "://" in uri:
+                db_path = uri.split("://", 1)[1]
+            else:
+                db_path = uri
+            db_path = db_path or "local_data"
+
+            # Create backend client
+            if backend == "wiredtiger":
+                log.info("Creating WiredTiger client at %s", db_path)
+                self.client = LocalClient(db_path, durable=durable)
+            elif backend == "redb":
+                log.info("Creating redb client at %s", db_path)
+                self.client = RedbClient(db_path, durable=durable)
+            else:
+                raise ValueError(f"Unknown backend: {backend}")
+
+            self.backend = backend
+
             if sync:
                 self._sync_mgr = SyncManager(self, sync, sync_config=sync_config)
                 self._sync_mgr.start()
@@ -145,8 +189,8 @@ class MongoClient:
         self._databases[db_name] = db
         return db
 
-    def get_local_client(self) -> LocalClient:
-        """Return the underlying LocalClient (only available in local mode)."""
+    def get_local_client(self) -> LocalClient | RedbClient:
+        """Return the underlying local client (only available in local mode)."""
         if self.mode not in ("local", "hybrid"):
             raise RuntimeError("get_local_client() only available in local mode")
         return self.client  # type: ignore[no-any-return]
@@ -290,6 +334,10 @@ class Collection:
         query = query or {}
         if self.mode == "remote":
             return self.backend.find(query, projection)
+        if isinstance(self.backend, RedbCollection):
+            docs = self.backend.find(query, projection=projection)
+            coll_getter = self._make_collection_getter()
+            return Cursor(docs, collection_getter=coll_getter)
         docs = self.backend.find_streaming(query)
         coll_getter = self._make_collection_getter()
         c = Cursor(docs, collection_getter=coll_getter)
@@ -297,11 +345,21 @@ class Collection:
             c = c.projection(projection)
         return c
 
-    def find_one(self, query: Filter | None = None) -> Document | None:
-        """Return the first document matching *query*, or ``None``."""
+    def find_one(
+        self,
+        query: Filter | None = None,
+        projection: Projection | None = None,
+    ) -> Document | None:
+        """Return the first document matching *query*, or ``None``.
+
+        *projection* is supported for remote PyMongo and for :class:`~smongo.storage.redb_engine.RedbCollection`
+        (WiredTiger :class:`~smongo.storage.collection.LocalCollection` ignores it today).
+        """
         query = query or {}
         if self.mode == "remote":
-            return self.backend.find_one(query)  # type: ignore[no-any-return]
+            return self.backend.find_one(query, projection)  # type: ignore[no-any-return]
+        if projection is not None and isinstance(self.backend, RedbCollection):
+            return self.backend.find_one(query, projection=projection)
         return self.backend.find_one(query)  # type: ignore[no-any-return]
 
     def aggregate(self, pipeline: Pipeline) -> list[Document] | Any:

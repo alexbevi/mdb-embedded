@@ -49,7 +49,7 @@ dev = [
 [tool.maturin]
 features = ["pyo3/extension-module"]
 module-name = "smongo._smongo_core"
-manifest-path = "rust/Cargo.toml"
+manifest-path = "rust/smongo-py/Cargo.toml"
 python-source = "."
 
 [tool.pytest.ini_options]

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > **Note**: Entries below describe the state of the codebase at the time of each release. References to Python classes like `LocalCollection`, `StreamingCursor`, etc. in older entries reflect APIs that have since been replaced by their Rust equivalents (`RustLocalCollection`, `RustStreamingCursor`, etc.).
 
+## [Unreleased]
+
+### Added
+
+- **`smongo-engine` / `2dsphere`**: Shared **`geo`** module (S2 keys, cap/rect covers, **`GeoQueryShape`** with Point / Polygon / MultiPolygon), planner execution plans (**`GeoNear`**, **`GeoCapWithin`**, **`GeoCellCover`**, **`OrUnionPlans`**), and **`find()`** integration on native targets. See **[ROADMAP.md](ROADMAP.md)** Part 3 §2.
+
+### Changed
+
+- **Python rust-local geo**: **`2dsphere`** **`create_index`** and geo **`find()`** / **`RustStreamingCursor`** now delegate to **`smongo-engine::Collection::find`** / index maintenance on the shared WiredTiger session. The legacy **`RustIndexManager`** WiredTiger **`table:__idx_*`** geo rows and **`execute_geo_near` / `execute_geo_covering`** execution path are **removed**; **`RustIndexManager`** keeps **planner-only** metadata for **`2dsphere`**. Direct **`RustIndexManager.create_index`** for **`2dsphere`** returns a clear error (use **`RustLocalCollection.create_index`**).
+- **`rust/smongo-py/src/geo_s2.rs`**: trimmed to Haversine / **`extract_lon_lat_py`** for **`query_compiler`**; index-specific S2 helpers moved to the engine.
+- Documentation: consolidated `SQLITEPATH.md`, `PATH2WASM.md`, `WHATSNEXT.md`, `UPNEXT4SYNC.md`, `FUTUREPLANS.md`, `WHATS_LEFT_TODO.md`, and `DOCS.md` into a single **[ROADMAP.md](ROADMAP.md)**. Part 3 §2 updated for **engine-first** **`2dsphere`** (Python on WT adapter, Node on redb).
+
 ## [0.9.3] - 2026-04-07
 
 ### Added
@@ -57,7 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`UPNEXT4SYNC.md`**: Tiered roadmap for the sync layer -- from data integrity fixes (Tier 0, done) through crash safety, scale, Device Sync parity, and beyond.
+- **`ROADMAP.md` (Part 4 — Python sync)**: Tiered roadmap for the sync layer -- from data integrity fixes (Tier 0, done) through crash safety, scale, Device Sync parity, and beyond.
 
 ## [0.4.0] - 2026-04-05
 

@@ -271,6 +271,11 @@ extern "C" {
         cursor: *mut WT_CURSOR,
         key: *const c_char,
     );
+    pub fn wt_shim_set_key_raw(
+        fn_ptr: *const c_void,
+        cursor: *mut WT_CURSOR,
+        item: *const WT_ITEM,
+    );
     pub fn wt_shim_set_value_raw(
         fn_ptr: *const c_void,
         cursor: *mut WT_CURSOR,
@@ -285,6 +290,11 @@ extern "C" {
         fn_ptr: *const c_void,
         cursor: *mut WT_CURSOR,
         keyp: *mut *const c_char,
+    ) -> c_int;
+    pub fn wt_shim_get_key_raw(
+        fn_ptr: *const c_void,
+        cursor: *mut WT_CURSOR,
+        keyp: *mut WT_ITEM,
     ) -> c_int;
     pub fn wt_shim_get_value_raw(
         fn_ptr: *const c_void,

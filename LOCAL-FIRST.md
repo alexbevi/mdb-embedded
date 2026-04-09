@@ -33,6 +33,8 @@ users.find({"region": "us-east", "role": "admin"}).limit(10)
 
 One constructor argument. That's the difference between "local database" and "distributed data system with bidirectional cloud sync."
 
+**Browser track:** This document describes the **Python** local-first path (WiredTiger + `SyncManager`). **Local-first in the browser** is the **same smongo-engine** compiled to WASM with OPFS-backed persistence and (roadmap) Atlas sync — see [ROADMAP.md](ROADMAP.md) (Part 2 — WASM) and [rust/smongo-engine/wasm/PERSISTENCE-AND-LIFECYCLE.md](rust/smongo-engine/wasm/PERSISTENCE-AND-LIFECYCLE.md).
+
 ---
 
 ## The Architecture: Two Write Paths, One Truth

@@ -225,7 +225,7 @@ BSON serialization, query compilation, index operations, wire compression, and m
 4. **User-facing `Cursor` only on the Python API**: Wire protocol `find` and `aggregate` no longer route through the Python `Cursor` class. For wire `find`, sort, skip, limit, and projection are applied in Rust before batches are returned. Wire `aggregate` calls `aggregate_pipeline` directly. The Python `Cursor` remains only for the user-facing Python API (`Collection.find()` and chained `.sort()` / `.skip()` / `.limit()` / projection there).
 5. **Oplog and admin WiredTiger paths**: Oplog and admin/metadata WiredTiger operations are fully typed at the Rust boundary (no Python dispatch for WT cursor operations in those hot paths).
 
-See [FUTUREPLANS.md](FUTUREPLANS.md) for the roadmap on eliminating the remaining Python-bound stages.
+See [ROADMAP.md](ROADMAP.md) (Part 5 — Python wire path) for the roadmap on eliminating the remaining Python-bound stages.
 
 ---
 

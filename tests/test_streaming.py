@@ -363,7 +363,7 @@ class TestClientStreaming:
 
     @pytest.fixture
     def client_coll(self, tmp_path, sample_docs) -> Collection:
-        client = MongoClient(f"local://{tmp_path}/wt")
+        client = MongoClient(f"local+wt://{tmp_path}/wt")
         coll = client["testdb"]["users"]
         coll.insert_many(sample_docs)
         coll.create_index([("city", 1)])

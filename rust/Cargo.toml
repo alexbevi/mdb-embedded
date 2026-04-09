@@ -1,53 +1,24 @@
-[package]
-name = "smongo-core"
-version = "0.1.0"
+[workspace]
+resolver = "2"
+members = [
+    "wiredtiger-sys",
+    "smongo-engine",
+    "smongo-py",
+    "smongo-c",
+    "smongo-node",
+]
+
+[workspace.package]
+version = "0.9.3"
 edition = "2021"
 rust-version = "1.83"
 
-[lib]
-name = "_smongo_core"
-crate-type = ["cdylib"]
-
-[dependencies]
-pyo3 = "0.28"
-hex = "0.4"
-getrandom = "0.2"
-bson = "2"
-sha2 = "0.10"
-uuid = { version = "1", features = ["v4"] }
-rand = "0.8"
-crc32c = "0.6"
-flate2 = "1"
-snap = "1"
-zstd = { version = "0.13", default-features = false }
-tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "signal", "macros", "time"] }
-bytes = "1"
-wiredtiger-sys = { path = "wiredtiger-sys" }
-parking_lot = "0.12.5"
-tokio-rustls = "0.26"
-rustls-pemfile = "2"
-hmac = "0.12"
-pbkdf2 = "0.12"
-base64 = "0.22"
-log = "0.4"
-regex = "1"
-unicode-normalization = "0.1"
-md-5 = "0.10"
-
-[dev-dependencies]
-tempfile = "3"
-
-[lints.rust]
+[workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
 
-[lints.clippy]
+[workspace.lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "warn"
 todo = "warn"
 dbg_macro = "warn"
-
-[profile.release]
-lto = "thin"
-codegen-units = 1
-strip = "symbols"

@@ -25,7 +25,7 @@ def _web_app(tmp_path):
     old_key = wa._API_KEY
     old_limiter = wa._limiter
 
-    wa.client = EmbeddedClient(f"local://{tmp_path}/web_sec_wt")
+    wa.client = EmbeddedClient(f"local+wt://{tmp_path}/web_sec_wt")
     wa._collections_cache.clear()
     wa._watch_streams.clear()
 

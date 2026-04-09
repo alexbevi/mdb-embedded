@@ -1,4 +1,4 @@
-"""Tests for $geoNear aggregation stage and geospatial stubs.
+"""Tests for $geoNear aggregation stage and Rust 2dsphere + `$near`.
 
 Covers:
 - Haversine distance computation
@@ -6,8 +6,9 @@ Covers:
 - $geoNear stage: distanceField, key, maxDistance, minDistance,
   distanceMultiplier, query filter, includeLocs, limit
 - Nearest-first sort ordering
-- Stub errors for $near, $nearSphere, $geoWithin, $geoIntersects
-- Stub error for 2dsphere/2d index creation
+- RustLocalClient: `2dsphere` index, `$near` / `$nearSphere`, ordering, filters
+- `$geoWithin` + `$centerSphere` and `$geometry` Polygon/MultiPolygon (2dsphere + collection scan)
+- `$geoIntersects` + `$geometry` Polygon/MultiPolygon (document Point only)
 """
 
 from __future__ import annotations
@@ -303,16 +304,253 @@ class TestGeoNearStage:
             )
 
 
-# ── Stub error tests ─────────────────────────────────────────────────
+# ── Rust 2dsphere + $near (RustLocalClient) ─────────────────────────
 
 
-class TestGeoStubs:
-    def test_2dsphere_index_raises(self, local_collection, sample_docs):
-        local_collection.insert_many(sample_docs)
-        with pytest.raises(NotImplementedError, match="2dsphere indexes are planned"):
-            local_collection.create_index([("location", "2dsphere")])
+class TestTwoDsphereRustNear:
+    def test_near_geojson_order_and_max_distance(self, local_collection, places):
+        for p in places:
+            local_collection.insert_one(p)
+        local_collection.create_index([("location", "2dsphere")])
 
-    def test_2d_index_raises(self, local_collection, sample_docs):
-        local_collection.insert_many(sample_docs)
-        with pytest.raises(NotImplementedError, match="2d indexes are planned"):
-            local_collection.create_index([("location", "2d")])
+        q = {
+            "location": {
+                "$near": {
+                    "$geometry": NYC,
+                    "$maxDistance": 2_000_000,
+                }
+            }
+        }
+        docs = local_collection.find(q)
+        names = [d["name"] for d in docs]
+        assert names[0] == "Times Square"
+        dists = []
+        for d in docs:
+            lon, lat = _extract_coords(d["location"])
+            dists.append(_haversine(NYC["coordinates"][0], NYC["coordinates"][1], lon, lat))
+        assert dists == sorted(dists)
+        assert "Big Ben" not in names
+
+    def test_near_sphere_legacy_center(self, local_collection, places):
+        for p in places:
+            local_collection.insert_one(p)
+        local_collection.create_index([("location", "2dsphere")])
+        docs = local_collection.find(
+            {
+                "location": {
+                    "$nearSphere": {
+                        "$geometry": NYC,
+                    }
+                }
+            }
+        )
+        assert [d["name"] for d in docs][0] == "Times Square"
+
+    def test_near_legacy_array_with_max(self, local_collection):
+        local_collection.insert_one(
+            {"_id": "a", "location": [-73.9857, 40.7484], "tag": 1}
+        )
+        local_collection.insert_one(
+            {"_id": "b", "location": [-122.4194, 37.7749], "tag": 2}
+        )
+        local_collection.create_index([("location", "2dsphere")])
+        docs = local_collection.find(
+            {
+                "location": {
+                    "$near": [-73.9857, 40.7484],
+                    "$maxDistance": 500_000,
+                }
+            }
+        )
+        assert len(docs) == 1
+        assert docs[0]["_id"] == "a"
+
+    def test_min_distance(self, local_collection, places):
+        for p in places:
+            local_collection.insert_one(p)
+        local_collection.create_index([("location", "2dsphere")])
+        docs = local_collection.find(
+            {
+                "location": {
+                    "$near": {
+                        "$geometry": NYC,
+                        "$minDistance": 1_000_000,
+                    }
+                }
+            }
+        )
+        assert all(d["name"] != "Times Square" for d in docs)
+
+    def test_and_combined_predicate(self, local_collection, places):
+        for p in places:
+            local_collection.insert_one(p)
+        local_collection.create_index([("location", "2dsphere")])
+        docs = local_collection.find(
+            {
+                "$and": [
+                    {"location": {"$near": {"$geometry": NYC}}},
+                    {"city": "SF"},
+                ]
+            }
+        )
+        assert len(docs) == 1
+        assert docs[0]["name"] == "Golden Gate"
+
+    def test_sparse_skips_missing_location(self, local_collection):
+        local_collection.create_index([("location", "2dsphere")], sparse=True)
+        local_collection.insert_one({"_id": "x", "name": "no geo"})
+        local_collection.insert_one(
+            {"_id": "y", "name": "here", "location": NYC}
+        )
+        docs = list(
+            local_collection.find({"location": {"$near": {"$geometry": NYC}}})
+        )
+        assert len(docs) == 1
+        assert docs[0]["_id"] == "y"
+
+
+class TestTwoDsphereGeoWithin:
+    """`$geoWithin` / `$centerSphere` with 2dsphere index (Rust local)."""
+
+    def test_center_sphere_finds_nearby(self, local_collection):
+        local_collection.insert_one({"_id": "1", "name": "here", "location": NYC})
+        local_collection.insert_one(
+            {
+                "_id": "2",
+                "name": "far",
+                "location": {"type": "Point", "coordinates": [-122.4194, 37.7749]},
+            }
+        )
+        local_collection.create_index([("location", "2dsphere")])
+        # ~800 km cap in radians (Haversine post-filter keeps only NYC)
+        r_rad = 800_000 / EARTH_RADIUS_METERS
+        center = NYC["coordinates"]
+        q = {"location": {"$geoWithin": {"$centerSphere": [center, r_rad]}}}
+        docs = list(local_collection.find(q))
+        assert len(docs) == 1
+        assert docs[0]["_id"] == "1"
+
+    def test_center_sphere_without_index_collection_scan(self, local_collection):
+        """Predicate evaluation without a geo index."""
+        local_collection.insert_one({"_id": "a", "location": NYC})
+        r_rad = 50_000 / EARTH_RADIUS_METERS
+        center = NYC["coordinates"]
+        docs = list(
+            local_collection.find(
+                {"location": {"$geoWithin": {"$centerSphere": [center, r_rad]}}}
+            )
+        )
+        assert len(docs) == 1
+
+
+# CCW exterior (lon, lat), closed ring — contains Times Square.
+NYC_BOX = {
+    "type": "Polygon",
+    "coordinates": [
+        [
+            [-74.05, 40.70],
+            [-73.92, 40.70],
+            [-73.92, 40.80],
+            [-74.05, 40.80],
+            [-74.05, 40.70],
+        ]
+    ],
+}
+
+
+class TestTwoDsphereGeoWithinGeometry:
+    """`$geoWithin` + `$geometry` Polygon/MultiPolygon."""
+
+    def test_polygon_empty_rejected(self, local_collection):
+        local_collection.insert_one({"_id": "1", "location": NYC})
+        local_collection.create_index([("location", "2dsphere")])
+        with pytest.raises(ValueError, match="linear ring|Polygon"):
+            list(
+                local_collection.find(
+                    {
+                        "location": {
+                            "$geoWithin": {
+                                "$geometry": {"type": "Polygon", "coordinates": []}
+                            }
+                        }
+                    }
+                )
+            )
+
+    def test_polygon_indexed_inside_outside(self, local_collection):
+        local_collection.insert_one({"_id": "nyc", "location": NYC})
+        local_collection.insert_one({"_id": "sf", "location": SF})
+        local_collection.create_index([("location", "2dsphere")])
+        q = {"location": {"$geoWithin": {"$geometry": NYC_BOX}}}
+        ids = {d["_id"] for d in local_collection.find(q)}
+        assert ids == {"nyc"}
+
+    def test_polygon_collection_scan(self, local_collection):
+        local_collection.insert_one({"_id": "nyc", "location": NYC})
+        local_collection.insert_one({"_id": "sf", "location": SF})
+        q = {"location": {"$geoWithin": {"$geometry": NYC_BOX}}}
+        ids = {d["_id"] for d in local_collection.find(q)}
+        assert ids == {"nyc"}
+
+    def test_polygon_hole_excludes_point_in_hole(self, local_collection):
+        """Exterior CCW; hole CW (GeoJSON). NYC lies in the hole → not `$geoWithin`."""
+        outer_ccw = [
+            [-74.2, 40.5],
+            [-73.55, 40.5],
+            [-73.55, 41.0],
+            [-74.2, 41.0],
+            [-74.2, 40.5],
+        ]
+        hole_cw = [
+            [-74.0, 40.74],
+            [-74.0, 40.76],
+            [-73.98, 40.76],
+            [-73.98, 40.74],
+            [-74.0, 40.74],
+        ]
+        poly = {"type": "Polygon", "coordinates": [outer_ccw, hole_cw]}
+        inside_outer = {"type": "Point", "coordinates": [-73.6, 40.75]}
+        local_collection.insert_one({"_id": "in_hole", "location": NYC})
+        local_collection.insert_one({"_id": "in_ring", "location": inside_outer})
+        local_collection.create_index([("location", "2dsphere")])
+        q = {"location": {"$geoWithin": {"$geometry": poly}}}
+        ids = {d["_id"] for d in local_collection.find(q)}
+        assert ids == {"in_ring"}
+
+    def test_multipolygon(self, local_collection):
+        mp = {
+            "type": "MultiPolygon",
+            "coordinates": [
+                [NYC_BOX["coordinates"][0]],
+                [
+                    [
+                        [-122.50, 37.70],
+                        [-122.35, 37.70],
+                        [-122.35, 37.85],
+                        [-122.50, 37.85],
+                        [-122.50, 37.70],
+                    ]
+                ],
+            ],
+        }
+        local_collection.insert_one({"_id": "nyc", "location": NYC})
+        local_collection.insert_one({"_id": "sf", "location": SF})
+        local_collection.create_index([("location", "2dsphere")])
+        ids = {d["_id"] for d in local_collection.find({"location": {"$geoWithin": {"$geometry": mp}}})}
+        assert ids == {"nyc", "sf"}
+
+
+class TestTwoDsphereGeoIntersects:
+    def test_intersects_point_in_polygon(self, local_collection):
+        local_collection.insert_one({"_id": "nyc", "location": NYC})
+        local_collection.insert_one({"_id": "sf", "location": SF})
+        local_collection.create_index([("location", "2dsphere")])
+        q = {"location": {"$geoIntersects": {"$geometry": NYC_BOX}}}
+        ids = {d["_id"] for d in local_collection.find(q)}
+        assert ids == {"nyc"}
+
+    def test_intersects_collection_scan(self, local_collection):
+        local_collection.insert_one({"_id": "nyc", "location": NYC})
+        q = {"location": {"$geoIntersects": {"$geometry": NYC_BOX}}}
+        ids = {d["_id"] for d in local_collection.find(q)}
+        assert ids == {"nyc"}

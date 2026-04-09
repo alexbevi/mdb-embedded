@@ -644,7 +644,7 @@ impl RustIndexManager {
                         return Err(pyo3::exceptions::PyNotImplementedError::new_err(format!(
                             "{s} indexes are planned but not yet implemented; \
                                     $geoNear aggregation works without an index. \
-                                    See WHATSNEXT.md for the geospatial roadmap."
+                                    See ROADMAP.md (Part 3 — Geospatial)."
                         )));
                     }
                     _ => {}

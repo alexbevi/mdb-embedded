@@ -34,6 +34,10 @@ void wt_shim_set_key_str(void *fn, WT_CURSOR *cursor, const char *key) {
     ((wt_set_key_fn)fn)(cursor, key);
 }
 
+void wt_shim_set_key_raw(void *fn, WT_CURSOR *cursor, WT_ITEM *item) {
+    ((wt_set_key_fn)fn)(cursor, item);
+}
+
 /* ---- set_value wrappers ---- */
 
 void wt_shim_set_value_raw(void *fn, WT_CURSOR *cursor, WT_ITEM *item) {
@@ -47,6 +51,10 @@ void wt_shim_set_value_str(void *fn, WT_CURSOR *cursor, const char *value) {
 /* ---- get_key wrappers ---- */
 
 int wt_shim_get_key_str(void *fn, WT_CURSOR *cursor, const char **keyp) {
+    return ((wt_get_key_fn)fn)(cursor, keyp);
+}
+
+int wt_shim_get_key_raw(void *fn, WT_CURSOR *cursor, WT_ITEM *keyp) {
     return ((wt_get_key_fn)fn)(cursor, keyp);
 }
 
