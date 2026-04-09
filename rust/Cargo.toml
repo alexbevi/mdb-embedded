@@ -22,3 +22,9 @@ expect_used = "deny"
 panic = "warn"
 todo = "warn"
 dbg_macro = "warn"
+
+# Profiles must live on the workspace root (not member crates) or Cargo ignores them.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

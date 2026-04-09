@@ -1,9 +1,12 @@
-PYTHON  ?= python3
 CARGO   ?= cargo
 RUST    := rust/Cargo.toml
 # Repository root (Makefile lives here). All maturin/pip installs must run from here
 # so pyproject.toml [tool.maturin] (manifest-path, module-name) stays consistent.
 ROOT    := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+# Same interpreter for pip and maturin: prefer ./.venv when present (avoids pyenv vs .venv split).
+ifeq ($(origin PYTHON),undefined)
+PYTHON := $(shell test -x "$(ROOT)/.venv/bin/python" && echo "$(ROOT)/.venv/bin/python" || command -v python3)
+endif
 
 SRC     := smongo web_app.py demo.py
 TESTS   := tests

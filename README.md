@@ -352,6 +352,8 @@ Runs the full embedded engine locally -- indexes, queries, aggregation, oplog --
 
 **Development install:** Run `pip install` / `make install-dev` from the **repository root** (next to `pyproject.toml`). That file pins `[tool.maturin]` — `manifest-path = rust/smongo-py/Cargo.toml` and `module-name = smongo._smongo_core`. Running `maturin develop` only inside `rust/smongo-py/` can install an extension that does not match the editable `smongo` package, so you see missing methods on `RedbLocalCollection` and similar foot-guns. Use `make install-dev`, `pip install -e ".[dev,all]"`, or `make build-debug` (rebuild extension only, still from root). For a release build of the extension: from root, `python -m maturin develop --release --manifest-path rust/smongo-py/Cargo.toml`.
 
+**One Python:** `make` defaults to `./.venv/bin/python` when that path exists, so `pip install -e` and `maturin develop` target the same interpreter. If `PYTHON` is unset and you have no `.venv`, it falls back to `python3` on `PATH`. Creating a venv first (`python3 -m venv .venv && make install-dev`) avoids mixing pyenv/global installs with a project `.venv`.
+
 ---
 
 ## Wire Protocol Server

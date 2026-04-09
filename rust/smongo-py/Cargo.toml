@@ -42,8 +42,3 @@ tempfile = "3"
 
 [lints]
 workspace = true
-
-[profile.release]
-lto = "thin"
-codegen-units = 1
-strip = "symbols"
