@@ -179,7 +179,7 @@ All stages live in `smongo-engine/src/aggregation/stages.rs`.
 
 ### Low-Hanging Fruit
 1. **SIMD vectorization**: Vector operations in `$vectorSearch`
-2. ~~**Memory-mapped spill**: `$sort` and `$group` with `allow_disk_use=True`~~ **DONE (0.9.8)** — `Collection.aggregate(pipeline, allowDiskUse=True)` spills `$sort` and `$group` to temp files via `DiskSpillSorter` / `DiskSpillGrouper` when the working set exceeds the memory limit. Routes through the Python `Cursor.aggregate` path for spill support while keeping the fast Rust engine path as the default.
+2. ~~**Memory-mapped spill**: `$sort` and `$group` with `allow_disk_use=True`~~ **DONE (1.0.0)** — `Collection.aggregate(pipeline, allowDiskUse=True)` spills `$sort` and `$group` to temp files via `DiskSpillSorter` / `DiskSpillGrouper` when the working set exceeds the memory limit. Routes through the Python `Cursor.aggregate` path for spill support while keeping the fast Rust engine path as the default.
 3. **Streaming `$group`**: For pre-sorted input
 
 ## Benchmarks

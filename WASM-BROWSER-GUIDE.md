@@ -4,7 +4,7 @@ Production best practices for running smongo as a **local-first embedded databas
 inside the browser** -- from first `npm install` through secure Atlas sync via a
 proxy relay.
 
-> **Version:** 0.9.8 | **Reference runtime:** Chromium 120+ (secure context)
+> **Version:** 1.0.0 | **Reference runtime:** Chromium 120+ (secure context)
 
 ---
 
