@@ -52,5 +52,18 @@ web-sys = { version = "0.3", features = [
 [dev-dependencies]
 tempfile = "3"
 
+[package.metadata.wasm-pack.profile.release]
+# Rust's wasm32-unknown-unknown defaults to 6 post-MVP features that wasm-opt
+# doesn't enable by default. Mirror them here so any wasm-opt >=117 works.
+wasm-opt = [
+    "-Oz",
+    "--enable-bulk-memory",
+    "--enable-multivalue",
+    "--enable-mutable-globals",
+    "--enable-nontrapping-float-to-int",
+    "--enable-reference-types",
+    "--enable-sign-ext",
+]
+
 [lints]
 workspace = true
