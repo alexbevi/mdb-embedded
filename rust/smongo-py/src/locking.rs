@@ -33,6 +33,12 @@ pub struct InlineRwLock {
     cond: Condvar,
 }
 
+impl Default for InlineRwLock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InlineRwLock {
     pub fn new() -> Self {
         Self {
@@ -85,6 +91,12 @@ impl InlineRwLock {
 #[pyclass(module = "smongo._smongo_core")]
 pub struct ReadWriteLock {
     pub(crate) inner: Arc<InlineRwLock>,
+}
+
+impl Default for ReadWriteLock {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[pymethods]

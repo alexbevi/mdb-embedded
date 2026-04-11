@@ -53,6 +53,12 @@ pub struct OperationTracker {
     counter: AtomicI64,
 }
 
+impl Default for OperationTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[pymethods]
 impl OperationTracker {
     #[new]
@@ -216,6 +222,12 @@ impl CollectionTimingStats {
 #[pyclass(module = "smongo._smongo_core")]
 pub struct TopStats {
     stats: Mutex<HashMap<String, CollectionTimingStats>>,
+}
+
+impl Default for TopStats {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[pymethods]

@@ -221,10 +221,8 @@ pub(crate) fn eval_query(doc: &Bound<'_, PyDict>, query: &Bound<'_, PyDict>) -> 
                             }
                         }
                     }
-                } else {
-                    if !value_ref.eq(&condition)? {
-                        return Ok(false);
-                    }
+                } else if !value_ref.eq(&condition)? {
+                    return Ok(false);
                 }
             }
         }
