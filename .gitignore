@@ -207,9 +207,11 @@ marimo/_lsp/
 __marimo__/
 
 # Embedded redb / local scratch data directories
+local_data/
 local_redb_data/
 demo_redb_data/
 test_conc*/
+*.redb
 
 # Rust / maturin build artifacts
 rust/target/

@@ -267,11 +267,11 @@ Auth:          saslStart, saslContinue, connectionStatus (SCRAM-SHA-256 auth + R
 
 The wire layer maintains a clean boundary between the BSON world (drivers) and the engine world (Python dicts with `smongo.ObjectId`, floats, regex dicts).
 
-Since P8, the wire path uses a **single-pass raw BSON codec** (`rust/smongo-py/src/raw_bson.rs`) that converts directly between wire bytes and engine-ready Python dicts -- no intermediate `bson::Document` allocation and no second normalization walk.
+The wire path uses the official Rust `bson` crate (`rust/smongo-py/src/raw_bson.rs`) for both encoding and decoding, guaranteeing spec-compliant BSON that is byte-compatible with every MongoDB driver and tool.
 
-**Decode (wire bytes → engine):** `raw_decode_document` parses BSON bytes inline: `ObjectId` → `smongo.ObjectId`, `DateTime` → Python `datetime`, `Decimal128` → `float`, `Regex` → `{"$regex", "$options"}` dict.
+**Decode (wire bytes → engine):** `raw_decode_document` calls `bson::from_slice` then `doc_to_pydict` to produce engine-ready Python dicts with correct types (ObjectId, datetime, Decimal128, Regex, Timestamp, UUID, etc.).
 
-**Encode (engine → wire bytes):** `raw_encode_document` serializes Python dicts to BSON bytes inline: `smongo.ObjectId` → 12-byte OID, `_id` 24-char hex → ObjectId, `datetime` → BSON DateTime.
+**Encode (engine → wire bytes):** `raw_encode_document` calls `pydict_to_doc` then `bson::to_vec` to serialize Python dicts to spec-compliant BSON bytes.
 
 The Python-facing `normalize_inbound` / `normalize_outbound` functions in `wire_codec.rs` remain available for the LocalClient path but are no longer called on the wire hot path.
 
@@ -663,6 +663,6 @@ smongo/
     ├── sessions.py       #   SessionRegistry
     ├── transactions.py   #   Transaction state, undo journal
     ├── profiler.py       #   Profiler, OpTracker, TopStats
-    ├── bson_codec.py     #   BSON ↔ engine type normalization (LocalClient path; wire path uses raw_bson.rs)
+    ├── bson_codec.py     #   BSON ↔ engine type normalization (LocalClient path)
     └── errors.py         #   Mongo-compatible error response formatting
 ```

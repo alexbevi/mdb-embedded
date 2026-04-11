@@ -221,41 +221,42 @@ This guarantees the wire layer always returns valid BSON -- it never drops a con
 
 ## BSON Boundary Normalization
 
-The wire protocol operates in BSON land (binary BSON over TCP). The embedded engine operates in Python dict land (with `smongo.ObjectId`, floats, regex dicts). Since P8, a **single-pass raw BSON codec** (`rust/smongo-py/src/raw_bson.rs`) handles the conversion directly between wire bytes and engine-ready Python dicts, without intermediate `bson::Document` allocation.
+The wire protocol operates in BSON land (binary BSON over TCP). The embedded engine operates in Python dict land (with `smongo.ObjectId`, floats, regex dicts). The BSON codec (`rust/smongo-py/src/raw_bson.rs`) delegates to the official Rust `bson` crate (maintained by MongoDB) for both encoding and decoding, guaranteeing spec-compliant output compatible with every MongoDB driver and tool (PyMongo, Compass, mongosh, Node.js driver).
 
 ### Decode (Wire bytes → Engine dicts)
 
-`raw_decode_document` parses BSON binary format byte-by-byte and emits engine types inline:
+`raw_decode_document` delegates to `bson::from_slice` (Rust `bson` crate) to parse raw BSON into a `bson::Document`, then converts to a Python dict via `doc_to_pydict`. All BSON types are handled correctly:
 
 ```
-BSON ObjectId (12 bytes)  → smongo.ObjectId
-BSON DateTime (i64 ms)    → Python datetime.datetime (UTC)
-BSON Decimal128 (16 bytes)→ float
-BSON Regex (two cstrings) → {"$regex": pattern, "$options": flags}
-BSON Int32/Int64/Double   → int / int / float
-BSON String               → str
-BSON Document / Array     → dict / list (recursive)
-BSON Binary               → bytes
+BSON ObjectId   → smongo.ObjectId
+BSON DateTime   → Python datetime.datetime (UTC)
+BSON Decimal128 → bson.Decimal128
+BSON Regex      → bson.Regex
+BSON Timestamp  → bson.Timestamp
+BSON Binary     → bytes / uuid.UUID (subtype 4) / bson.Binary
+BSON Int32/Int64→ int / bson.Int64
+BSON Double     → float
+BSON Document   → dict (recursive)
+BSON Array      → list (recursive)
+BSON MinKey/MaxKey → bson.MinKey / bson.MaxKey
 ```
 
 ### Encode (Engine dicts → Wire bytes)
 
-`raw_encode_document` serializes Python dicts directly to BSON bytes:
+`raw_encode_document` converts Python dicts to a `bson::Document` via `pydict_to_doc`, then serializes with `bson::to_vec`. All Python types are mapped to their correct BSON counterparts:
 
 ```
-smongo.ObjectId                             → BSON ObjectId (12 bytes)
-_id: "660a1b2c3d4e5f6789012345" (24 hex)   → BSON ObjectId (promoted)
-_id: "custom_string_id"                     → BSON String (unchanged)
-_id: 42                                     → BSON Int32 (unchanged)
-datetime.datetime                           → BSON DateTime
-int (fits i32)                              → BSON Int32
-int (large)                                 → BSON Int64
-float                                       → BSON Double
+smongo.ObjectId    → BSON ObjectId
+datetime.datetime  → BSON DateTime
+bson.Decimal128    → BSON Decimal128
+bson.Regex         → BSON Regex
+bson.Timestamp     → BSON Timestamp
+bson.Int64         → BSON Int64 (preserved, not demoted to Int32)
+bson.Binary        → BSON Binary (with subtype)
+uuid.UUID          → BSON Binary subtype 4
+int                → BSON Int32 / Int64 (auto-sized)
+float              → BSON Double
 ```
-
-The outbound `_id` promotion only applies when the value is exactly 24 valid hex characters. All other types pass through unchanged.
-
-The Python-facing `normalize_inbound` / `normalize_outbound` functions remain available in `bson_codec.py` for the LocalClient path but are no longer called on the wire hot path.
 
 ---
 

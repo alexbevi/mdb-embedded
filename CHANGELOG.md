@@ -7,6 +7,20 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [1.1.7] — 2026-04-11
+
+### Changed — Cleanup & docs
+
+- **Removed dead code** (`ObjectId::from_raw`) instead of suppressing with
+  `#[allow(dead_code)]`.
+- **Added `bson.Timestamp` handler** to `py_to_bson` — previously fell through
+  to the `str()` fallback, causing warnings on every wire response.
+- **Added `bson.Int64` handler** to `py_to_bson` — preserves BSON int64 instead
+  of demoting to int32 when the value fits in 32 bits.
+- **Updated docs** (`README.md`, `ARCHITECTURE.md`, `RUST-PY.md`,
+  `WIRE-PROTOCOL.md`) to reflect the `bson` crate-backed codec architecture.
+- **Cleaned up `local_data/`** and added it (plus `*.redb`) to `.gitignore`.
+
 ## [1.1.6] — 2026-04-10
 
 ### Changed — BSON codec rewrite (library-backed)

@@ -79,7 +79,7 @@ _smongo_core
 
 smongo has two distinct BSON serialization paths, optimized for different use cases.
 
-**Wire path — raw BSON in Rust.** When a MongoDB driver connects via TCP, the wire protocol server receives raw BSON bytes. These are decoded directly in Rust by `raw_bson.rs`:
+**Both paths use the official Rust `bson` crate.** When a MongoDB driver connects via TCP, the wire protocol server receives raw BSON bytes. These are decoded in Rust by `raw_bson.rs`, which delegates to the `bson` crate (maintained by MongoDB):
 
 ```
 Driver sends OP_MSG
@@ -88,34 +88,28 @@ Driver sends OP_MSG
 ┌──────────────────────────────────────┐
 │  raw_bson::raw_decode_document()     │
 │                                      │
-│  BSON bytes → Python dict, inline:   │
-│  • ObjectId (12 bytes) → smongo.ObjectId
-│  • DateTime (int64 ms) → Python datetime
-│  • Decimal128 → Python float          │
-│  • Regex → {"$regex", "$options"} dict│
-│  • Int32/Int64 → Python int           │
-│  • Double → Python float              │
-│  • Nested docs → recursive decode     │
+│  1. bson::from_slice(bytes)          │
+│     → bson::Document                 │
+│  2. bson_helpers::doc_to_pydict()    │
+│     → Python dict with correct types │
 │                                      │
-│  No intermediate bson::Document.      │
-│  No PyMongo bson.decode() call.       │
-│  Single pass, zero copies.            │
+│  Spec-compliant. Every BSON type     │
+│  handled by the official crate.      │
 └──────────────────────────────────────┘
     │
     ▼
 Engine-ready Python dict
 ```
 
-Response encoding works the same way in reverse: `raw_encode_document()` serializes Python dicts directly to BSON bytes — all in Rust, without touching PyMongo.
+Response encoding works in reverse: `raw_encode_document()` converts Python dicts to `bson::Document` via `pydict_to_doc`, then serializes with `bson::to_vec`.
 
-**Storage path — PyMongo BSON.** Where Python participates in BSON round-trips, PyMongo's C-optimized `bson.encode()`/`bson.decode()` is used. The durable path for `local://` is Rust (`smongo-engine` + redb) with BSON handled in the extension.
+**Storage path** uses the same `bson_helpers.rs` conversion layer (`py_to_bson` / `bson_to_py`) shared with the wire path, ensuring consistent type handling everywhere.
 
-| Concern | Wire path (Rust `raw_bson`) | Storage path (PyMongo `bson`) |
+| Concern | Wire path (`raw_bson.rs`) | Storage path (`bson_helpers.rs`) |
 |---------|---------------------------|------------------------------|
-| **Latency** | Critical (per-request) | Amortized (write-once, read-few) |
-| **Type mapping** | Wire types → engine types (normalize inline) | Full BSON round-trip fidelity |
-| **GIL** | No GIL needed (pure Rust) | Requires GIL (`bson.encode` is C extension) |
-| **Allocation** | Zero intermediate `bson::Document` | `bson::Document` as intermediate |
+| **BSON library** | Rust `bson` crate | Rust `bson` crate (same) |
+| **Type mapping** | Full BSON fidelity via `doc_to_pydict` / `pydict_to_doc` | Same conversion functions |
+| **Spec compliance** | Guaranteed (official crate) | Guaranteed (official crate) |
 
 ### ObjectId: The Bridge Type
 

@@ -178,7 +178,7 @@ The compiled Rust extension (`_smongo_core`) is **required** and provides all pe
 - **B-Tree indexes & query planner** -- same engine as **Node** (`smongo-node`): real indexes and plans on the embedded store.
 - **Streaming cursors** -- lazy iteration over matching documents (engine-backed); hot paths avoid materializing full result sets.
 - **ACID transactions** -- multi-document transactions use the engine session model (wire / API).
-- **BSON Serialization** -- encode/decode documents using the Rust `bson` crate, eliminating Python tree walks (~60% of write time eliminated)
+- **BSON Serialization** -- encode/decode via the official Rust `bson` crate (maintained by MongoDB) for both wire protocol and storage paths, guaranteeing spec-compliant output compatible with every MongoDB driver and tool
 - **MQL Query Compiler** -- `compile_query` with all 18 query operators, compiled predicate evaluation
 - **Expression Engine** -- `resolve_expr` with all 72 aggregation expression operators
 - **Update Engine** -- `apply_update` with all 14 update operators, positional operators, and pipeline updates
