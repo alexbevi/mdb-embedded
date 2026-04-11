@@ -129,11 +129,14 @@ impl VectorIndex {
                 let idx = *node_id;
                 if idx < self.reverse_map.len() && !self.reverse_map[idx].is_empty() {
                     let score = if is_euclidean {
-                        // hora returns squared euclidean; convert to -distance
-                        -(distance.max(0.0).sqrt())
+                        // Atlas: score = 1 / (1 + euclidean_distance)
+                        let dist = distance.max(0.0).sqrt();
+                        1.0 / (1.0 + dist)
                     } else {
-                        // cosine / dotProduct: negate trick makes score = -distance
-                        -distance
+                        // Atlas: score = (1 + similarity) / 2
+                        // negate trick: raw_similarity = -distance
+                        let raw = -distance;
+                        (1.0 + raw) / 2.0
                     };
                     scored.push((self.reverse_map[idx].clone(), score));
                 }
@@ -440,5 +443,107 @@ mod tests {
         let results = idx.search(&[1.0, 0.0, 0.0], 3);
         assert_eq!(results[0].0, "a");
         assert!(results[0].1 > results[1].1);
+    }
+
+    /// Verify HNSW matches brute-force cosine for 8 vectors in 64 dimensions.
+    #[test]
+    fn test_hnsw_vs_brute_force_64dim() {
+        let dim = 64;
+        let n = 8;
+
+        // Deterministic pseudo-random vectors using a simple LCG
+        let mut seed: u64 = 42;
+        let mut next = || -> f32 {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            ((seed >> 33) as f32) / (u32::MAX as f32 / 2.0) - 1.0
+        };
+
+        let mut vecs: Vec<Vec<f32>> = Vec::new();
+        for _ in 0..n {
+            let raw: Vec<f32> = (0..dim).map(|_| next()).collect();
+            vecs.push(l2_normalize(&raw));
+        }
+        let query: Vec<f32> = {
+            let raw: Vec<f32> = (0..dim).map(|_| next()).collect();
+            l2_normalize(&raw)
+        };
+
+        // Brute-force cosine ranking with Atlas-style normalization
+        let mut brute: Vec<(usize, f32)> = vecs
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let dot: f32 = v.iter().zip(query.iter()).map(|(a, b)| a * b).sum();
+                let score = (1.0 + dot) / 2.0; // Atlas: (1 + cosine) / 2
+                (i, score)
+            })
+            .collect();
+        brute.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+        // HNSW ranking via VectorIndex
+        let mut idx = VectorIndex::new(dim, "cosine");
+        for (i, v) in vecs.iter().enumerate() {
+            idx.insert(&i.to_string(), v);
+        }
+        let hnsw_results = idx.search(&query, n);
+
+        // All scores must be in [0, 1] (Atlas normalization)
+        for (_, score) in &hnsw_results {
+            assert!(
+                (0.0..=1.0).contains(score),
+                "score {score} outside [0, 1] range"
+            );
+        }
+
+        // The top-k ranking must match brute-force exactly
+        for k in 0..n {
+            let brute_id = brute[k].0.to_string();
+            let hnsw_id = &hnsw_results[k].0;
+            assert_eq!(
+                hnsw_id, &brute_id,
+                "rank {k}: HNSW returned {hnsw_id} (score={:.6}) but brute-force expected {brute_id} (score={:.6})",
+                hnsw_results[k].1, brute[k].1,
+            );
+        }
+    }
+
+    /// Verify Atlas-style score ranges for all three metrics.
+    #[test]
+    fn test_atlas_score_ranges() {
+        // cosine: identical vectors → score = 1.0
+        let mut cos_idx = VectorIndex::new(3, "cosine");
+        cos_idx.insert("a", &[1.0, 0.0, 0.0]);
+        let r = cos_idx.search(&[1.0, 0.0, 0.0], 1);
+        assert!((r[0].1 - 1.0).abs() < 1e-5, "cosine self-sim should be 1.0, got {}", r[0].1);
+
+        // cosine: orthogonal vectors → score = 0.5
+        cos_idx.insert("b", &[0.0, 1.0, 0.0]);
+        let r = cos_idx.search(&[1.0, 0.0, 0.0], 2);
+        let orth_score = r.iter().find(|(id, _)| id == "b").unwrap().1;
+        assert!((orth_score - 0.5).abs() < 1e-5, "cosine orthogonal should be 0.5, got {orth_score}");
+
+        // euclidean: identical → score = 1.0
+        let mut euc_idx = VectorIndex::new(2, "euclidean");
+        euc_idx.insert("a", &[0.0, 0.0]);
+        let r = euc_idx.search(&[0.0, 0.0], 1);
+        assert!((r[0].1 - 1.0).abs() < 1e-5, "euclidean self-dist should be 1.0, got {}", r[0].1);
+
+        // euclidean: distance=1 → score = 0.5
+        euc_idx.insert("b", &[1.0, 0.0]);
+        let r = euc_idx.search(&[0.0, 0.0], 2);
+        let dist1_score = r.iter().find(|(id, _)| id == "b").unwrap().1;
+        assert!((dist1_score - 0.5).abs() < 1e-5, "euclidean dist=1 should be 0.5, got {dist1_score}");
+
+        // dotProduct: unit vectors, dot=1 → score = 1.0
+        let mut dp_idx = VectorIndex::new(3, "dotProduct");
+        dp_idx.insert("a", &[1.0, 0.0, 0.0]);
+        let r = dp_idx.search(&[1.0, 0.0, 0.0], 1);
+        assert!((r[0].1 - 1.0).abs() < 1e-5, "dotProduct self should be 1.0, got {}", r[0].1);
+
+        // dotProduct: orthogonal → score = 0.5
+        dp_idx.insert("b", &[0.0, 1.0, 0.0]);
+        let r = dp_idx.search(&[1.0, 0.0, 0.0], 2);
+        let orth_score = r.iter().find(|(id, _)| id == "b").unwrap().1;
+        assert!((orth_score - 0.5).abs() < 1e-5, "dotProduct orthogonal should be 0.5, got {orth_score}");
     }
 }

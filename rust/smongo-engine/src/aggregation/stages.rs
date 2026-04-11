@@ -1601,33 +1601,16 @@ pub fn execute_merge(
 /// Streaming `$vectorSearch`: materializes candidates from the input stream,
 /// builds an HNSW index via [`super::vector::score_documents`], and returns
 /// the top-k results ranked by similarity.
+///
+/// Accepts all Atlas `$vectorSearch` fields (`index`, `exact`,
+/// `numCandidates`, `filter`, `path`, `queryVector`, `limit`).
 pub fn stage_vector_search_stream(input: DocStream, spec: &Bson) -> AggregationResult<DocStream> {
     let vs_doc = spec
         .as_document()
         .ok_or_else(|| AggregationError::InvalidStage("$vectorSearch requires document".into()))?;
 
-    let path = vs_doc
-        .get_str("path")
-        .map_err(|_| AggregationError::MissingField("$vectorSearch.path required".into()))?;
-    let query_vector_bson = vs_doc
-        .get_array("queryVector")
-        .map_err(|_| AggregationError::MissingField("$vectorSearch.queryVector required".into()))?;
-    let query_vec: Vec<f32> = query_vector_bson
-        .iter()
-        .filter_map(|v| v.as_f64().map(|f| f as f32))
-        .collect();
-    if query_vec.is_empty() {
-        return Err(AggregationError::InvalidStage(
-            "$vectorSearch.queryVector must be a non-empty numeric array".into(),
-        ));
-    }
-    let limit = vs_doc
-        .get("limit")
-        .and_then(|v| v.as_i64().or_else(|| v.as_i32().map(|i| i as i64)))
-        .unwrap_or(10) as usize;
-    let metric = vs_doc.get_str("metric").unwrap_or("cosine");
-    let score_field = vs_doc.get_str("scoreField").unwrap_or("_vectorScore");
-    let mql_filter = vs_doc.get_document("filter").ok().cloned();
+    let s = super::vector::VectorSearchSpec::parse(vs_doc)?;
+    let mql_filter = s.mql_filter.cloned();
 
     let mut candidates: Vec<Document> = Vec::new();
     for result in input {
@@ -1640,12 +1623,13 @@ pub fn stage_vector_search_stream(input: DocStream, spec: &Bson) -> AggregationR
         candidates.push(doc);
     }
 
-    let scored = super::vector::score_documents(&candidates, path, &query_vec, limit, metric)?;
+    let scored =
+        super::vector::score_documents(&candidates, s.path, &s.query_vec, s.limit, s.metric)?;
 
     let results: Vec<Document> = scored
         .into_iter()
         .map(|(mut doc, score)| {
-            doc.insert(score_field.to_string(), Bson::Double(score as f64));
+            doc.insert(s.score_field.to_string(), Bson::Double(score as f64));
             doc
         })
         .collect();
@@ -1661,43 +1645,29 @@ pub fn stage_vector_search_stream_indexed(
     idx_ctx: Option<&super::PipelineIndexCtx<'_>>,
 ) -> AggregationResult<DocStream> {
     if let (Some(ctx), Some(vs_doc)) = (idx_ctx, spec.as_document()) {
-        let path = vs_doc.get_str("path").unwrap_or("");
-        let query_vec: Vec<f32> = vs_doc
-            .get_array("queryVector")
-            .unwrap_or(&vec![])
-            .iter()
-            .filter_map(|v| v.as_f64().map(|f| f as f32))
-            .collect();
-        let limit = vs_doc
-            .get("limit")
-            .and_then(|v| v.as_i64().or_else(|| v.as_i32().map(|i| i as i64)))
-            .unwrap_or(10) as usize;
-        let num_candidates = vs_doc
-            .get("numCandidates")
-            .and_then(|v| v.as_i64().or_else(|| v.as_i32().map(|i| i as i64)))
-            .unwrap_or(limit as i64) as usize;
-        let metric = vs_doc.get_str("metric").unwrap_or("cosine");
-        let mql_filter = vs_doc.get_document("filter").ok();
-
-        if !path.is_empty() && !query_vec.is_empty() {
-            if let Ok(Some(scored)) = ctx.provider.vector_search(
-                ctx.source_collection,
-                path,
-                &query_vec,
-                limit,
-                num_candidates,
-                metric,
-                mql_filter,
-            ) {
-                let score_field = vs_doc.get_str("scoreField").unwrap_or("_vectorScore");
-                let results: Vec<Document> = scored
-                    .into_iter()
-                    .map(|(mut doc, score)| {
-                        doc.insert(score_field.to_string(), bson::Bson::Double(score as f64));
-                        doc
-                    })
-                    .collect();
-                return Ok(Box::new(results.into_iter().map(Ok)));
+        if let Ok(s) = super::vector::VectorSearchSpec::parse(vs_doc) {
+            if !s.path.is_empty() && !s.query_vec.is_empty() {
+                if let Ok(Some(scored)) = ctx.provider.vector_search(
+                    ctx.source_collection,
+                    s.path,
+                    &s.query_vec,
+                    s.limit,
+                    s.num_candidates,
+                    s.metric,
+                    s.mql_filter,
+                ) {
+                    let results: Vec<Document> = scored
+                        .into_iter()
+                        .map(|(mut doc, score)| {
+                            doc.insert(
+                                s.score_field.to_string(),
+                                bson::Bson::Double(score as f64),
+                            );
+                            doc
+                        })
+                        .collect();
+                    return Ok(Box::new(results.into_iter().map(Ok)));
+                }
             }
         }
     }

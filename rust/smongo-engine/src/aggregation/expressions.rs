@@ -74,6 +74,7 @@ fn evaluate_operator_expression(doc: &Document, op_doc: &Document) -> Aggregatio
         "$map" => expr_map(doc, args),
         "$filter" => expr_filter(doc, args),
         "$let" => expr_let(doc, args),
+        "$meta" => expr_meta(doc, args),
         "$year" => expr_date_part(doc, args, |dt| dt.year()),
         "$month" => expr_date_part(doc, args, |dt| dt.month() as i32),
         "$dayOfMonth" => expr_date_part(doc, args, |dt| dt.day() as i32),
@@ -590,6 +591,24 @@ fn expr_let(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
     evaluate_expression(&scoped_doc, &in_replaced)
 }
 
+/// `{$meta: "vectorSearchScore"}` / `{$meta: "textScore"}` / etc.
+///
+/// Maps Atlas-style meta keywords to the hidden score fields that
+/// `$vectorSearch` and `$geoNear` inject into each document.
+fn expr_meta(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
+    let keyword = match args.as_str() {
+        Some(s) => s,
+        None => return Ok(Bson::Null),
+    };
+    let field = match keyword {
+        "vectorSearchScore" | "searchScore" => "_vectorScore",
+        "textScore" => "_textScore",
+        "geoNearDistance" | "indexKey" => "dist",
+        _ => return Ok(Bson::Null),
+    };
+    Ok(doc.get(field).cloned().unwrap_or(Bson::Null))
+}
+
 fn bson_to_chrono_utc(val: &Bson) -> Option<chrono::DateTime<Utc>> {
     match val {
         Bson::DateTime(dt) => {
@@ -784,5 +803,21 @@ mod tests {
             evaluate_expression(&d, &Bson::Document(expr)).unwrap(),
             Bson::Null
         );
+    }
+
+    #[test]
+    fn test_meta_vector_search_score() {
+        let d = doc! { "text": "hello", "_vectorScore": 0.95 };
+        let expr = doc! { "$meta": "vectorSearchScore" };
+        let result = evaluate_expression(&d, &Bson::Document(expr)).unwrap();
+        assert_eq!(result, Bson::Double(0.95));
+    }
+
+    #[test]
+    fn test_meta_missing_score_returns_null() {
+        let d = doc! { "text": "hello" };
+        let expr = doc! { "$meta": "vectorSearchScore" };
+        let result = evaluate_expression(&d, &Bson::Document(expr)).unwrap();
+        assert_eq!(result, Bson::Null);
     }
 }

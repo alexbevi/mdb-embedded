@@ -649,6 +649,20 @@ fn run_pipeline_stages(
     resolver: Option<&dyn CollectionResolver>,
     idx_ctx: Option<&PipelineIndexCtx<'_>>,
 ) -> AggregationResult<DocStream> {
+    // Atlas requires $vectorSearch / $geoNear to be the first stage.
+    for (pos, stage) in pipeline.iter().enumerate() {
+        if pos == 0 {
+            continue;
+        }
+        if let Some(name) = stage.keys().next() {
+            if name == "$vectorSearch" || name == "$geoNear" {
+                return Err(AggregationError::InvalidStage(format!(
+                    "{name} must be the first stage in the pipeline"
+                )));
+            }
+        }
+    }
+
     let mut stream = initial;
     let mut i = 0;
 
