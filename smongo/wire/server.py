@@ -394,7 +394,12 @@ class WireServer:
         header, _flags, _coll_name, _skip, _limit, query_doc = decode_query(data)
 
         if any(k in query_doc for k in ("isMaster", "ismaster", "hello")):
-            response_doc = dispatch(ctx, {"hello": 1, "helloOk": True, "$db": "admin"}, {})
+            hello_doc: dict = {"hello": 1}
+            for k, v in query_doc.items():
+                if k not in ("isMaster", "ismaster"):
+                    hello_doc[k] = v
+            hello_doc.setdefault("$db", "admin")
+            response_doc = dispatch(ctx, hello_doc, {})
         else:
             response_doc = dispatch(ctx, query_doc, {})
 
