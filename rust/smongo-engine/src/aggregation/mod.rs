@@ -16,8 +16,6 @@ pub mod stages;
 pub mod total_ord;
 pub mod vector;
 
-pub(crate) use vector::{dot_product as vector_dot, euclidean_distance as vector_euclidean, norm as vector_norm};
-
 use bson::{Bson, Document};
 
 use crate::database::Database;
@@ -66,9 +64,9 @@ pub trait CollectionResolver {
 ///
 /// When an `IndexProvider` is available, stages like `$vectorSearch`,
 /// `$geoNear`, `$sort`+`$limit`, and `$text`-inside-`$match` can check
-/// for a matching index and use it instead of brute-force scanning.  Each
+/// for a matching index and use it instead of a full collection scan.  Each
 /// method returns `Ok(None)` when no suitable index exists, signalling the
-/// caller to fall back to the default (BinaryHeap / scan) path.
+/// caller to fall back to the default path (HNSW for vectors, scan for others).
 #[allow(clippy::too_many_arguments)]
 pub trait IndexProvider {
     fn vector_search(
@@ -249,8 +247,6 @@ impl<B: StorageBackend> IndexProvider for DatabaseContext<'_, B> {
                 .map_err(|e| AggregationError::Other(e.to_string()))?,
         };
 
-        // Score and rank using the same brute-force logic as the vector stage
-        // but returning (doc, score) pairs so the caller can inject scoreField.
         let scored = vector::score_documents(&candidates, field, query_vec, limit, metric)?;
         Ok(Some(scored))
     }
@@ -452,7 +448,7 @@ fn merge_match_filters(a: &Document, b: &Document) -> Document {
 ///
 /// When passed through the pipeline dispatch, stages like `$sort`+`$limit`
 /// and `$vectorSearch` can probe for a matching index and short-circuit the
-/// brute-force path.
+/// default scan path.
 pub struct PipelineIndexCtx<'a> {
     pub provider: &'a dyn IndexProvider,
     pub source_collection: &'a str,

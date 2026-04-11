@@ -197,12 +197,10 @@ fn test_total_f64_nan_sorts_high() {
 // ============================================================
 
 #[test]
-fn test_vector_search_heap_topk() {
+fn test_vector_search_hnsw_topk() {
     use smongo_engine::aggregation::vector::vector_search_stage;
 
     let mut docs = Vec::new();
-    // Use euclidean distance so that the closest doc to the query is
-    // deterministic: the vector closest in L2 distance to [50.0, 50.0].
     for i in 0..100 {
         let v = vec![Bson::Double(i as f64), Bson::Double((100 - i) as f64)];
         docs.push(doc! { "_id": i, "emb": v });
@@ -215,13 +213,13 @@ fn test_vector_search_heap_topk() {
         "limit": 5,
         "numCandidates": 100,
         "index": "test_idx",
-        "similarity": "euclidean",
+        "metric": "euclidean",
     });
 
     let results = vector_search_stage(docs, &spec).unwrap();
 
     assert_eq!(results.len(), 5);
-    // With euclidean, doc 50 ([50, 50]) is distance 0 from query [50, 50].
+    // Doc 50 ([50, 50]) is distance 0 from query [50, 50].
     let first_id = results[0].get_i32("_id").unwrap();
     assert_eq!(first_id, 50, "doc 50 should be closest, got {first_id}");
 }

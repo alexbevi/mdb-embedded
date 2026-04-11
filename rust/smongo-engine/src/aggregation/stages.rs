@@ -1598,13 +1598,10 @@ pub fn execute_merge(
 // $vectorSearch
 // ---------------------------------------------------------------------------
 
-/// Streaming `$vectorSearch` with top-k heap: scores documents as they arrive
-/// from the input stream without materializing the full input.
+/// Streaming `$vectorSearch`: materializes candidates from the input stream,
+/// builds an HNSW index via [`super::vector::score_documents`], and returns
+/// the top-k results ranked by similarity.
 pub fn stage_vector_search_stream(input: DocStream, spec: &Bson) -> AggregationResult<DocStream> {
-    use super::total_ord::TotalF32;
-    use std::cmp::Reverse;
-    use std::collections::BinaryHeap;
-
     let vs_doc = spec
         .as_document()
         .ok_or_else(|| AggregationError::InvalidStage("$vectorSearch requires document".into()))?;
@@ -1624,92 +1621,30 @@ pub fn stage_vector_search_stream(input: DocStream, spec: &Bson) -> AggregationR
             "$vectorSearch.queryVector must be a non-empty numeric array".into(),
         ));
     }
-    let dim = query_vec.len();
     let limit = vs_doc
         .get("limit")
         .and_then(|v| v.as_i64().or_else(|| v.as_i32().map(|i| i as i64)))
         .unwrap_or(10) as usize;
-    let num_candidates = vs_doc
-        .get("numCandidates")
-        .and_then(|v| v.as_i64().or_else(|| v.as_i32().map(|i| i as i64)))
-        .map(|n| n as usize)
-        .unwrap_or(limit);
-    let heap_cap = num_candidates.max(limit);
     let metric = vs_doc.get_str("metric").unwrap_or("cosine");
     let score_field = vs_doc.get_str("scoreField").unwrap_or("_vectorScore");
     let mql_filter = vs_doc.get_document("filter").ok().cloned();
 
-    let mut heap: BinaryHeap<Reverse<(TotalF32, usize)>> = BinaryHeap::with_capacity(heap_cap + 1);
-    let mut docs: Vec<Document> = Vec::new();
-
+    let mut candidates: Vec<Document> = Vec::new();
     for result in input {
         let doc = result?;
-
         if let Some(ref filter) = mql_filter {
             if !eval_query(&doc, filter).map_err(AggregationError::Other)? {
                 continue;
             }
         }
-
-        let Some(vec_val) = get_value(&doc, path) else {
-            continue;
-        };
-        let Bson::Array(arr) = vec_val else {
-            continue;
-        };
-        if arr.len() != dim {
-            continue;
-        }
-        let doc_vec: Vec<f32> = arr
-            .iter()
-            .filter_map(|v| v.as_f64().map(|f| f as f32))
-            .collect();
-        if doc_vec.len() != dim {
-            continue;
-        }
-
-        let score = match metric {
-            "cosine" => {
-                let na = super::vector_norm(&query_vec);
-                let nb = super::vector_norm(&doc_vec);
-                if na == 0.0 || nb == 0.0 {
-                    continue;
-                }
-                super::vector_dot(&query_vec, &doc_vec) / (na * nb)
-            }
-            "euclidean" => -super::vector_euclidean(&query_vec, &doc_vec),
-            "dotProduct" => super::vector_dot(&query_vec, &doc_vec),
-            _ => {
-                return Err(AggregationError::InvalidStage(format!(
-                    "unsupported vector metric: {metric}"
-                )));
-            }
-        };
-
-        let idx = docs.len();
-        docs.push(doc);
-        let key = TotalF32(score);
-        if heap.len() < heap_cap {
-            heap.push(Reverse((key, idx)));
-        } else if let Some(&Reverse((ref min_score, _))) = heap.peek() {
-            if key > *min_score {
-                heap.pop();
-                heap.push(Reverse((key, idx)));
-            }
-        }
+        candidates.push(doc);
     }
 
-    let mut scored: Vec<(usize, f32)> = heap
-        .into_iter()
-        .map(|Reverse((s, idx))| (idx, s.0))
-        .collect();
-    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    scored.truncate(limit);
+    let scored = super::vector::score_documents(&candidates, path, &query_vec, limit, metric)?;
 
     let results: Vec<Document> = scored
         .into_iter()
-        .map(|(idx, score)| {
-            let mut doc = docs[idx].clone();
+        .map(|(mut doc, score)| {
             doc.insert(score_field.to_string(), Bson::Double(score as f64));
             doc
         })
@@ -1718,8 +1653,8 @@ pub fn stage_vector_search_stream(input: DocStream, spec: &Bson) -> AggregationR
     Ok(Box::new(results.into_iter().map(Ok)))
 }
 
-/// Index-aware `$vectorSearch`: tries the `IndexProvider` first, then falls
-/// back to brute-force.
+/// Index-aware `$vectorSearch`: tries the `IndexProvider` first (which uses
+/// hora HNSW), then falls back to the streaming HNSW path.
 pub fn stage_vector_search_stream_indexed(
     input: DocStream,
     spec: &Bson,
