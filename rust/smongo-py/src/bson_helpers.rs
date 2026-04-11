@@ -82,6 +82,15 @@ pub(crate) fn py_to_bson(val: &Bound<'_, PyAny>) -> PyResult<Bson> {
         return Ok(Bson::Array(pylist_to_array(l)?));
     }
 
+    // Python tuples → BSON arrays (same as lists)
+    if let Ok(t) = val.cast::<pyo3::types::PyTuple>() {
+        let mut arr = Vec::with_capacity(t.len());
+        for item in t.iter() {
+            arr.push(py_to_bson(&item)?);
+        }
+        return Ok(Bson::Array(arr));
+    }
+
     // datetime.datetime -> BSON DateTime
     let datetime_cls = crate::cached_modules::datetime_datetime_cls(py)?;
     if val.is_instance(&datetime_cls)? {

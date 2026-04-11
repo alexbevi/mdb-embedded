@@ -9,6 +9,16 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [1.1.5] — 2026-04-10
 
+### Fixed
+
+- **BSON encoder: Python tuples now serialize as BSON arrays**.  Previously, tuples
+  fell through to the `str()` fallback and were encoded as strings (e.g.
+  `buildInfo.versionArray` became `"(7, 0, 0, 0)"` instead of `[7, 0, 0, 0]`).
+  This caused MongoDB Compass and the Node.js driver to misinterpret server metadata,
+  leading to broken document display (only `_id` visible).  Both the wire-path
+  (`raw_bson::encode_element`) and the storage-path (`bson_helpers::py_to_bson`)
+  encoders are fixed.
+
 ### Changed — Examples
 
 - **Example 02 (chat memory)**: Complete rewrite with multi-session conversations,

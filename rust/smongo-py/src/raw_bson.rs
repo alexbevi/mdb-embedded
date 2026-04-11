@@ -616,6 +616,22 @@ fn encode_element(
         return Ok(());
     }
 
+    // Python tuples → BSON arrays (same as lists)
+    if let Ok(t) = value.cast::<pyo3::types::PyTuple>() {
+        buf.push(BSON_ARRAY);
+        write_cstring(buf, key);
+        let start = buf.len();
+        buf.extend_from_slice(&[0u8; 4]);
+        for (i, v) in t.iter().enumerate() {
+            let idx_str = i.to_string();
+            encode_element(py, buf, &idx_str, &v, depth + 1)?;
+        }
+        buf.push(0x00);
+        let len = (buf.len() - start) as i32;
+        buf[start..start + 4].copy_from_slice(&len.to_le_bytes());
+        return Ok(());
+    }
+
     // bson.Timestamp → BSON Timestamp (0x11)
     if let Ok(ts_cls) = crate::cached_modules::bson_timestamp_cls(py) {
         if value.is_instance(&ts_cls)? {

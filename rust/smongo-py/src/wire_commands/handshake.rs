@@ -128,7 +128,7 @@ fn cmd_build_info(
     resp.set_item("version", "7.0.0-smongo")?;
     resp.set_item("gitVersion", git_version)?;
     resp.set_item("sysInfo", sys_info)?;
-    resp.set_item("versionArray", (7, 0, 0, 0))?;
+    resp.set_item("versionArray", PyList::new(py, [7, 0, 0, 0])?)?;
     resp.set_item("bits", 64)?;
     let modules = PyList::new(py, ["embedded", "redb"])?;
     resp.set_item("modules", modules)?;
