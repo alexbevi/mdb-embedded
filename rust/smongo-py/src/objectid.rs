@@ -84,14 +84,6 @@ impl ObjectId {
         self.raw
     }
 
-    /// Construct directly from raw 12-byte array, skipping hex encode/decode.
-    pub(crate) fn from_raw(py: Python<'_>, raw: [u8; 12]) -> Self {
-        Self {
-            raw,
-            _bytes: pyo3::types::PyBytes::new(py, &raw).unbind(),
-        }
-    }
-
     /// Construct from a 24-character hex string. Crate-internal convenience.
     #[allow(clippy::expect_used)]
     pub(crate) fn from_hex(py: Python<'_>, s: &str) -> Result<Self, pyo3::PyErr> {

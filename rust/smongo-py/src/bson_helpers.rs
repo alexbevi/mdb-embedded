@@ -45,6 +45,14 @@ pub(crate) fn py_to_bson(val: &Bound<'_, PyAny>) -> PyResult<Bson> {
         return Ok(Bson::Boolean(b.is_true()));
     }
 
+    // bson.Int64 before generic int (Int64 subclasses int, must stay BSON int64)
+    if let Ok(int64_cls) = crate::cached_modules::bson_int64_cls(py) {
+        if val.is_instance(&int64_cls)? {
+            let v: i64 = val.extract()?;
+            return Ok(Bson::Int64(v));
+        }
+    }
+
     if let Ok(i) = val.cast::<PyInt>() {
         let v: i64 = i.extract()?;
         if v >= i32::MIN as i64 && v <= i32::MAX as i64 {
@@ -173,6 +181,18 @@ pub(crate) fn py_to_bson(val: &Bound<'_, PyAny>) -> PyResult<Bson> {
             arr.push(py_to_bson(&item)?);
         }
         return Ok(Bson::Array(arr));
+    }
+
+    // bson.Timestamp → BSON Timestamp
+    if let Ok(ts_cls) = crate::cached_modules::bson_timestamp_cls(py) {
+        if val.is_instance(&ts_cls)? {
+            let time_val: u32 = val.getattr("time")?.extract()?;
+            let inc_val: u32 = val.getattr("inc")?.extract()?;
+            return Ok(Bson::Timestamp(bson::Timestamp {
+                time: time_val,
+                increment: inc_val,
+            }));
+        }
     }
 
     // datetime.datetime -> BSON DateTime
