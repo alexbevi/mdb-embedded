@@ -12,6 +12,14 @@ use crate::paths::get_value;
 /// expressions (`$add`, `$concat`, `$cond`, etc.).
 pub fn evaluate_expression(doc: &Document, expr: &Bson) -> AggregationResult<Bson> {
     match expr {
+        Bson::String(s) if s.starts_with("$$") => {
+            let var = &s[2..];
+            match var {
+                "ROOT" | "CURRENT" => Ok(Bson::Document(doc.clone())),
+                "REMOVE" => Ok(Bson::Null),
+                _ => Ok(get_value(doc, var).cloned().unwrap_or(Bson::Null)),
+            }
+        }
         Bson::String(s) if s.starts_with('$') => {
             let field = &s[1..];
             Ok(get_value(doc, field).cloned().unwrap_or(Bson::Null))
@@ -85,6 +93,18 @@ fn evaluate_operator_expression(doc: &Document, op_doc: &Document) -> Aggregatio
             dt.weekday().num_days_from_sunday() as i32 + 1
         }),
         "$dayOfYear" => expr_date_part(doc, args, |dt| dt.ordinal() as i32),
+        "$objectToArray" => expr_object_to_array(doc, args),
+        "$arrayToObject" => expr_array_to_object(doc, args),
+        "$bsonSize" => expr_bson_size(doc, args),
+        "$concatArrays" => expr_concat_arrays(doc, args),
+        "$reduce" => expr_reduce(doc, args),
+        "$slice" => expr_slice(doc, args),
+        "$reverseArray" => expr_reverse_array(doc, args),
+        "$isArray" => {
+            let val = evaluate_expression(doc, args)?;
+            Ok(Bson::Boolean(matches!(val, Bson::Array(_))))
+        }
+        "$sum" => expr_sum_expr(doc, args),
         _ => Ok(Bson::Null),
     }
 }
@@ -659,6 +679,183 @@ fn replace_var_refs(expr: &Bson, from: &str, to: &str) -> Bson {
 
 pub(crate) fn bson_to_f64_pub(val: &Bson) -> Option<f64> {
     bson_to_f64(val)
+}
+
+fn expr_object_to_array(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
+    let val = evaluate_expression(doc, args)?;
+    match val {
+        Bson::Document(d) => {
+            let arr: Vec<Bson> = d
+                .into_iter()
+                .map(|(k, v)| {
+                    Bson::Document(bson::doc! { "k": k, "v": v })
+                })
+                .collect();
+            Ok(Bson::Array(arr))
+        }
+        Bson::Null => Ok(Bson::Null),
+        _ => Ok(Bson::Null),
+    }
+}
+
+fn expr_array_to_object(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
+    let val = evaluate_expression(doc, args)?;
+    match val {
+        Bson::Array(arr) => {
+            let mut result = Document::new();
+            for item in arr {
+                match item {
+                    Bson::Document(d) => {
+                        if let (Some(Bson::String(key)), Some(v)) = (d.get("k"), d.get("v")) {
+                            result.insert(key.clone(), v.clone());
+                        }
+                    }
+                    Bson::Array(pair) if pair.len() == 2 => {
+                        if let Bson::String(key) = &pair[0] {
+                            result.insert(key.clone(), pair[1].clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Bson::Document(result))
+        }
+        Bson::Null => Ok(Bson::Null),
+        _ => Ok(Bson::Null),
+    }
+}
+
+fn expr_bson_size(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
+    let val = evaluate_expression(doc, args)?;
+    match val {
+        Bson::Document(d) => {
+            let raw = bson::to_vec(&d).unwrap_or_default();
+            Ok(Bson::Int32(raw.len() as i32))
+        }
+        Bson::Null => Ok(Bson::Null),
+        _ => Ok(Bson::Null),
+    }
+}
+
+fn expr_concat_arrays(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
+    let arrs = match args {
+        Bson::Array(a) => a,
+        _ => return Ok(Bson::Null),
+    };
+    let mut result = Vec::new();
+    for item in arrs {
+        match evaluate_expression(doc, item)? {
+            Bson::Array(a) => result.extend(a),
+            Bson::Null => return Ok(Bson::Null),
+            _ => return Ok(Bson::Null),
+        }
+    }
+    Ok(Bson::Array(result))
+}
+
+fn expr_reduce(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
+    let spec = match args {
+        Bson::Document(d) => d,
+        _ => return Ok(Bson::Null),
+    };
+    let input = spec
+        .get("input")
+        .map(|v| evaluate_expression(doc, v))
+        .transpose()?
+        .unwrap_or(Bson::Null);
+    let initial = spec
+        .get("initialValue")
+        .map(|v| evaluate_expression(doc, v))
+        .transpose()?
+        .unwrap_or(Bson::Null);
+    let in_expr = match spec.get("in") {
+        Some(expr) => expr,
+        None => return Ok(initial),
+    };
+
+    let arr = match input {
+        Bson::Array(a) => a,
+        _ => return Ok(Bson::Null),
+    };
+
+    let mut accum = initial;
+    for item in arr {
+        let mut temp_doc = doc.clone();
+        temp_doc.insert("__value__", accum.clone());
+        temp_doc.insert("__this__", item);
+        let replaced = replace_var_refs(in_expr, "$$value", "$__value__");
+        let replaced = replace_var_refs(&replaced, "$$this", "$__this__");
+        accum = evaluate_expression(&temp_doc, &replaced)?;
+    }
+    Ok(accum)
+}
+
+fn expr_slice(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
+    let params = match args {
+        Bson::Array(a) => a,
+        _ => return Ok(Bson::Null),
+    };
+    if params.len() < 2 {
+        return Ok(Bson::Null);
+    }
+    let arr = match evaluate_expression(doc, &params[0])? {
+        Bson::Array(a) => a,
+        _ => return Ok(Bson::Null),
+    };
+    if params.len() == 2 {
+        let n = bson_to_f64(&evaluate_expression(doc, &params[1])?)
+            .map(|f| f as i64)
+            .unwrap_or(0);
+        if n >= 0 {
+            Ok(Bson::Array(arr.into_iter().take(n as usize).collect()))
+        } else {
+            let skip = (arr.len() as i64 + n).max(0) as usize;
+            Ok(Bson::Array(arr.into_iter().skip(skip).collect()))
+        }
+    } else {
+        let pos = bson_to_f64(&evaluate_expression(doc, &params[1])?)
+            .map(|f| f as i64)
+            .unwrap_or(0);
+        let n = bson_to_f64(&evaluate_expression(doc, &params[2])?)
+            .map(|f| f as usize)
+            .unwrap_or(0);
+        let start = if pos >= 0 {
+            pos as usize
+        } else {
+            (arr.len() as i64 + pos).max(0) as usize
+        };
+        Ok(Bson::Array(arr.into_iter().skip(start).take(n).collect()))
+    }
+}
+
+fn expr_reverse_array(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
+    match evaluate_expression(doc, args)? {
+        Bson::Array(mut a) => {
+            a.reverse();
+            Ok(Bson::Array(a))
+        }
+        Bson::Null => Ok(Bson::Null),
+        _ => Ok(Bson::Null),
+    }
+}
+
+fn expr_sum_expr(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
+    match args {
+        Bson::Array(arr) => {
+            let mut total = 0.0_f64;
+            for item in arr {
+                if let Some(n) = bson_to_f64(&evaluate_expression(doc, item)?) {
+                    total += n;
+                }
+            }
+            if total == (total as i64 as f64) {
+                Ok(Bson::Int64(total as i64))
+            } else {
+                Ok(Bson::Double(total))
+            }
+        }
+        _ => evaluate_expression(doc, args),
+    }
 }
 
 #[cfg(test)]

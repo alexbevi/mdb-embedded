@@ -156,11 +156,105 @@ fn cmd_aggregate(
                     doc.set_item("count", count)?;
                 }
 
+                let remaining = if pipeline.len() > 1 {
+                    let rest = PyList::empty(py);
+                    for i in 1..pipeline.len() {
+                        rest.append(pipeline.get_item(i)?)?;
+                    }
+                    Some(rest)
+                } else {
+                    None
+                };
+
+                if let Some(remaining_pipeline) = remaining {
+                    let input_docs = PyList::new(py, [doc.as_any()])?;
+                    let result =
+                        crate::aggregation::aggregate_pipeline(py, &input_docs, &remaining_pipeline, None, None, 100_000, false, 104_857_600)?;
+                    let cr = ctx.borrow().cursor_registry.clone_ref(py);
+                    let cr_reg =
+                        cr.bind(py).cast::<crate::wire_cursors::CursorRegistry>()?;
+                    let (cursor_id, first_batch_py) = cr_reg
+                        .borrow()
+                        .create(py, &ns, &result, Some(batch_size as usize))?;
+                    let cursor_dict = PyDict::new(py);
+                    cursor_dict.set_item("id", bson_int64(py, cursor_id)?)?;
+                    cursor_dict.set_item("ns", &ns)?;
+                    cursor_dict.set_item("firstBatch", first_batch_py.bind(py))?;
+                    let resp = PyDict::new(py);
+                    resp.set_item("cursor", cursor_dict)?;
+                    resp.set_item("ok", 1.0)?;
+                    return Ok(resp.into_any().unbind());
+                }
+
                 let first_batch = PyList::new(py, [doc.as_any()])?;
                 let cursor_dict = PyDict::new(py);
                 cursor_dict.set_item("id", bson_int64(py, 0)?)?;
                 cursor_dict.set_item("ns", &ns)?;
                 cursor_dict.set_item("firstBatch", first_batch)?;
+                let resp = PyDict::new(py);
+                resp.set_item("cursor", cursor_dict)?;
+                resp.set_item("ok", 1.0)?;
+                return Ok(resp.into_any().unbind());
+            }
+            if d.get_item("$indexStats")?.is_some() {
+                let coll_typed = get_collection_typed(ctx, &db_name, &coll_name)?;
+                let indexes_py = coll_typed.bind(py).borrow().list_indexes(py)?;
+                let indexes = indexes_py.bind(py);
+                let index_docs = PyList::empty(py);
+
+                for idx_any in indexes.try_iter()? {
+                    let idx_any = idx_any?;
+                    let idx_dict = idx_any.cast::<PyDict>()?;
+                    let entry = PyDict::new(py);
+                    if let Some(n) = idx_dict.get_item("name")? {
+                        entry.set_item("name", &n)?;
+                    }
+                    if let Some(k) = idx_dict.get_item("key")? {
+                        entry.set_item("key", &k)?;
+                    }
+                    entry.set_item("host", "localhost:embedded")?;
+                    let accesses = PyDict::new(py);
+                    accesses.set_item("ops", bson_int64(py, 0)?)?;
+                    accesses.set_item("since", "2026-01-01T00:00:00.000Z")?;
+                    entry.set_item("accesses", accesses)?;
+                    entry.set_item("shard", "embedded")?;
+                    entry.set_item("spec", &idx_any)?;
+                    index_docs.append(entry)?;
+                }
+
+                let remaining = if pipeline.len() > 1 {
+                    let rest = PyList::empty(py);
+                    for i in 1..pipeline.len() {
+                        rest.append(pipeline.get_item(i)?)?;
+                    }
+                    Some(rest)
+                } else {
+                    None
+                };
+
+                if let Some(remaining_pipeline) = remaining {
+                    let result =
+                        crate::aggregation::aggregate_pipeline(py, &index_docs, &remaining_pipeline, None, None, 100_000, false, 104_857_600)?;
+                    let cr = ctx.borrow().cursor_registry.clone_ref(py);
+                    let cr_reg =
+                        cr.bind(py).cast::<crate::wire_cursors::CursorRegistry>()?;
+                    let (cursor_id, first_batch_py) = cr_reg
+                        .borrow()
+                        .create(py, &ns, &result, Some(batch_size as usize))?;
+                    let cursor_dict = PyDict::new(py);
+                    cursor_dict.set_item("id", bson_int64(py, cursor_id)?)?;
+                    cursor_dict.set_item("ns", &ns)?;
+                    cursor_dict.set_item("firstBatch", first_batch_py.bind(py))?;
+                    let resp = PyDict::new(py);
+                    resp.set_item("cursor", cursor_dict)?;
+                    resp.set_item("ok", 1.0)?;
+                    return Ok(resp.into_any().unbind());
+                }
+
+                let cursor_dict = PyDict::new(py);
+                cursor_dict.set_item("id", bson_int64(py, 0)?)?;
+                cursor_dict.set_item("ns", &ns)?;
+                cursor_dict.set_item("firstBatch", index_docs)?;
                 let resp = PyDict::new(py);
                 resp.set_item("cursor", cursor_dict)?;
                 resp.set_item("ok", 1.0)?;

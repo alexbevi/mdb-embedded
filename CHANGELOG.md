@@ -7,6 +7,29 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [1.1.9] — 2026-04-11
+
+### Fixed — Wire protocol fidelity (Compass compatibility)
+
+- **Added `$indexStats` aggregation stage** — both Python and Rust wire handlers
+  now return index name, key, and stub usage statistics. Compass no longer errors
+  when inspecting collection indexes.
+- **Added `$listSearchIndexes` stage** to the Python aggregate handler — returns
+  an empty cursor (no Atlas Search in embedded mode) instead of "Unknown stage".
+- **`$collStats` pipeline continuation** — the Rust aggregate handler now runs
+  remaining pipeline stages (e.g. `$project`, `$group`) after producing the
+  `$collStats` document. Previously it returned immediately, breaking Compass's
+  `$collStats → $project {$objectToArray} → $unwind → $group` pipeline.
+- **Added `$$ROOT` / `$$CURRENT` / `$$REMOVE`** system variable support in the
+  Rust engine expression evaluator.
+- **Added `$objectToArray`** and **`$arrayToObject`** expression operators to the
+  Rust engine — previously these returned `Bson::Null` silently, breaking
+  `$collStats` index-size pipelines.
+- **Added `$bsonSize` expression** to the Rust engine.
+- **Added `$concatArrays`, `$reduce`, `$slice`, `$reverseArray`, `$isArray`,
+  `$sum` (expression form)** to the Rust engine expression evaluator.
+- **Fixed Clippy `collapsible_match` warning** in `$arrayToObject`.
+
 ## [1.1.8] — 2026-04-11
 
 ### Fixed — Compass document display

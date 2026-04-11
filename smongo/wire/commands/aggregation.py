@@ -40,6 +40,30 @@ def _cmd_aggregate(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) 
         cursor_id = ctx.cursor_registry.create_change_stream(ns, stream, batch_size)
         return {"cursor": {"id": Int64(cursor_id), "ns": ns, "firstBatch": []}, "ok": 1.0}
 
+    if pipeline and "$listSearchIndexes" in pipeline[0]:
+        return {"cursor": {"id": Int64(0), "ns": ns, "firstBatch": []}, "ok": 1.0}
+
+    if pipeline and "$indexStats" in pipeline[0]:
+        index_docs = []
+        for idx_info in coll.list_indexes():
+            index_docs.append({
+                "name": idx_info.get("name", ""),
+                "key": idx_info.get("key", {}),
+                "host": "localhost:embedded",
+                "accesses": {"ops": Int64(0), "since": "2026-01-01T00:00:00.000Z"},
+                "shard": "embedded",
+                "spec": idx_info,
+            })
+        remaining = pipeline[1:]
+        if remaining:
+            coll_getter = lambda name: ctx.get_db(db_name).get_collection(name)
+            result_docs = normalize_outbound_docs(
+                Cursor(index_docs, collection_getter=coll_getter).aggregate(remaining)
+            )
+        else:
+            result_docs = normalize_outbound_docs(index_docs)
+        return {"cursor": {"id": Int64(0), "ns": ns, "firstBatch": result_docs}, "ok": 1.0}
+
     if pipeline and "$collStats" in pipeline[0]:
         spec = pipeline[0]["$collStats"]
         stats = coll.storage_stats()
