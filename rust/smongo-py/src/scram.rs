@@ -257,7 +257,7 @@ pub fn parse_username(payload: &[u8]) -> Result<String, ScramError> {
 
 fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
     let mut mac = HmacSha256::new_from_slice(key)
-        .unwrap_or_else(|_| HmacSha256::new_from_slice(&[0]).unwrap_or_else(|_| unreachable!()));
+        .unwrap_or_else(|_| HmacSha256::new_from_slice(&[0]).unwrap_or_else(|_| unreachable!("HMAC-SHA256 accepts any key length")));
     mac.update(data);
     mac.finalize().into_bytes().into()
 }

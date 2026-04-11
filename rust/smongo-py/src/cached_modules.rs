@@ -197,11 +197,6 @@ cached_module!(
     "smongo.aggregation.stages"
 );
 cached_module!(
-    SMONGO_AGG_CONSTANTS,
-    smongo_agg_constants,
-    "smongo.aggregation.constants"
-);
-cached_module!(
     SMONGO_AGG_JOINS,
     smongo_agg_joins,
     "smongo.aggregation.joins"

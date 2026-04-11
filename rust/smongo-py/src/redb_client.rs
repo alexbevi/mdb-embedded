@@ -379,19 +379,21 @@ impl RedbLocalCollection {
             .map_err(|e| map_database_error(e, "collection_with_oplog"))
     }
 
-    /// Wire / streaming: materialized find list (wire hot path).
+    /// Wire / streaming: lazy find iterator (wire hot path).
     pub(crate) fn find_streaming_typed(
         coll: Py<Self>,
         py: Python<'_>,
         query: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
-        let empty = PyDict::new(py);
-        let q = match query {
-            Some(v) => v.cast::<PyDict>()?.clone(),
-            None => empty,
+        let filter: Option<Bound<'_, PyDict>> = match query {
+            Some(v) => Some(v.cast::<PyDict>()?.clone()),
+            None => None,
         };
-        let list = coll.bind(py).borrow().find(py, &q, None)?;
-        Ok(list.into_any())
+        let iter = coll
+            .bind(py)
+            .borrow()
+            .find_iter(filter.as_ref())?;
+        Ok(Py::new(py, iter)?.into_any())
     }
 
     /// Aggregate: full collection scan as a Python list (wire helper).
@@ -844,10 +846,34 @@ impl RedbLocalCollection {
         self.find(py, &empty, None)
     }
 
+    /// Return a lazy :class:`FindIterator` that yields documents one at a time.
+    ///
+    /// Unlike :meth:`find`, this does **not** materialise the full result set
+    /// up front.  The engine's query planner still selects the optimal index
+    /// strategy (PK lookup, index seek/scan, or collection scan).
+    #[pyo3(signature = (filter=None))]
+    pub fn find_iter(&self, filter: Option<&Bound<'_, PyDict>>) -> PyResult<FindIterator> {
+        let query = match filter {
+            Some(f) => crate::bson_helpers::pydict_to_doc(f)?,
+            None => bson::Document::new(),
+        };
+        let collection = self.engine_col()?;
+        let owned_iter = collection
+            .find_into_iter(query)
+            .map_err(|e| map_collection_error(e, "find_iter"))?;
+        Ok(FindIterator {
+            inner: parking_lot::Mutex::new(owned_iter),
+        })
+    }
+
     /// Run a full aggregation pipeline entirely in the Rust engine.
     ///
     /// Uses `DatabaseContext` for cross-collection resolution, vector search,
     /// geo queries, and write stages — zero FFI round-trips.
+    ///
+    /// Leading `$match` stages are automatically extracted and pushed into the
+    /// storage-layer `find()` so the query planner can use indexes instead of
+    /// scanning the entire collection.
     #[pyo3(signature = (pipeline, *, filter=None))]
     pub fn aggregate_engine(
         &self,
@@ -855,21 +881,37 @@ impl RedbLocalCollection {
         pipeline: &Bound<'_, PyList>,
         filter: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Py<PyList>> {
-        let query = match filter {
+        let explicit_filter = match filter {
             Some(f) => crate::bson_helpers::pydict_to_doc(f)?,
             None => bson::Document::new(),
         };
 
-        let collection = self.engine_col()?;
-        let docs = collection
-            .find(query)
-            .map_err(|e| map_collection_error(e, "aggregate_engine find"))?;
-
         let bson_pipeline = crate::bson_helpers::pylist_to_pipeline(pipeline)?;
 
+        let (leading_match, remaining_pipeline) =
+            smongo_engine::aggregation::optimize_pipeline(&bson_pipeline);
+
+        let merged_filter = match leading_match {
+            Some(lm) if explicit_filter.is_empty() => lm,
+            Some(lm) => {
+                bson::doc! { "$and": [ explicit_filter, lm ] }
+            }
+            None => explicit_filter,
+        };
+
+        let collection = self.engine_col()?;
+        let iter = collection
+            .find_into_iter(merged_filter)
+            .map_err(|e| map_collection_error(e, "aggregate_engine find_into_iter"))?;
+
         let ctx = smongo_engine::aggregation::DatabaseContext::new(&*self.db);
-        let results = smongo_engine::aggregation::aggregate_with_db(docs, &bson_pipeline, &ctx)
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let results = smongo_engine::aggregation::aggregate_with_db_collection_streaming(
+            iter,
+            &remaining_pipeline,
+            &ctx,
+            Some(&self.name),
+        )
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
         let out = PyList::empty(py);
         for doc in &results {
@@ -1284,5 +1326,31 @@ impl RedbChangeStream {
     pub fn close(&mut self) {
         self.hub.unregister(self.stream.as_ref());
         self.stream.close();
+    }
+}
+
+/// Lazy Python iterator backed by the engine's streaming `FindCursor`.
+///
+/// Documents are decoded one-at-a-time as Python calls `__next__`, avoiding
+/// materialisation of the entire result set.  The iterator owns the engine
+/// `Collection` so the storage session stays alive for the whole traversal.
+#[pyclass(name = "FindIterator")]
+pub struct FindIterator {
+    inner: parking_lot::Mutex<smongo_engine::OwnedFindIter<RedbSession>>,
+}
+
+#[pymethods]
+impl FindIterator {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(&self, py: Python<'_>) -> PyResult<Option<Py<PyDict>>> {
+        let mut guard = self.inner.lock();
+        match guard.next() {
+            Some(Ok(doc)) => Ok(Some(crate::bson_helpers::doc_to_pydict(py, &doc)?.unbind())),
+            Some(Err(e)) => Err(PyRuntimeError::new_err(e.to_string())),
+            None => Ok(None),
+        }
     }
 }

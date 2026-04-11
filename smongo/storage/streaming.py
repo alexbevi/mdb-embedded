@@ -7,14 +7,18 @@ from .._types import Document, Filter
 
 
 class StreamingCursor:
-    """Lazy iterator over documents via the collection's ``find`` (engine-backed)."""
+    """Lazy iterator over documents via the collection's streaming path."""
 
     def __init__(self, collection: Any, query: Filter | None = None) -> None:
         self._collection = collection
         self._query = query or {}
 
     def __iter__(self) -> Iterator[Document]:
+        find_streaming = getattr(self._collection, "find_streaming", None)
+        if find_streaming is not None:
+            yield from find_streaming(self._query)
+            return
         find = getattr(self._collection, "find", None)
         if find is None:
-            raise TypeError("collection must implement find() for StreamingCursor")
+            raise TypeError("collection must implement find() or find_streaming()")
         yield from find(self._query)

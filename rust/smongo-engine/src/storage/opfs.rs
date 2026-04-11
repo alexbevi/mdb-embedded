@@ -32,7 +32,7 @@ impl StorageBackend for OpfsBackend {
     }
 
     fn list_tables(&self) -> StorageResult<Vec<String>> {
-        let h = self.handles.lock().unwrap();
+        let h = self.handles.lock().unwrap_or_else(|e| e.into_inner());
         Ok(h.keys().cloned().collect())
     }
 }
@@ -49,12 +49,12 @@ impl StorageSession for OpfsSession {
     }
 
     fn drop_table(&self, name: &str) -> StorageResult<()> {
-        self.handles.lock().unwrap().remove(name);
+        self.handles.lock().unwrap_or_else(|e| e.into_inner()).remove(name);
         Ok(())
     }
 
     fn open_cursor(&self, table_name: &str) -> StorageResult<OpfsCursor> {
-        let h = self.handles.lock().unwrap();
+        let h = self.handles.lock().unwrap_or_else(|e| e.into_inner());
         let handle = h
             .get(table_name)
             .cloned()
@@ -104,6 +104,12 @@ pub struct OpfsCursor {
 }
 
 impl OpfsCursor {
+    fn entries_mut(&mut self) -> &mut Vec<(Vec<u8>, Vec<u8>)> {
+        self.entries
+            .as_mut()
+            .expect("cursor entries must be initialized before use")
+    }
+
     fn effective_key(&self) -> StorageResult<Vec<u8>> {
         self.pending_key
             .as_ref()
@@ -248,7 +254,7 @@ impl StorageCursor for OpfsCursor {
     fn insert(&mut self) -> StorageResult<()> {
         let key = self.effective_key()?;
         let value = self.effective_value()?;
-        let entries = self.entries.as_mut().unwrap();
+        let entries = self.entries_mut();
 
         match entries.binary_search_by(|(k, _)| k.as_slice().cmp(&key)) {
             Ok(_) => Err(StorageError::DuplicateKey("exists".into())),
@@ -263,7 +269,7 @@ impl StorageCursor for OpfsCursor {
     fn update(&mut self) -> StorageResult<()> {
         let key = self.effective_key()?;
         let value = self.effective_value()?;
-        let entries = self.entries.as_mut().unwrap();
+        let entries = self.entries_mut();
 
         match entries.iter_mut().find(|(k, _)| k == &key) {
             Some((_, v)) => {
@@ -277,7 +283,7 @@ impl StorageCursor for OpfsCursor {
 
     fn remove(&mut self) -> StorageResult<()> {
         let key = self.effective_key()?;
-        let entries = self.entries.as_mut().unwrap();
+        let entries = self.entries_mut();
 
         if let Some(pos) = entries.iter().position(|(k, _)| k == &key) {
             entries.remove(pos);
@@ -292,7 +298,9 @@ impl StorageCursor for OpfsCursor {
 impl Drop for OpfsCursor {
     fn drop(&mut self) {
         if self.dirty {
-            let _ = flush_sync(&self.handle, self.entries.as_ref().unwrap());
+            if let Some(entries) = self.entries.as_ref() {
+                let _ = flush_sync(&self.handle, entries);
+            }
         }
     }
 }

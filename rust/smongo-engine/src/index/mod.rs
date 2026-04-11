@@ -10,7 +10,6 @@ pub mod bitmap_index;
 pub mod prefix_index;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod text_index;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod vector_index;
 
 use bson::{Bson, Document};
@@ -227,6 +226,16 @@ impl IndexDirection {
 ///
 /// Serialized key bytes for the index
 pub fn extract_index_key(doc: &Document, keys: &Document) -> Vec<u8> {
+    extract_index_key_with_collation(doc, keys, None)
+}
+
+/// Build a B-tree key from `doc` for the given index `keys`, optionally
+/// applying `collation` to string fields.
+pub fn extract_index_key_with_collation(
+    doc: &Document,
+    keys: &Document,
+    collation: Option<&crate::collation::Collation>,
+) -> Vec<u8> {
     use crate::paths::get_value;
 
     let mut key_parts = Vec::new();
@@ -240,7 +249,10 @@ pub fn extract_index_key(doc: &Document, keys: &Document) -> Vec<u8> {
             Some(Bson::Int32(n)) => n.to_be_bytes().to_vec(),
             Some(Bson::Int64(n)) => n.to_be_bytes().to_vec(),
             Some(Bson::Double(n)) => n.to_be_bytes().to_vec(),
-            Some(Bson::String(s)) => s.as_bytes().to_vec(),
+            Some(Bson::String(s)) => match collation {
+                Some(c) => c.index_key_bytes(s),
+                None => s.as_bytes().to_vec(),
+            },
             Some(Bson::ObjectId(oid)) => oid.bytes().to_vec(),
             Some(Bson::Boolean(b)) => vec![if *b { 0x01 } else { 0x00 }],
             Some(Bson::DateTime(dt)) => dt.timestamp_millis().to_be_bytes().to_vec(),
@@ -250,8 +262,6 @@ pub fn extract_index_key(doc: &Document, keys: &Document) -> Vec<u8> {
             None => vec![0xFF],
         };
 
-        // For descending fields, XOR every byte with 0xFF so B-tree order
-        // naturally reverses the logical sort order.
         if descending {
             invert_bytes(&mut serialized);
         }

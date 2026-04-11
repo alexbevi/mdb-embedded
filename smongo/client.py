@@ -196,6 +196,43 @@ class MongoClient:
         if self.mode in ("local", "hybrid") and hasattr(self.client, "close"):
             self.client.close()
 
+    def list_database_names(self) -> list[str]:
+        """Return the names of all databases.
+
+        For remote connections this queries the server.  For the embedded
+        engine it returns the names of databases that have been accessed
+        during this session.
+        """
+        if self.mode == "remote":
+            return self.client.list_database_names()  # type: ignore[no-any-return]
+        return sorted(self._databases.keys())
+
+    def drop_database(self, name: str) -> None:
+        """Drop a database and all its collections."""
+        if self.mode == "remote":
+            self.client.drop_database(name)
+        else:
+            if name in self._databases:
+                db = self._databases[name]
+                for coll_name in db.list_collection_names():
+                    db.drop_collection(coll_name)
+                del self._databases[name]
+
+    def server_info(self) -> dict[str, Any]:
+        """Return server/engine information.
+
+        For remote connections this calls the real ``serverStatus`` command.
+        For embedded mode a synthetic dict is returned with engine metadata.
+        """
+        if self.mode == "remote":
+            return self.client.server_info()  # type: ignore[no-any-return]
+        return {
+            "version": "1.0.3",
+            "storageEngine": {"name": "redb"},
+            "ok": 1.0,
+            "smongo": True,
+        }
+
     def __enter__(self) -> MongoClient:
         return self
 
@@ -324,16 +361,22 @@ class Collection:
     def find(self, query: Filter | None = None, projection: Projection | None = None) -> Any:
         """Return a cursor over documents matching *query*, optionally applying *projection*.
 
-        In local mode with redb, results are materialized for the cursor API; the
-        public ``Collection`` API matches PyMongo.
+        In local mode with redb, a lazy engine-backed iterator feeds the
+        :class:`Cursor` so that ``skip``/``limit`` can short-circuit without
+        materializing the full result set.  ``sort`` still materializes as
+        expected (consistent with MongoDB server behaviour).
         """
         query = query or {}
         if self.mode == "remote":
             return self.backend.find(query, projection)
         if isinstance(self.backend, RedbCollection):
-            docs = self.backend.find(query, projection=projection)
+            if projection:
+                docs = self.backend.find(query, projection=projection)
+                coll_getter = self._make_collection_getter()
+                return Cursor(docs, collection_getter=coll_getter)
+            lazy_iter = self.backend.find_streaming(query)
             coll_getter = self._make_collection_getter()
-            return Cursor(docs, collection_getter=coll_getter)
+            return Cursor(lazy_iter, collection_getter=coll_getter)
         docs = self.backend.find_streaming(query)
         coll_getter = self._make_collection_getter()
         c = Cursor(docs, collection_getter=coll_getter)
@@ -400,6 +443,31 @@ class Collection:
         if self.mode == "remote":
             return self.backend.count_documents(query)  # type: ignore[no-any-return]
         return self.backend.count(query)  # type: ignore[no-any-return]
+
+    def distinct(self, key: str, filter: Filter | None = None) -> list[Any]:
+        """Return distinct values for *key* among documents matching *filter*."""
+        if self.mode == "remote":
+            return self.backend.distinct(key, filter or {})  # type: ignore[no-any-return]
+        seen: list[Any] = []
+        for doc in self.find(filter):
+            v: Any = doc
+            for part in key.split("."):
+                if isinstance(v, dict):
+                    v = v.get(part)
+                else:
+                    v = None
+                    break
+            if v is not None and v not in seen:
+                seen.append(v)
+        return seen
+
+    def estimated_document_count(self) -> int:
+        """Fast approximate count (uses count_fast when available)."""
+        if self.mode == "remote":
+            return self.backend.estimated_document_count()  # type: ignore[no-any-return]
+        if hasattr(self.backend, "count_fast"):
+            return self.backend.count_fast()  # type: ignore[no-any-return]
+        return self.count_documents({})
 
     def explain(self, query: Filter | None = None) -> dict[str, Any]:
         """Return the query plan (local mode only)."""
@@ -614,6 +682,24 @@ class Collection:
         if self.mode == "local":
             return self.backend.get_oplog()  # type: ignore[no-any-return]
         return []
+
+    # -- admin ---------------------------------------------------------
+
+    def drop(self) -> None:
+        """Drop this collection (delegates to the parent database)."""
+        if self._db is not None:
+            self._db.drop_collection(self.backend.name)
+        elif self.mode == "remote":
+            self.backend.drop()
+
+    def rename(self, new_name: str, **kwargs: Any) -> None:
+        """Rename this collection."""
+        if self.mode == "remote":
+            self.backend.rename(new_name, **kwargs)
+        else:
+            raise NotImplementedError(
+                "Collection.rename() is not yet supported for the embedded engine"
+            )
 
     def get_local_collection(self) -> RedbCollection:
         """Return the underlying :class:`RedbCollection` (local mode only)."""

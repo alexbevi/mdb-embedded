@@ -202,29 +202,11 @@ fn cmd_aggregate(
     }
 
     let coll_typed = get_collection_typed(ctx, &db_name, &coll_name)?;
-    let docs = coll_typed.bind(py).borrow().get_all_typed(py)?;
-
-    let constants_mod = crate::cached_modules::smongo_agg_constants(py)?;
-    let max_docs: usize = constants_mod
-        .getattr("DEFAULT_MAX_PIPELINE_DOCS")?
-        .extract()
-        .unwrap_or(500_000);
-    let mem_limit: usize = constants_mod
-        .getattr("DEFAULT_MEMORY_LIMIT_BYTES")?
-        .extract()
-        .unwrap_or(104_857_600);
-
-    let result = crate::aggregation::aggregate_pipeline(
-        py,
-        docs.bind(py),
-        pipeline,
-        None,
-        Some(coll_typed.bind(py).as_any()),
-        max_docs,
-        false,
-        mem_limit,
-    )?;
-    let result_bound = &result;
+    let result = coll_typed
+        .bind(py)
+        .borrow()
+        .aggregate_engine(py, pipeline, None)?;
+    let result_bound = result.bind(py);
 
     let cr = ctx.borrow().cursor_registry.clone_ref(py);
     let cr_reg = cr.bind(py).cast::<crate::wire_cursors::CursorRegistry>()?;

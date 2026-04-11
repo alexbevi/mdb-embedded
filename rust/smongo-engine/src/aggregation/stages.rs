@@ -13,6 +13,17 @@ use super::{
     DocStream,
 };
 
+/// Produce a canonical byte key for a BSON value suitable for use as a
+/// HashMap key.  Wraps the value in a single-field document and serializes
+/// to raw BSON bytes, giving exact type-aware equality semantics (int 1 !=
+/// string "1", etc.).  `None` maps to an empty vec.
+fn canonical_bson_key(val: Option<&Bson>) -> Vec<u8> {
+    match val {
+        Some(v) => bson::to_vec(&bson::doc! { "": v.clone() }).unwrap_or_default(),
+        None => Vec::new(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // $match
 // ---------------------------------------------------------------------------
@@ -621,6 +632,11 @@ pub fn stage_lookup(
         .as_document()
         .ok_or_else(|| AggregationError::InvalidStage("$lookup requires document".into()))?;
 
+    let has_pipeline = lookup_doc.get_array("pipeline").is_ok();
+    if has_pipeline {
+        return stage_lookup_pipeline(docs, lookup_doc, resolver);
+    }
+
     let from = lookup_doc
         .get_str("from")
         .map_err(|_| AggregationError::MissingField("$lookup.from required".into()))?;
@@ -638,18 +654,16 @@ pub fn stage_lookup(
         .ok_or_else(|| AggregationError::Other("$lookup requires a CollectionResolver".into()))?;
 
     let foreign_docs = resolver.resolve(from, None)?;
-    let mut foreign_map: HashMap<String, Vec<&Document>> = HashMap::new();
+    let mut foreign_map: HashMap<Vec<u8>, Vec<&Document>> = HashMap::new();
     for fdoc in &foreign_docs {
-        let key = get_value(fdoc, foreign_field)
-            .map(|v| format!("{:?}", v))
-            .unwrap_or_default();
+        let key = canonical_bson_key(get_value(fdoc, foreign_field));
         foreign_map.entry(key).or_default().push(fdoc);
     }
 
     let mut results = Vec::with_capacity(docs.len());
     for doc in docs {
         let local_val = get_value(&doc, local_field);
-        let local_key = local_val.map(|v| format!("{:?}", v)).unwrap_or_default();
+        let local_key = canonical_bson_key(local_val);
         let matches: Vec<Bson> = foreign_map
             .get(&local_key)
             .map(|v| v.iter().map(|d| Bson::Document((*d).clone())).collect())
@@ -661,6 +675,93 @@ pub fn stage_lookup(
     }
 
     Ok(results)
+}
+
+/// `$lookup` with `let` + `pipeline` (correlated subquery form).
+fn stage_lookup_pipeline(
+    docs: Vec<Document>,
+    lookup_doc: &Document,
+    resolver: Option<&dyn CollectionResolver>,
+) -> AggregationResult<Vec<Document>> {
+    let from = lookup_doc
+        .get_str("from")
+        .map_err(|_| AggregationError::MissingField("$lookup.from required".into()))?;
+    let as_field = lookup_doc
+        .get_str("as")
+        .map_err(|_| AggregationError::MissingField("$lookup.as required".into()))?;
+    let pipeline_bson = lookup_doc
+        .get_array("pipeline")
+        .map_err(|_| AggregationError::MissingField("$lookup.pipeline required".into()))?;
+    let let_vars = lookup_doc.get_document("let").ok();
+
+    let resolver = resolver
+        .ok_or_else(|| AggregationError::Other("$lookup requires a CollectionResolver".into()))?;
+
+    let sub_pipeline: Vec<Document> = pipeline_bson
+        .iter()
+        .filter_map(|s| s.as_document().cloned())
+        .collect();
+
+    let foreign_docs = resolver.resolve(from, None)?;
+
+    let mut results = Vec::with_capacity(docs.len());
+    for doc in docs {
+        let resolved_pipeline = if let Some(vars) = let_vars {
+            let mut bound = Vec::new();
+            for (var_name, var_expr) in vars {
+                let val = evaluate_expression(&doc, var_expr)?;
+                bound.push((var_name.clone(), val));
+            }
+            sub_pipeline
+                .iter()
+                .map(|stage| {
+                    let mut s = Bson::Document(stage.clone());
+                    for (name, val) in &bound {
+                        s = substitute_var(&s, name, val);
+                    }
+                    s.as_document().cloned().unwrap_or_default()
+                })
+                .collect()
+        } else {
+            sub_pipeline.clone()
+        };
+
+        let matched =
+            super::aggregate_with_resolver(foreign_docs.clone(), &resolved_pipeline, Some(resolver))?;
+        let matched_bson: Vec<Bson> = matched.into_iter().map(Bson::Document).collect();
+
+        let mut new_doc = doc;
+        new_doc.insert(as_field.to_string(), Bson::Array(matched_bson));
+        results.push(new_doc);
+    }
+
+    Ok(results)
+}
+
+/// Replace `$$var_name` references in a BSON expression tree with a literal value.
+fn substitute_var(expr: &Bson, var_name: &str, value: &Bson) -> Bson {
+    let double_dollar = format!("$${}", var_name);
+    match expr {
+        Bson::String(s) if s == &double_dollar => value.clone(),
+        Bson::String(s) if s.starts_with(&format!("$${}.", var_name)) => {
+            let suffix = &s[double_dollar.len() + 1..];
+            match value {
+                Bson::Document(d) => get_value(d, suffix).cloned().unwrap_or(Bson::Null),
+                _ => Bson::Null,
+            }
+        }
+        Bson::Document(d) => {
+            let mut new_doc = Document::new();
+            for (k, v) in d {
+                new_doc.insert(k.clone(), substitute_var(v, var_name, value));
+            }
+            Bson::Document(new_doc)
+        }
+        Bson::Array(arr) => {
+            Bson::Array(arr.iter().map(|v| substitute_var(v, var_name, value)).collect())
+        }
+        other => other.clone(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -830,6 +931,18 @@ pub fn stage_facet(
 // $setWindowFields (simplified)
 // ---------------------------------------------------------------------------
 
+fn sort_keys_equal(sort_by: Option<&Document>, a: &Document, b: &Document) -> bool {
+    let Some(sb) = sort_by else { return true };
+    for (field, _) in sb {
+        let va = get_value(a, field);
+        let vb = get_value(b, field);
+        if compare_bson(va, vb) != std::cmp::Ordering::Equal {
+            return false;
+        }
+    }
+    true
+}
+
 pub fn stage_set_window_fields(
     docs: Vec<Document>,
     spec: &Bson,
@@ -877,13 +990,29 @@ pub fn stage_set_window_fields(
         for partition in &partitions {
             match op.as_str() {
                 "$rank" => {
-                    for (rank, &idx) in partition.iter().enumerate() {
-                        sorted_docs[idx].insert(field.clone(), Bson::Int32((rank + 1) as i32));
+                    let mut current_rank: i32 = 1;
+                    for (pos, &idx) in partition.iter().enumerate() {
+                        if pos > 0 {
+                            let prev_idx = partition[pos - 1];
+                            if !sort_keys_equal(sort_by, &sorted_docs[prev_idx], &sorted_docs[idx])
+                            {
+                                current_rank = (pos + 1) as i32;
+                            }
+                        }
+                        sorted_docs[idx].insert(field.clone(), Bson::Int32(current_rank));
                     }
                 }
                 "$denseRank" => {
-                    for (rank, &idx) in partition.iter().enumerate() {
-                        sorted_docs[idx].insert(field.clone(), Bson::Int32((rank + 1) as i32));
+                    let mut current_rank: i32 = 1;
+                    for (pos, &idx) in partition.iter().enumerate() {
+                        if pos > 0 {
+                            let prev_idx = partition[pos - 1];
+                            if !sort_keys_equal(sort_by, &sorted_docs[prev_idx], &sorted_docs[idx])
+                            {
+                                current_rank += 1;
+                            }
+                        }
+                        sorted_docs[idx].insert(field.clone(), Bson::Int32(current_rank));
                     }
                 }
                 "$sum" | "$avg" | "$min" | "$max" | "$count" => {
@@ -924,9 +1053,13 @@ pub fn stage_match_stream(input: DocStream, filter: &Bson) -> AggregationResult<
         .ok_or_else(|| AggregationError::InvalidStage("$match requires document".into()))?
         .clone();
 
-    Ok(Box::new(input.filter(move |result| match result {
-        Err(_) => true,
-        Ok(doc) => eval_query(doc, &filter_doc).unwrap_or(false),
+    Ok(Box::new(input.filter_map(move |result| match result {
+        Err(e) => Some(Err(e)),
+        Ok(doc) => match eval_query(&doc, &filter_doc) {
+            Ok(true) => Some(Ok(doc)),
+            Ok(false) => None,
+            Err(e) => Some(Err(AggregationError::Other(e))),
+        },
     })))
 }
 
@@ -948,20 +1081,26 @@ pub fn stage_project_stream(input: DocStream, projection: &Bson) -> AggregationR
     Ok(Box::new(input.map(move |result| {
         let doc = result?;
         let new_doc = if has_exclusion {
-            let mut nd = doc.clone();
+            let mut computed = Vec::new();
             for (field, value) in &proj_doc {
                 if field == "_id" {
                     continue;
                 }
-                match value {
-                    Bson::Int32(0) | Bson::Int64(0) | Bson::Boolean(false) => {
-                        nd.remove(field);
-                    }
-                    _ => {
-                        let val = evaluate_expression(&doc, value)?;
-                        nd.insert(field.clone(), val);
-                    }
+                if !matches!(value, Bson::Int32(0) | Bson::Int64(0) | Bson::Boolean(false)) {
+                    computed.push((field.clone(), evaluate_expression(&doc, value)?));
                 }
+            }
+            let mut nd = doc;
+            for (field, value) in &proj_doc {
+                if field == "_id" {
+                    continue;
+                }
+                if matches!(value, Bson::Int32(0) | Bson::Int64(0) | Bson::Boolean(false)) {
+                    nd.remove(field);
+                }
+            }
+            for (field, val) in computed {
+                nd.insert(field, val);
             }
             if id_excluded {
                 nd.remove("_id");
@@ -1066,17 +1205,26 @@ fn unwind_single_doc(
                     vec![]
                 }
             } else {
-                arr.into_iter()
-                    .enumerate()
-                    .map(|(i, item)| {
-                        let mut new_doc = doc.clone();
-                        let _ = set_value(&mut new_doc, path, item);
-                        if let Some(ref idx_field) = include_index {
-                            new_doc.insert(idx_field.clone(), Bson::Int64(i as i64));
-                        }
-                        Ok(new_doc)
-                    })
-                    .collect()
+                let len = arr.len();
+                let mut results = Vec::with_capacity(len);
+                let mut arr_iter = arr.into_iter().enumerate();
+                for (i, item) in arr_iter.by_ref().take(len - 1) {
+                    let mut new_doc = doc.clone();
+                    let _ = set_value(&mut new_doc, path, item);
+                    if let Some(ref idx_field) = include_index {
+                        new_doc.insert(idx_field.clone(), Bson::Int64(i as i64));
+                    }
+                    results.push(Ok(new_doc));
+                }
+                if let Some((i, item)) = arr_iter.next() {
+                    let mut last_doc = doc;
+                    let _ = set_value(&mut last_doc, path, item);
+                    if let Some(ref idx_field) = include_index {
+                        last_doc.insert(idx_field.clone(), Bson::Int64(i as i64));
+                    }
+                    results.push(Ok(last_doc));
+                }
+                results
             }
         }
         Some(Bson::Null) | None => {
@@ -1112,12 +1260,15 @@ pub fn stage_add_fields_stream(
 
     Ok(Box::new(input.map(move |result| {
         let doc = result?;
-        let mut new_doc = doc.clone();
-        for (field, expr) in &fields {
-            let val = evaluate_expression(&doc, expr)?;
-            let _ = set_value(&mut new_doc, field, val);
+        let evaluated: Vec<_> = fields
+            .iter()
+            .map(|(field, expr)| Ok((field.clone(), evaluate_expression(&doc, expr)?)))
+            .collect::<AggregationResult<Vec<_>>>()?;
+        let mut doc = doc;
+        for (field, val) in evaluated {
+            let _ = set_value(&mut doc, &field, val);
         }
-        Ok(new_doc)
+        Ok(doc)
     })))
 }
 
@@ -1447,10 +1598,175 @@ pub fn execute_merge(
 // $vectorSearch
 // ---------------------------------------------------------------------------
 
+/// Streaming `$vectorSearch` with top-k heap: scores documents as they arrive
+/// from the input stream without materializing the full input.
 pub fn stage_vector_search_stream(input: DocStream, spec: &Bson) -> AggregationResult<DocStream> {
-    let docs: Vec<Document> = input.collect::<Result<Vec<_>, _>>()?;
-    let results = super::vector::vector_search_stage(docs, spec)?;
+    use super::total_ord::TotalF32;
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+
+    let vs_doc = spec
+        .as_document()
+        .ok_or_else(|| AggregationError::InvalidStage("$vectorSearch requires document".into()))?;
+
+    let path = vs_doc
+        .get_str("path")
+        .map_err(|_| AggregationError::MissingField("$vectorSearch.path required".into()))?;
+    let query_vector_bson = vs_doc
+        .get_array("queryVector")
+        .map_err(|_| AggregationError::MissingField("$vectorSearch.queryVector required".into()))?;
+    let query_vec: Vec<f32> = query_vector_bson
+        .iter()
+        .filter_map(|v| v.as_f64().map(|f| f as f32))
+        .collect();
+    if query_vec.is_empty() {
+        return Err(AggregationError::InvalidStage(
+            "$vectorSearch.queryVector must be a non-empty numeric array".into(),
+        ));
+    }
+    let dim = query_vec.len();
+    let limit = vs_doc
+        .get("limit")
+        .and_then(|v| v.as_i64().or_else(|| v.as_i32().map(|i| i as i64)))
+        .unwrap_or(10) as usize;
+    let num_candidates = vs_doc
+        .get("numCandidates")
+        .and_then(|v| v.as_i64().or_else(|| v.as_i32().map(|i| i as i64)))
+        .map(|n| n as usize)
+        .unwrap_or(limit);
+    let heap_cap = num_candidates.max(limit);
+    let metric = vs_doc.get_str("metric").unwrap_or("cosine");
+    let score_field = vs_doc.get_str("scoreField").unwrap_or("_vectorScore");
+    let mql_filter = vs_doc.get_document("filter").ok().cloned();
+
+    let mut heap: BinaryHeap<Reverse<(TotalF32, usize)>> = BinaryHeap::with_capacity(heap_cap + 1);
+    let mut docs: Vec<Document> = Vec::new();
+
+    for result in input {
+        let doc = result?;
+
+        if let Some(ref filter) = mql_filter {
+            if !eval_query(&doc, filter).map_err(AggregationError::Other)? {
+                continue;
+            }
+        }
+
+        let Some(vec_val) = get_value(&doc, path) else {
+            continue;
+        };
+        let Bson::Array(arr) = vec_val else {
+            continue;
+        };
+        if arr.len() != dim {
+            continue;
+        }
+        let doc_vec: Vec<f32> = arr
+            .iter()
+            .filter_map(|v| v.as_f64().map(|f| f as f32))
+            .collect();
+        if doc_vec.len() != dim {
+            continue;
+        }
+
+        let score = match metric {
+            "cosine" => {
+                let na = super::vector_norm(&query_vec);
+                let nb = super::vector_norm(&doc_vec);
+                if na == 0.0 || nb == 0.0 {
+                    continue;
+                }
+                super::vector_dot(&query_vec, &doc_vec) / (na * nb)
+            }
+            "euclidean" => -super::vector_euclidean(&query_vec, &doc_vec),
+            "dotProduct" => super::vector_dot(&query_vec, &doc_vec),
+            _ => {
+                return Err(AggregationError::InvalidStage(format!(
+                    "unsupported vector metric: {metric}"
+                )));
+            }
+        };
+
+        let idx = docs.len();
+        docs.push(doc);
+        let key = TotalF32(score);
+        if heap.len() < heap_cap {
+            heap.push(Reverse((key, idx)));
+        } else if let Some(&Reverse((ref min_score, _))) = heap.peek() {
+            if key > *min_score {
+                heap.pop();
+                heap.push(Reverse((key, idx)));
+            }
+        }
+    }
+
+    let mut scored: Vec<(usize, f32)> = heap
+        .into_iter()
+        .map(|Reverse((s, idx))| (idx, s.0))
+        .collect();
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(limit);
+
+    let results: Vec<Document> = scored
+        .into_iter()
+        .map(|(idx, score)| {
+            let mut doc = docs[idx].clone();
+            doc.insert(score_field.to_string(), Bson::Double(score as f64));
+            doc
+        })
+        .collect();
+
     Ok(Box::new(results.into_iter().map(Ok)))
+}
+
+/// Index-aware `$vectorSearch`: tries the `IndexProvider` first, then falls
+/// back to brute-force.
+pub fn stage_vector_search_stream_indexed(
+    input: DocStream,
+    spec: &Bson,
+    idx_ctx: Option<&super::PipelineIndexCtx<'_>>,
+) -> AggregationResult<DocStream> {
+    if let (Some(ctx), Some(vs_doc)) = (idx_ctx, spec.as_document()) {
+        let path = vs_doc.get_str("path").unwrap_or("");
+        let query_vec: Vec<f32> = vs_doc
+            .get_array("queryVector")
+            .unwrap_or(&vec![])
+            .iter()
+            .filter_map(|v| v.as_f64().map(|f| f as f32))
+            .collect();
+        let limit = vs_doc
+            .get("limit")
+            .and_then(|v| v.as_i64().or_else(|| v.as_i32().map(|i| i as i64)))
+            .unwrap_or(10) as usize;
+        let num_candidates = vs_doc
+            .get("numCandidates")
+            .and_then(|v| v.as_i64().or_else(|| v.as_i32().map(|i| i as i64)))
+            .unwrap_or(limit as i64) as usize;
+        let metric = vs_doc.get_str("metric").unwrap_or("cosine");
+        let mql_filter = vs_doc.get_document("filter").ok();
+
+        if !path.is_empty() && !query_vec.is_empty() {
+            if let Ok(Some(scored)) = ctx.provider.vector_search(
+                ctx.source_collection,
+                path,
+                &query_vec,
+                limit,
+                num_candidates,
+                metric,
+                mql_filter,
+            ) {
+                let score_field = vs_doc.get_str("scoreField").unwrap_or("_vectorScore");
+                let results: Vec<Document> = scored
+                    .into_iter()
+                    .map(|(mut doc, score)| {
+                        doc.insert(score_field.to_string(), bson::Bson::Double(score as f64));
+                        doc
+                    })
+                    .collect();
+                return Ok(Box::new(results.into_iter().map(Ok)));
+            }
+        }
+    }
+    stage_vector_search_stream(input, spec)
 }
 
 // ---------------------------------------------------------------------------
@@ -1461,6 +1777,69 @@ pub fn stage_geo_near_stream(input: DocStream, spec: &Bson) -> AggregationResult
     let docs: Vec<Document> = input.collect::<Result<Vec<_>, _>>()?;
     let results = stage_geo_near(docs, spec)?;
     Ok(Box::new(results.into_iter().map(Ok)))
+}
+
+/// Index-aware `$geoNear`: tries the `IndexProvider` first for 2dsphere
+/// index acceleration, then falls back to brute-force.
+pub fn stage_geo_near_stream_indexed(
+    input: DocStream,
+    spec: &Bson,
+    idx_ctx: Option<&super::PipelineIndexCtx<'_>>,
+) -> AggregationResult<DocStream> {
+    let gn_doc = spec.as_document().ok_or_else(|| {
+        AggregationError::InvalidStage("$geoNear requires document".into())
+    })?;
+
+    if let Some(ctx) = idx_ctx {
+        let near = gn_doc.get("near");
+        let key = gn_doc.get_str("key").unwrap_or("location");
+        let distance_field = gn_doc.get_str("distanceField").unwrap_or("dist");
+        let distance_multiplier = gn_doc
+            .get("distanceMultiplier")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(1.0);
+        let include_locs = gn_doc.get_str("includeLocs").ok();
+        let max_distance = gn_doc
+            .get("maxDistance")
+            .and_then(|v| v.as_f64().or_else(|| v.as_i64().map(|i| i as f64)));
+        let limit = gn_doc
+            .get("limit")
+            .and_then(|v| v.as_i64().or_else(|| v.as_i32().map(|i| i as i64)))
+            .map(|l| l as usize);
+        let query_filter = gn_doc.get_document("query").ok();
+
+        if let Some((lon, lat)) = near.and_then(|n| crate::geo::extract_lon_lat(Some(n))) {
+            if let Ok(Some(scored)) = ctx.provider.geo_near_indexed(
+                ctx.source_collection,
+                key,
+                lon,
+                lat,
+                limit,
+                max_distance,
+                query_filter,
+            ) {
+                let results: Vec<Document> = scored
+                    .into_iter()
+                    .map(|(mut doc, dist)| {
+                        let _ = set_value(
+                            &mut doc,
+                            distance_field,
+                            Bson::Double(dist * distance_multiplier),
+                        );
+                        if let Some(locs_field) = include_locs {
+                            if let Some(loc_val) = get_value(&doc, key).cloned() {
+                                let _ = set_value(&mut doc, locs_field, loc_val);
+                            }
+                        }
+                        doc
+                    })
+                    .collect();
+                return Ok(Box::new(results.into_iter().map(Ok)));
+            }
+        }
+    }
+
+    stage_geo_near_stream(input, spec)
 }
 
 fn stage_geo_near(docs: Vec<Document>, spec: &Bson) -> AggregationResult<Vec<Document>> {

@@ -49,24 +49,36 @@ fn cmd_find(
     let limit_val = dict_get_i64(cmd, "limit", 0)?;
     let batch_size = dict_get_i64(cmd, "batchSize", 101)?;
     let single_batch = dict_get_bool(cmd, "singleBatch", false)?;
-    let plan = coll_py.bind(py).borrow().explain(py, &filter_dict, false)?;
-    let plan_bound = plan.bind(py);
-    let plan_str = plan_bound
-        .get_item("plan")?
-        .map(|v| v.extract::<String>().unwrap_or_default())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "COLLSCAN".to_string());
-    let plan_summary = if let Ok(Some(index_val)) = plan_bound.get_item("index") {
-        if !index_val.is_none() {
-            let idx_str: String = index_val.extract().unwrap_or_default();
-            format!("IXSCAN {{ {idx_str} }}")
+    // Only run explain when profiler is active (level > 0) to avoid
+    // doubling the query planning cost on every find.
+    let profiler_active = ctx
+        .borrow()
+        .profiler
+        .bind(py)
+        .getattr("level")
+        .and_then(|v| v.extract::<i32>())
+        .unwrap_or(0)
+        > 0;
+    if profiler_active {
+        let plan = coll_py.bind(py).borrow().explain(py, &filter_dict, false)?;
+        let plan_bound = plan.bind(py);
+        let plan_str = plan_bound
+            .get_item("plan")?
+            .map(|v| v.extract::<String>().unwrap_or_default())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "COLLSCAN".to_string());
+        let plan_summary = if let Ok(Some(index_val)) = plan_bound.get_item("index") {
+            if !index_val.is_none() {
+                let idx_str: String = index_val.extract().unwrap_or_default();
+                format!("IXSCAN {{ {idx_str} }}")
+            } else {
+                plan_str
+            }
         } else {
             plan_str
-        }
-    } else {
-        plan_str
-    };
-    ctx.borrow_mut().last_plan_summary = plan_summary;
+        };
+        ctx.borrow_mut().last_plan_summary = plan_summary;
+    }
 
     let docs = RedbLocalCollection::find_streaming_typed(
         coll_py.clone_ref(py),
@@ -74,12 +86,79 @@ fn cmd_find(
         Some(filter_dict.as_any()),
     )?;
 
-    let sorted: Bound<'_, PyAny> = if let Some(ref sort) = sort_spec {
-        if !sort.is_none() {
-            apply_sort_py(py, docs.bind(py).as_any(), sort)?
-        } else {
-            docs.into_bound(py).into_any()
+    let needs_sort = sort_spec
+        .as_ref()
+        .is_some_and(|s| !s.is_none());
+
+    let ns = format!("{db_name}.{coll_name}");
+
+    // Fast path: no sort required -- keep the iterator lazy and let
+    // CursorRegistry pull batches on demand.
+    if !needs_sort && !single_batch && batch_size > 0 {
+        let mut iter_any: Bound<'_, PyAny> = docs.into_bound(py).into_any();
+
+        // Apply skip lazily via islice(skip, None)
+        if skip_val > 0 {
+            let itertools = py.import("itertools")?;
+            iter_any = itertools.call_method1(
+                "islice",
+                (&iter_any, skip_val, py.None()),
+            )?;
         }
+        // Apply limit lazily via islice(limit)
+        if limit_val > 0 {
+            let itertools = py.import("itertools")?;
+            iter_any = itertools.call_method1(
+                "islice",
+                (&iter_any, limit_val),
+            )?;
+        }
+        // Apply projection lazily via map
+        if let Some(ref proj) = projection {
+            if !proj.is_none() {
+                let proj_unbound: Py<PyAny> = proj.clone().unbind();
+                let map_fn = pyo3::types::PyCFunction::new_closure(
+                    py,
+                    None,
+                    None,
+                    move |args: &Bound<'_, pyo3::types::PyTuple>,
+                          _kwargs: Option<&Bound<'_, PyDict>>|
+                          -> PyResult<Py<PyAny>> {
+                        let item = args.get_item(0)?;
+                        let py = item.py();
+                        let proj_bound = proj_unbound.bind(py);
+                        let result =
+                            apply_projection_single(py, &item, proj_bound)?;
+                        Ok(result.unbind())
+                    },
+                )?;
+                let builtins = py.import("builtins")?;
+                iter_any = builtins.call_method1("map", (map_fn, &iter_any))?;
+            }
+        }
+
+        let cr = ctx.borrow().cursor_registry.clone_ref(py);
+        let cr_reg = cr.bind(py).cast::<CursorRegistry>()?;
+        let (cursor_id, first_batch) = cr_reg
+            .borrow()
+            .create_from_iter(py, &ns, &iter_any, Some(batch_size as usize))?;
+
+        let cursor_dict = PyDict::new(py);
+        cursor_dict.set_item("id", bson_int64(py, cursor_id)?)?;
+        cursor_dict.set_item("ns", &ns)?;
+        cursor_dict.set_item("firstBatch", first_batch.bind(py))?;
+        let resp = PyDict::new(py);
+        resp.set_item("cursor", cursor_dict)?;
+        resp.set_item("ok", 1.0)?;
+        return Ok(resp.into_any().unbind());
+    }
+
+    // Materialized path: sort requires seeing all docs.
+    let sorted: Bound<'_, PyAny> = if needs_sort {
+        let spec = sort_spec.as_ref().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("sort_spec missing despite needs_sort")
+        })?;
+        apply_sort_py(py, docs.bind(py).as_any(), spec)?
     } else {
         docs.into_bound(py).into_any()
     };
@@ -122,8 +201,6 @@ fn cmd_find(
     };
 
     let result_bound = &projected;
-
-    let ns = format!("{db_name}.{coll_name}");
 
     if single_batch || batch_size <= 0 {
         let cursor_dict = PyDict::new(py);

@@ -17,19 +17,17 @@ serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
 rand = "0.8"
 wasm-bindgen = "0.2"
+hora = { version = "0.1.1", features = ["no_thread"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 redb = "2.3"
 parking_lot = "0.12.5"
 s2 = "0.0.13"
 roaring = { version = "0.10", optional = true }
-# hnswlib-rs — enable via `features = ["hnsw"]` when ready
-# hnswlib = { version = "0.10", optional = true }
 
 [features]
 default = []
 bitmap = ["roaring"]
-# hnsw = ["hnswlib"]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
@@ -51,6 +49,11 @@ web-sys = { version = "0.3", features = [
 
 [dev-dependencies]
 tempfile = "3"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "engine_bench"
+harness = false
 
 [package.metadata.wasm-pack.profile.release]
 # Rust's wasm32-unknown-unknown defaults to 6 post-MVP features that wasm-opt

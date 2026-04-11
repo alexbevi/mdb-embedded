@@ -106,6 +106,8 @@ pub enum ExecutionPlan {
         field: String,
         dimensions: usize,
         metric: String,
+        ef_construction: Option<usize>,
+        m: Option<usize>,
     },
     /// Bitmap lookup for low-cardinality equality / `$in` queries.
     BitmapScan { index_name: String, field: String },
@@ -447,12 +449,17 @@ fn plan_simple_query_with_projection(
                             .map(|v| v.metric.clone())
                             .unwrap_or_else(|| "cosine".to_string());
                         if dimensions > 0 {
+                            let ef_construction =
+                                vopts.as_ref().and_then(|v| v.ef_construction);
+                            let m = vopts.as_ref().and_then(|v| v.m);
                             let plan = QueryPlan {
                                 execution_plan: ExecutionPlan::VectorIndexSearch {
                                     index_name: index_spec.name.clone(),
                                     field: field.clone(),
                                     dimensions,
                                     metric,
+                                    ef_construction,
+                                    m,
                                 },
                                 estimated_cost: 30,
                                 reason: format!(

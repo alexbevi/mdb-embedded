@@ -21,7 +21,7 @@ use regex::Regex;
 pub fn tokenize(text: &str) -> Vec<String> {
     #[allow(clippy::expect_used)]
     static WORD_RE: std::sync::LazyLock<Regex> =
-        std::sync::LazyLock::new(|| Regex::new(r"\w+").expect("word regex"));
+        std::sync::LazyLock::new(|| Regex::new(r"\w+").expect("static \\w+ tokenizer regex must compile"));
     let lowered = text.to_lowercase();
     WORD_RE
         .find_iter(&lowered)

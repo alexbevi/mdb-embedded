@@ -442,27 +442,22 @@ fn bson_lte(a: Option<&Bson>, b: &Bson) -> bool {
 fn eval_in(value: Option<&Bson>, cond_val: &Bson) -> Result<bool, String> {
     let arr = as_array(cond_val)?;
 
+    // Pre-sort the condition array for O(log m) binary search per probe
+    // instead of O(m) linear scan.
+    let mut sorted: Vec<&Bson> = arr.iter().collect();
+    sorted.sort_by(|a, b| bson_cmp(a, b));
+
+    let contains = |val: &Bson| -> bool {
+        sorted
+            .binary_search_by(|probe| bson_cmp(probe, val))
+            .is_ok()
+    };
+
     match value {
         Some(Bson::Array(val_arr)) => {
-            // If value is array, check if ANY element is in the condition array
-            for item in val_arr {
-                for cond_item in arr {
-                    if bson_eq(Some(item), Some(cond_item)) {
-                        return Ok(true);
-                    }
-                }
-            }
-            Ok(false)
+            Ok(val_arr.iter().any(&contains))
         }
-        Some(val) => {
-            // Check if value is in the condition array
-            for cond_item in arr {
-                if bson_eq(Some(val), Some(cond_item)) {
-                    return Ok(true);
-                }
-            }
-            Ok(false)
-        }
+        Some(val) => Ok(contains(val)),
         None => Ok(false),
     }
 }
@@ -555,10 +550,9 @@ fn eval_regex(value: Option<&Bson>, cond_val: &Bson) -> Result<bool, String> {
         _ => return Err("$regex requires string pattern".to_string()),
     };
 
-    // Use regex crate
     match regex::Regex::new(pattern) {
         Ok(re) => Ok(re.is_match(value_str)),
-        Err(_) => Ok(false),
+        Err(e) => Err(format!("invalid regex pattern '{}': {}", pattern, e)),
     }
 }
 
@@ -718,7 +712,9 @@ fn eval_text(doc: &Document, condition: &Bson) -> Result<bool, String> {
 /// documents and arrays), join with spaces, and lowercase the result.
 fn extract_all_strings(doc: &Document) -> String {
     let mut buf = Vec::new();
-    collect_strings(&Bson::Document(doc.clone()), &mut buf);
+    for (_, v) in doc {
+        collect_strings(v, &mut buf);
+    }
     buf.join(" ").to_lowercase()
 }
 

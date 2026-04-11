@@ -51,19 +51,34 @@ use bson::{Bson, Document};
 /// assert_eq!(doc.get_i32("age").unwrap(), 31);
 /// ```
 pub fn apply_update(doc: &mut Document, update: &Document) -> Result<(), String> {
-    apply_update_impl(doc, update, false)
+    apply_update_impl(doc, update, false, &[])
 }
 
 /// Like `apply_update`, but when `is_upsert_insert` is true the `$setOnInsert`
 /// operator is also applied (it is skipped for normal updates).
 pub fn apply_update_for_upsert(doc: &mut Document, update: &Document) -> Result<(), String> {
-    apply_update_impl(doc, update, true)
+    apply_update_impl(doc, update, true, &[])
+}
+
+/// Apply a MongoDB update with `arrayFilters` support for positional `$[]` and
+/// `$[<identifier>]` operators in field paths.
+///
+/// Each element of `array_filters` is a filter document whose top-level keys
+/// are prefixed with the identifier name (e.g. `{"elem.status": "active"}`
+/// matches the `$[elem]` positional).
+pub fn apply_update_with_array_filters(
+    doc: &mut Document,
+    update: &Document,
+    array_filters: &[Document],
+) -> Result<(), String> {
+    apply_update_impl(doc, update, false, array_filters)
 }
 
 fn apply_update_impl(
     doc: &mut Document,
     update: &Document,
     is_upsert_insert: bool,
+    array_filters: &[Document],
 ) -> Result<(), String> {
     for key in update.keys() {
         if !key.starts_with('$') {
@@ -73,6 +88,8 @@ fn apply_update_impl(
             ));
         }
     }
+
+    let filter_map = parse_array_filters(array_filters);
 
     let operator_order = [
         "$set",
@@ -97,30 +114,236 @@ fn apply_update_impl(
                 _ => return Err(format!("{} must be a document", operator)),
             };
 
-            match *operator {
-                "$set" => apply_set(doc, spec_doc)?,
-                "$setOnInsert" => {
-                    if is_upsert_insert {
-                        apply_set(doc, spec_doc)?;
-                    }
+            if !filter_map.is_empty() && has_positional_paths(spec_doc) {
+                let (positional, normal) = split_positional_paths(spec_doc);
+                if !normal.is_empty() {
+                    apply_operator(doc, operator, &normal, is_upsert_insert)?;
                 }
-                "$unset" => apply_unset(doc, spec_doc)?,
-                "$inc" => apply_inc(doc, spec_doc)?,
-                "$mul" => apply_mul(doc, spec_doc)?,
-                "$min" => apply_min(doc, spec_doc)?,
-                "$max" => apply_max(doc, spec_doc)?,
-                "$currentDate" => apply_current_date(doc, spec_doc)?,
-                "$rename" => apply_rename(doc, spec_doc)?,
-                "$addToSet" => apply_add_to_set(doc, spec_doc)?,
-                "$push" => apply_push(doc, spec_doc)?,
-                "$pull" => apply_pull(doc, spec_doc)?,
-                "$pop" => apply_pop(doc, spec_doc)?,
-                _ => {}
+                for (path, value) in &positional {
+                    apply_positional_operator(doc, path, value, operator, &filter_map)?;
+                }
+            } else {
+                apply_operator(doc, operator, spec_doc, is_upsert_insert)?;
             }
         }
     }
 
     Ok(())
+}
+
+fn apply_operator(
+    doc: &mut Document,
+    operator: &str,
+    spec_doc: &Document,
+    is_upsert_insert: bool,
+) -> Result<(), String> {
+    match operator {
+        "$set" => apply_set(doc, spec_doc),
+        "$setOnInsert" => {
+            if is_upsert_insert {
+                apply_set(doc, spec_doc)
+            } else {
+                Ok(())
+            }
+        }
+        "$unset" => apply_unset(doc, spec_doc),
+        "$inc" => apply_inc(doc, spec_doc),
+        "$mul" => apply_mul(doc, spec_doc),
+        "$min" => apply_min(doc, spec_doc),
+        "$max" => apply_max(doc, spec_doc),
+        "$currentDate" => apply_current_date(doc, spec_doc),
+        "$rename" => apply_rename(doc, spec_doc),
+        "$addToSet" => apply_add_to_set(doc, spec_doc),
+        "$push" => apply_push(doc, spec_doc),
+        "$pull" => apply_pull(doc, spec_doc),
+        "$pop" => apply_pop(doc, spec_doc),
+        _ => Ok(()),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// arrayFilters / positional operator support
+// ---------------------------------------------------------------------------
+
+use std::collections::HashMap;
+
+/// Parse `arrayFilters` into a map of identifier -> filter document.
+///
+/// MongoDB `arrayFilters` use conventions like `[{"elem.status": "active"}]`
+/// where `elem` is derived from the first dot-segment of the filter's keys.
+fn parse_array_filters(filters: &[Document]) -> HashMap<String, Document> {
+    let mut map = HashMap::new();
+    for filter in filters {
+        if let Some(first_key) = filter.keys().next() {
+            let identifier = first_key.split('.').next().unwrap_or(first_key);
+            map.insert(identifier.to_string(), filter.clone());
+        }
+    }
+    map
+}
+
+fn has_positional_paths(spec: &Document) -> bool {
+    spec.keys().any(|k| k.contains("$["))
+}
+
+fn split_positional_paths(spec: &Document) -> (Vec<(String, Bson)>, Document) {
+    let mut positional = Vec::new();
+    let mut normal = Document::new();
+    for (key, value) in spec {
+        if key.contains("$[") {
+            positional.push((key.clone(), value.clone()));
+        } else {
+            normal.insert(key.clone(), value.clone());
+        }
+    }
+    (positional, normal)
+}
+
+/// Apply a single update operator to array elements matching positional filters.
+fn apply_positional_operator(
+    doc: &mut Document,
+    path: &str,
+    value: &Bson,
+    operator: &str,
+    filter_map: &HashMap<String, Document>,
+) -> Result<(), String> {
+    use crate::query::eval_query;
+
+    let parts: Vec<&str> = path.split('.').collect();
+    let pos_idx = parts
+        .iter()
+        .position(|p| p.starts_with("$["))
+        .ok_or_else(|| format!("no positional operator in path: {}", path))?;
+
+    let positional = parts[pos_idx];
+    let prefix = parts[..pos_idx].join(".");
+    let suffix = if pos_idx + 1 < parts.len() {
+        Some(parts[pos_idx + 1..].join("."))
+    } else {
+        None
+    };
+
+    let mut arr = match get_value(doc, &prefix) {
+        Some(Bson::Array(a)) => a.clone(),
+        _ => return Ok(()),
+    };
+
+    let is_all = positional == "$[]";
+    let identifier = if !is_all && positional.len() > 3 {
+        Some(&positional[2..positional.len() - 1])
+    } else {
+        None
+    };
+
+    let filter = identifier.and_then(|id| filter_map.get(id));
+
+    for elem in arr.iter_mut() {
+        let matches = if is_all {
+            true
+        } else if let Some(f) = filter {
+            if let Bson::Document(elem_doc) = elem {
+                let rewritten = rewrite_filter_for_element(f, identifier.unwrap_or(""));
+                eval_query(elem_doc, &rewritten).unwrap_or(false)
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if !matches {
+            continue;
+        }
+
+        match operator {
+            "$set" | "$setOnInsert" => {
+                if let Some(ref sfx) = suffix {
+                    if let Bson::Document(ref mut d) = elem {
+                        set_value(d, sfx, value.clone())?;
+                    }
+                } else {
+                    *elem = value.clone();
+                }
+            }
+            "$unset" => {
+                if let Some(ref sfx) = suffix {
+                    if let Bson::Document(ref mut d) = elem {
+                        unset_value(d, sfx)?;
+                    }
+                }
+            }
+            "$inc" => {
+                if let Some(ref sfx) = suffix {
+                    if let Bson::Document(ref mut d) = elem {
+                        let current = get_value(d, sfx);
+                        let new_val = add_numbers(current, value)?;
+                        set_value(d, sfx, new_val)?;
+                    }
+                } else {
+                    *elem = add_numbers(Some(elem), value)?;
+                }
+            }
+            "$mul" => {
+                if let Some(ref sfx) = suffix {
+                    if let Bson::Document(ref mut d) = elem {
+                        let current = get_value(d, sfx);
+                        let new_val = multiply_numbers(current, value)?;
+                        set_value(d, sfx, new_val)?;
+                    }
+                } else {
+                    *elem = multiply_numbers(Some(elem), value)?;
+                }
+            }
+            "$min" => {
+                if let Some(ref sfx) = suffix {
+                    if let Bson::Document(ref mut d) = elem {
+                        let should_set = match get_value(d, sfx) {
+                            Some(cur) => compare_numbers(value, cur) == Some(std::cmp::Ordering::Less),
+                            None => true,
+                        };
+                        if should_set {
+                            set_value(d, sfx, value.clone())?;
+                        }
+                    }
+                }
+            }
+            "$max" => {
+                if let Some(ref sfx) = suffix {
+                    if let Bson::Document(ref mut d) = elem {
+                        let should_set = match get_value(d, sfx) {
+                            Some(cur) => {
+                                compare_numbers(value, cur) == Some(std::cmp::Ordering::Greater)
+                            }
+                            None => true,
+                        };
+                        if should_set {
+                            set_value(d, sfx, value.clone())?;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    set_value(doc, &prefix, Bson::Array(arr))
+}
+
+/// Rewrite filter keys from `identifier.field` to just `field` so they can be
+/// evaluated directly against array elements.
+fn rewrite_filter_for_element(filter: &Document, identifier: &str) -> Document {
+    let prefix = format!("{}.", identifier);
+    let mut rewritten = Document::new();
+    for (key, value) in filter {
+        if key == identifier {
+            rewritten.insert(key.clone(), value.clone());
+        } else if let Some(rest) = key.strip_prefix(&prefix) {
+            rewritten.insert(rest.to_string(), value.clone());
+        } else {
+            rewritten.insert(key.clone(), value.clone());
+        }
+    }
+    rewritten
 }
 
 // Field operators

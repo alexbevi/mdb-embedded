@@ -263,7 +263,7 @@ mod vector_index_tests {
             doc! { "_id": "b", "v": [0.0, 1.0, 0.0] },
             doc! { "_id": "c", "v": [0.0, 0.0, 1.0] },
         ];
-        let idx = VectorIndex::build(&docs, "v", 3, "cosine");
+        let mut idx = VectorIndex::build(&docs, "v", 3, "cosine");
         assert_eq!(idx.len(), 3);
 
         let results = idx.search(&[1.0, 0.0, 0.0], 1);
@@ -293,7 +293,7 @@ mod vector_index_tests {
         idx.insert("doc2", &[0.4, 0.5, 0.6]);
 
         let bytes = idx.to_bytes();
-        let idx2 = VectorIndex::from_bytes(&bytes).expect("deserialize");
+        let mut idx2 = VectorIndex::from_bytes(&bytes).expect("deserialize");
         assert_eq!(idx2.len(), 2);
         assert_eq!(idx2.dimensions, 3);
         assert_eq!(idx2.metric, "dotProduct");
@@ -522,6 +522,8 @@ fn test_explain_covers_all_plan_types() {
             field: "v".into(),
             dimensions: 3,
             metric: "cosine".into(),
+            ef_construction: None,
+            m: None,
         },
         ExecutionPlan::BitmapScan {
             index_name: "x".into(),

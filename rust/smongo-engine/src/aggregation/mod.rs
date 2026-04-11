@@ -16,6 +16,8 @@ pub mod stages;
 pub mod total_ord;
 pub mod vector;
 
+pub(crate) use vector::{dot_product as vector_dot, euclidean_distance as vector_euclidean, norm as vector_norm};
+
 use bson::{Bson, Document};
 
 use crate::database::Database;
@@ -212,36 +214,107 @@ impl<B: StorageBackend> IndexProvider for DatabaseContext<'_, B> {
     fn vector_search(
         &self,
         collection: &str,
-        _field: &str,
-        _query_vec: &[f32],
-        _limit: usize,
+        field: &str,
+        query_vec: &[f32],
+        limit: usize,
         _num_candidates: usize,
-        _metric: &str,
-        _filter: Option<&Document>,
+        metric: &str,
+        filter: Option<&Document>,
     ) -> AggregationResult<Option<Vec<(Document, f32)>>> {
-        let _coll = self
+        let coll = self
             .db
             .collection(collection)
             .map_err(|e| AggregationError::Other(e.to_string()))?;
-        // TODO: check for VectorSearch index and use it
-        Ok(None)
+
+        let indexes = coll
+            .list_indexes()
+            .map_err(|e| AggregationError::Other(e.to_string()))?;
+        let has_vector_index = indexes.iter().any(|idx| {
+            matches!(
+                idx.options.index_type,
+                Some(crate::index::IndexType::VectorSearch)
+            )
+        });
+        if !has_vector_index {
+            return Ok(None);
+        }
+
+        // Fetch candidate documents (with optional MQL pre-filter)
+        let candidates = match filter {
+            Some(f) => coll
+                .find(f.clone())
+                .map_err(|e| AggregationError::Other(e.to_string()))?,
+            None => coll
+                .find(Document::new())
+                .map_err(|e| AggregationError::Other(e.to_string()))?,
+        };
+
+        // Score and rank using the same brute-force logic as the vector stage
+        // but returning (doc, score) pairs so the caller can inject scoreField.
+        let scored = vector::score_documents(&candidates, field, query_vec, limit, metric)?;
+        Ok(Some(scored))
     }
 
     fn geo_near_indexed(
         &self,
         collection: &str,
-        _field: &str,
-        _lon: f64,
-        _lat: f64,
-        _limit: Option<usize>,
-        _max_distance: Option<f64>,
-        _query: Option<&Document>,
+        field: &str,
+        lon: f64,
+        lat: f64,
+        limit: Option<usize>,
+        max_distance: Option<f64>,
+        query: Option<&Document>,
     ) -> AggregationResult<Option<Vec<(Document, f64)>>> {
-        let _coll = self
+        let coll = self
             .db
             .collection(collection)
             .map_err(|e| AggregationError::Other(e.to_string()))?;
-        Ok(None)
+
+        let indexes = coll
+            .list_indexes()
+            .map_err(|e| AggregationError::Other(e.to_string()))?;
+
+        let geo_index = indexes.iter().find(|idx| {
+            crate::index::twodsphere_field(&idx.keys)
+                .as_deref()
+                == Some(field)
+        });
+
+        let Some(idx) = geo_index else {
+            return Ok(None);
+        };
+
+        let plan = crate::planner::ExecutionPlan::GeoNear {
+            index_name: idx.name.clone(),
+            field: field.to_string(),
+            lon,
+            lat,
+            max_distance_m: max_distance,
+            min_distance_m: None,
+        };
+
+        let filter = query.cloned().unwrap_or_default();
+        let docs = coll
+            .execute_plan(&plan, &filter)
+            .map_err(|e| AggregationError::Other(e.to_string()))?;
+
+        let mut scored: Vec<(Document, f64)> = docs
+            .into_iter()
+            .filter_map(|doc| {
+                let val = crate::paths::get_value(&doc, field);
+                let (dlon, dlat) = crate::geo::extract_lon_lat(val)?;
+                let dist = crate::geo::haversine_meters(lon, lat, dlon, dlat);
+                Some((doc, dist))
+            })
+            .collect();
+
+        scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        if let Some(lim) = limit {
+            scored.truncate(lim);
+        }
+
+        Ok(Some(scored))
     }
 
     fn sorted_scan(
@@ -280,12 +353,40 @@ impl<B: StorageBackend> IndexProvider for DatabaseContext<'_, B> {
 
     fn text_search(
         &self,
-        _collection: &str,
-        _search_str: &str,
-        _filter: Option<&Document>,
+        collection: &str,
+        search_str: &str,
+        filter: Option<&Document>,
     ) -> AggregationResult<Option<Vec<Document>>> {
-        // TODO: check for Text index and use inverted index
-        Ok(None)
+        let text_filter = bson::doc! { "$text": { "$search": search_str } };
+        let combined = match filter {
+            Some(f) => {
+                let mut merged = f.clone();
+                if let Some(tv) = text_filter.get("$text") {
+                    merged.insert("$text".to_string(), tv.clone());
+                }
+                merged
+            }
+            None => text_filter,
+        };
+        let coll = self
+            .db
+            .collection(collection)
+            .map_err(|e| AggregationError::Other(e.to_string()))?;
+        let indexes = coll
+            .list_indexes()
+            .map_err(|e| AggregationError::Other(e.to_string()))?;
+        let plan = crate::planner::plan_query(&combined, &indexes);
+        if matches!(
+            plan.execution_plan,
+            crate::planner::ExecutionPlan::TextIndexScan { .. }
+        ) {
+            let docs = coll
+                .execute_plan(&plan.execution_plan, &combined)
+                .map_err(|e| AggregationError::Other(e.to_string()))?;
+            Ok(Some(docs))
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -347,6 +448,16 @@ fn merge_match_filters(a: &Document, b: &Document) -> Document {
     }
 }
 
+/// Optional context for index-accelerated aggregation stages.
+///
+/// When passed through the pipeline dispatch, stages like `$sort`+`$limit`
+/// and `$vectorSearch` can probe for a matching index and short-circuit the
+/// brute-force path.
+pub struct PipelineIndexCtx<'a> {
+    pub provider: &'a dyn IndexProvider,
+    pub source_collection: &'a str,
+}
+
 /// Execute an aggregation pipeline without cross-collection support.
 ///
 /// Internally delegates to the streaming pipeline and collects results.
@@ -375,11 +486,74 @@ pub fn aggregate_with_db<B: StorageBackend>(
     pipeline: &[Document],
     ctx: &DatabaseContext<'_, B>,
 ) -> AggregationResult<Vec<Document>> {
+    aggregate_with_db_collection(docs, pipeline, ctx, None)
+}
+
+/// Like [`aggregate_with_db`] but also provides the source collection name
+/// so that index-backed optimisations (`$sort`+`$limit`, `$vectorSearch`,
+/// `$text`) can probe for matching indexes.
+pub fn aggregate_with_db_collection<B: StorageBackend>(
+    docs: Vec<Document>,
+    pipeline: &[Document],
+    ctx: &DatabaseContext<'_, B>,
+    source_collection: Option<&str>,
+) -> AggregationResult<Vec<Document>> {
     let resolver: &dyn CollectionResolver = ctx;
+    let idx_ctx = source_collection.map(|name| PipelineIndexCtx {
+        provider: ctx as &dyn IndexProvider,
+        source_collection: name,
+    });
 
     let (main_pipeline, write_stage) = split_write_stage(pipeline);
 
-    let stream = aggregate_stream_with_resolver(docs, &main_pipeline, Some(resolver))?;
+    let stream = aggregate_stream_full(
+        docs,
+        &main_pipeline,
+        Some(resolver),
+        idx_ctx.as_ref(),
+    )?;
+    let results: Vec<Document> = stream.collect::<AggregationResult<Vec<_>>>()?;
+
+    if let Some(stage) = write_stage {
+        let (stage_name, stage_value) = stage
+            .iter()
+            .next()
+            .ok_or_else(|| AggregationError::InvalidStage("empty write stage".into()))?;
+        match stage_name.as_str() {
+            "$out" => stages::execute_out(stage_value, &results, ctx)?,
+            "$merge" => stages::execute_merge(stage_value, &results, ctx)?,
+            _ => {}
+        }
+    }
+
+    Ok(results)
+}
+
+/// Like [`aggregate_with_db_collection`] but accepts a lazy iterator of
+/// results instead of a pre-materialized `Vec<Document>`.
+pub fn aggregate_with_db_collection_streaming<B: StorageBackend, I>(
+    docs: I,
+    pipeline: &[Document],
+    ctx: &DatabaseContext<'_, B>,
+    source_collection: Option<&str>,
+) -> AggregationResult<Vec<Document>>
+where
+    I: Iterator<Item = crate::collection::CollectionResult<Document>> + 'static,
+{
+    let resolver: &dyn CollectionResolver = ctx;
+    let idx_ctx = source_collection.map(|name| PipelineIndexCtx {
+        provider: ctx as &dyn IndexProvider,
+        source_collection: name,
+    });
+
+    let (main_pipeline, write_stage) = split_write_stage(pipeline);
+
+    let stream = aggregate_stream_full_from_iter(
+        docs,
+        &main_pipeline,
+        Some(resolver),
+        idx_ctx.as_ref(),
+    )?;
     let results: Vec<Document> = stream.collect::<AggregationResult<Vec<_>>>()?;
 
     if let Some(stage) = write_stage {
@@ -439,18 +613,69 @@ pub fn aggregate_stream_with_resolver(
     pipeline: &[Document],
     resolver: Option<&dyn CollectionResolver>,
 ) -> AggregationResult<DocStream> {
-    let mut stream: DocStream = Box::new(docs.into_iter().map(Ok));
+    aggregate_stream_full(docs, pipeline, resolver, None)
+}
+
+/// Streaming pipeline with full context: cross-collection resolver **and**
+/// index provider for index-backed stage optimisations.
+pub fn aggregate_stream_full(
+    docs: Vec<Document>,
+    pipeline: &[Document],
+    resolver: Option<&dyn CollectionResolver>,
+    idx_ctx: Option<&PipelineIndexCtx<'_>>,
+) -> AggregationResult<DocStream> {
+    let stream: DocStream = Box::new(docs.into_iter().map(Ok));
+    run_pipeline_stages(stream, pipeline, resolver, idx_ctx)
+}
+
+/// Like [`aggregate_stream_full`] but accepts a lazy iterator of documents
+/// instead of a pre-materialized `Vec`.  The input is only consumed as
+/// downstream stages demand, so a `$match` → `$limit` pipeline over a lazy
+/// cursor will short-circuit without reading the entire collection.
+pub fn aggregate_stream_full_from_iter<I>(
+    docs: I,
+    pipeline: &[Document],
+    resolver: Option<&dyn CollectionResolver>,
+    idx_ctx: Option<&PipelineIndexCtx<'_>>,
+) -> AggregationResult<DocStream>
+where
+    I: Iterator<Item = crate::collection::CollectionResult<Document>> + 'static,
+{
+    let stream: DocStream = Box::new(
+        docs.map(|r| r.map_err(|e| AggregationError::Other(e.to_string()))),
+    );
+    run_pipeline_stages(stream, pipeline, resolver, idx_ctx)
+}
+
+fn run_pipeline_stages(
+    initial: DocStream,
+    pipeline: &[Document],
+    resolver: Option<&dyn CollectionResolver>,
+    idx_ctx: Option<&PipelineIndexCtx<'_>>,
+) -> AggregationResult<DocStream> {
+    let mut stream = initial;
     let mut i = 0;
 
     while i < pipeline.len() {
         let stage = &pipeline[i];
 
-        // Peek ahead: $sort followed by $limit → fused stage.
+        // Peek ahead: $sort followed by $limit → try index-backed sorted scan
+        // first, falling back to the in-memory BinaryHeap top-k pass.
         if i + 1 < pipeline.len() {
             if let (Some((sn, sv)), Some((ln, lv))) =
                 (stage.iter().next(), pipeline[i + 1].iter().next())
             {
                 if sn == "$sort" && ln == "$limit" {
+                    if let Some(ctx) = idx_ctx {
+                        if let Some(sorted) = try_index_sort_limit(ctx, sv, lv)? {
+                            // The index produced pre-sorted results; skip both stages
+                            // and drop the input stream (already consumed by the index).
+                            drop(stream);
+                            stream = Box::new(sorted.into_iter().map(Ok));
+                            i += 2;
+                            continue;
+                        }
+                    }
                     stream = stages::stage_sort_limit_stream(stream, sv, lv)?;
                     i += 2;
                     continue;
@@ -458,17 +683,39 @@ pub fn aggregate_stream_with_resolver(
             }
         }
 
-        stream = execute_stage_stream(stream, stage, resolver)?;
+        stream = execute_stage_stream(stream, stage, resolver, idx_ctx)?;
         i += 1;
     }
 
     Ok(stream)
 }
 
+/// Attempt a `sorted_scan` through the index provider for a $sort + $limit pair.
+fn try_index_sort_limit(
+    ctx: &PipelineIndexCtx<'_>,
+    sort_spec: &Bson,
+    limit_spec: &Bson,
+) -> AggregationResult<Option<Vec<Document>>> {
+    let sort_doc = match sort_spec.as_document() {
+        Some(d) => d,
+        None => return Ok(None),
+    };
+    let limit = limit_spec
+        .as_i64()
+        .or_else(|| limit_spec.as_i32().map(|i| i as i64))
+        .unwrap_or(0) as usize;
+    if limit == 0 {
+        return Ok(None);
+    }
+    ctx.provider
+        .sorted_scan(ctx.source_collection, sort_doc, limit, None)
+}
+
 fn execute_stage_stream(
     input: DocStream,
     stage: &Document,
     resolver: Option<&dyn CollectionResolver>,
+    idx_ctx: Option<&PipelineIndexCtx<'_>>,
 ) -> AggregationResult<DocStream> {
     let (stage_name, stage_value) = stage
         .iter()
@@ -499,8 +746,10 @@ fn execute_stage_stream(
         "$unionWith" => stages::stage_union_with_stream(input, stage_value, resolver),
         "$out" => stages::stage_out_stream(input, stage_value),
         "$merge" => stages::stage_merge_stream(input, stage_value),
-        "$vectorSearch" => stages::stage_vector_search_stream(input, stage_value),
-        "$geoNear" => stages::stage_geo_near_stream(input, stage_value),
+        "$vectorSearch" => {
+            stages::stage_vector_search_stream_indexed(input, stage_value, idx_ctx)
+        }
+        "$geoNear" => stages::stage_geo_near_stream_indexed(input, stage_value, idx_ctx),
         _ => Err(AggregationError::InvalidStage(format!(
             "Unknown stage: {}",
             stage_name
@@ -563,6 +812,19 @@ pub fn compare_bson(a: Option<&Bson>, b: Option<&Bson>) -> std::cmp::Ordering {
                 _ => Ordering::Equal,
             }
         }
+    }
+}
+
+/// Compare two BSON values following MongoDB's comparison order, with
+/// optional collation applied to string comparisons.
+pub fn compare_bson_with_collation(
+    a: Option<&Bson>,
+    b: Option<&Bson>,
+    collation: Option<&crate::collation::Collation>,
+) -> std::cmp::Ordering {
+    match collation {
+        Some(c) => c.compare_bson(a, b),
+        None => compare_bson(a, b),
     }
 }
 

@@ -37,6 +37,32 @@ def _cmd_find(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -> Re
     if plan.get("index"):
         ctx.last_plan_summary = f"IXSCAN {{ {plan['index']} }}"
 
+    ns = f"{db_name}.{coll_name}"
+
+    # Fast path: no sort -- keep the iterator lazy, apply skip/limit/projection
+    # as iterator wrappers, and register via create_from_iter.
+    if not sort_spec and not single_batch and batch_size > 0:
+        import itertools
+
+        raw_iter = coll.find_streaming(filter_doc)
+        it: Any = raw_iter
+        if skip_val:
+            it = itertools.islice(it, skip_val, None)
+        if limit_val:
+            it = itertools.islice(it, limit_val)
+        if projection:
+            norm_proj = normalize_inbound(projection)
+            it = (_apply_projection_single(normalize_outbound(d), norm_proj) for d in it)
+        else:
+            it = (normalize_outbound(d) for d in it)
+
+        cursor_id, first_batch = ctx.cursor_registry.create_from_iter(ns, it, batch_size)
+        return {
+            "cursor": {"id": Int64(cursor_id), "ns": ns, "firstBatch": first_batch},
+            "ok": 1.0,
+        }
+
+    # Materialized path: sort requires seeing all docs.
     docs = coll.find_streaming(filter_doc)
     coll_getter = lambda name: ctx.get_db(db_name).get_collection(name)
     cursor = Cursor(docs, collection_getter=coll_getter)
@@ -52,7 +78,6 @@ def _cmd_find(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -> Re
         cursor = cursor.projection(normalize_inbound(projection))
 
     result_docs = normalize_outbound_docs(cursor.to_list())
-    ns = f"{db_name}.{coll_name}"
 
     if single_batch or batch_size <= 0:
         return {"cursor": {"id": Int64(0), "ns": ns, "firstBatch": result_docs}, "ok": 1.0}

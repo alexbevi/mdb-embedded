@@ -363,8 +363,8 @@ class RedbCollection:
         return self._rust_coll.find(query, projection)
 
     def find_streaming(self, query: dict[str, Any] | None = None) -> Iterator[dict[str, Any]]:
-        """Iterate matches for *query* (materialized via :meth:`find`; lazy streaming TBD)."""
-        return iter(self.find(query or {}))
+        """Lazily iterate matches for *query* via the engine's streaming cursor."""
+        return self._rust_coll.find_iter(query or {})
 
     def get_all(self) -> list[dict[str, Any]]:
         """Return all documents in the collection (same shape as legacy storage helpers)."""

@@ -119,6 +119,33 @@ class Cursor:
         self._resolved = None
         return self
 
+    # ── PyMongo-compatible chain stubs ────────────────────────────────
+    # These exist so that code written for PyMongo can run against smongo
+    # without AttributeError.  Some are no-ops for the embedded engine;
+    # others store the value for potential future use.
+
+    def hint(self, index: Any) -> Cursor:
+        """Store an index hint (reserved for future planner integration)."""
+        self._hint = index
+        return self
+
+    def batch_size(self, size: int) -> Cursor:
+        """No-op for the embedded engine (all docs are local)."""
+        return self
+
+    def collation(self, collation: Any) -> Cursor:
+        """Store collation settings (reserved for future sort integration)."""
+        self._collation = collation
+        return self
+
+    def comment(self, text: str) -> Cursor:
+        """No-op for the embedded engine (no profiler to log to)."""
+        return self
+
+    def max_time_ms(self, ms: int) -> Cursor:
+        """No-op for the embedded engine (no server-side timeout)."""
+        return self
+
     # ── Evaluation ───────────────────────────────────────────────────
 
     def _resolve(self) -> list[Document]:

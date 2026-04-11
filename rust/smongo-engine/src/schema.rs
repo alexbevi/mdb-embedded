@@ -55,7 +55,18 @@ pub fn validate_document(doc: &Document, schema: &Document) -> Result<(), Valida
     if schema.is_empty() {
         return Ok(());
     }
-    validate_object(&Bson::Document(doc.clone()), schema, "", 0)
+    if let Some(type_spec) = schema.get("bsonType").or_else(|| schema.get("type")) {
+        if !check_bson_type_name("object", type_spec) {
+            return Err(ValidationError {
+                path: String::new(),
+                message: format!(
+                    "Expected type {}, got \"object\"",
+                    type_spec_label(type_spec)
+                ),
+            });
+        }
+    }
+    validate_doc_fields(doc, schema, "", 0)
 }
 
 fn join_path(base: &str, field: &str) -> String {
@@ -85,6 +96,16 @@ fn check_bson_type(value: &Bson, type_name: &str) -> bool {
         "regex" => matches!(value, Bson::RegularExpression(_)),
         "binData" => matches!(value, Bson::Binary(_)),
         _ => false,
+    }
+}
+
+fn check_bson_type_name(actual_type: &str, type_spec: &Bson) -> bool {
+    match type_spec {
+        Bson::String(s) => s == actual_type,
+        Bson::Array(arr) => arr
+            .iter()
+            .any(|t| t.as_str() == Some(actual_type)),
+        _ => true,
     }
 }
 
@@ -172,6 +193,15 @@ fn validate_object(
         _ => return validate_scalar(value, schema, path),
     };
 
+    validate_doc_fields(doc, schema, path, depth)
+}
+
+fn validate_doc_fields(
+    doc: &Document,
+    schema: &Document,
+    path: &str,
+    depth: usize,
+) -> Result<(), ValidationError> {
     if let Some(Bson::Array(required)) = schema.get("required") {
         for field in required {
             if let Bson::String(name) = field {

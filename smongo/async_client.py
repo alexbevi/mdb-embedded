@@ -38,29 +38,54 @@ from .client import (
 )
 from .storage.results import DeleteResult, InsertResult, UpdateResult
 
+_SENTINEL = object()
+
 
 class AsyncCursor:
-    """Async-iterable cursor wrapping a synchronous result set."""
+    """Async-iterable cursor wrapping a synchronous result set or lazy iterator.
 
-    def __init__(self, docs: list[Document]) -> None:
-        self._docs = docs
+    When backed by a list, iteration is synchronous and fast.  When backed
+    by a sync iterator (e.g. a Rust ``FindIterator``), each ``__anext__``
+    call offloads the blocking ``next()`` to a thread so the event loop
+    stays responsive.
+    """
+
+    def __init__(self, docs: list[Document] | Any) -> None:
+        if isinstance(docs, list):
+            self._list: list[Document] | None = docs
+            self._iter: Any = None
+        else:
+            self._list = None
+            self._iter = iter(docs)
         self._index = 0
 
     def __aiter__(self) -> AsyncCursor:
         return self
 
     async def __anext__(self) -> Document:
-        if self._index >= len(self._docs):
+        if self._list is not None:
+            if self._index >= len(self._list):
+                raise StopAsyncIteration
+            doc = self._list[self._index]
+            self._index += 1
+            return doc
+        doc = await asyncio.to_thread(next, self._iter, _SENTINEL)
+        if doc is _SENTINEL:
             raise StopAsyncIteration
-        doc = self._docs[self._index]
-        self._index += 1
         return doc
 
     def to_list(self) -> list[Document]:
-        return list(self._docs)
+        if self._list is not None:
+            return list(self._list)
+        return list(self._iter)
 
     def __len__(self) -> int:
-        return len(self._docs)
+        if self._list is not None:
+            return len(self._list)
+        materialized = list(self._iter)
+        self._list = materialized
+        self._iter = None
+        return len(materialized)
 
 
 class AsyncChangeStream:
@@ -113,8 +138,7 @@ class AsyncCollection:
         self, query: Filter | None = None, projection: Projection | None = None
     ) -> AsyncCursor:
         result = await asyncio.to_thread(self._sync.find, query, projection)
-        docs = list(result)
-        return AsyncCursor(docs)
+        return AsyncCursor(result)
 
     async def find_one(
         self, query: Filter | None = None, projection: Projection | None = None
@@ -134,11 +158,16 @@ class AsyncCollection:
         if memory_limit_bytes is not None:
             kwargs["memory_limit_bytes"] = memory_limit_bytes
         result = await asyncio.to_thread(lambda: self._sync.aggregate(pipeline, **kwargs))
-        docs = list(result)
-        return AsyncCursor(docs)
+        return AsyncCursor(result)
 
     async def count_documents(self, query: Filter | None = None) -> int:
         return await asyncio.to_thread(self._sync.count_documents, query)
+
+    async def distinct(self, key: str, filter: Filter | None = None) -> list[Any]:
+        return await asyncio.to_thread(self._sync.distinct, key, filter)
+
+    async def estimated_document_count(self) -> int:
+        return await asyncio.to_thread(self._sync.estimated_document_count)
 
     async def explain(self, query: Filter | None = None) -> dict[str, Any]:
         return await asyncio.to_thread(self._sync.explain, query)
@@ -177,6 +206,14 @@ class AsyncCollection:
 
     async def delete_many(self, query: Filter) -> DeleteResult | Any:
         return await asyncio.to_thread(self._sync.delete_many, query)
+
+    async def replace_one(self, query: Filter, replacement: Document, upsert: bool = False) -> Any:
+        return await asyncio.to_thread(self._sync.replace_one, query, replacement, upsert)
+
+    # -- admin ---------------------------------------------------------
+
+    async def drop(self) -> None:
+        await asyncio.to_thread(self._sync.drop)
 
     # -- find_one_and_* ------------------------------------------------
 
@@ -278,6 +315,15 @@ class AsyncMongoClient:
     def sync_client(self) -> MongoClient:
         """Access the underlying synchronous client for advanced use."""
         return self._sync
+
+    async def list_database_names(self) -> list[str]:
+        return await asyncio.to_thread(self._sync.list_database_names)
+
+    async def drop_database(self, name: str) -> None:
+        await asyncio.to_thread(self._sync.drop_database, name)
+
+    async def server_info(self) -> dict[str, Any]:
+        return await asyncio.to_thread(self._sync.server_info)
 
     async def close(self) -> None:
         await asyncio.to_thread(self._sync.close)

@@ -84,6 +84,7 @@ fn register_storage(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<redb_client::RedbLocalClient>()?;
     m.add_class::<redb_client::RedbLocalDB>()?;
     m.add_class::<redb_client::RedbLocalCollection>()?;
+    m.add_class::<redb_client::FindIterator>()?;
     m.add(
         "DuplicateKeyError",
         m.py().get_type::<index_helpers::DuplicateKeyError>(),

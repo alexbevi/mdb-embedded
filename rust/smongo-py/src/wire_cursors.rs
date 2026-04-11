@@ -16,11 +16,20 @@ pub const MAX_BSON_OBJECT_SIZE: i64 = 16 * 1024 * 1024;
 pub const MAX_MESSAGE_SIZE: i64 = 48 * 1024 * 1024;
 pub const MAX_WRITE_BATCH_SIZE: i64 = 100_000;
 
+enum CursorDocs {
+    Materialized {
+        docs: Py<PyList>,
+        docs_len: usize,
+        offset: usize,
+    },
+    Streaming {
+        iter: Py<PyAny>,
+    },
+}
+
 struct CursorState {
     _ns: String,
-    docs: Py<PyList>,
-    docs_len: usize,
-    offset: usize,
+    cursor_docs: CursorDocs,
     batch_size: usize,
     change_stream: Option<Py<PyAny>>,
     _tailable: bool,
@@ -100,6 +109,26 @@ pub struct CursorRegistry {
     reaper_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
+/// Pull up to `count` items from a Python iterator, returning them as a PyList.
+/// Returns `(batch, exhausted)`.
+fn pull_batch<'py>(
+    py: Python<'py>,
+    iter: &Bound<'py, PyAny>,
+    count: usize,
+) -> PyResult<(Bound<'py, PyList>, bool)> {
+    let batch = PyList::empty(py);
+    for _ in 0..count {
+        match iter.call_method0("__next__") {
+            Ok(item) => batch.append(item)?,
+            Err(e) if e.is_instance_of::<pyo3::exceptions::PyStopIteration>(py) => {
+                return Ok((batch, true));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok((batch, false))
+}
+
 impl CursorRegistry {
     pub(crate) fn create(
         &self,
@@ -128,9 +157,56 @@ impl CursorRegistry {
             cursor_id,
             CursorState {
                 _ns: ns.to_string(),
-                docs: docs.clone().unbind(),
-                docs_len: total,
-                offset: bs,
+                cursor_docs: CursorDocs::Materialized {
+                    docs: docs.clone().unbind(),
+                    docs_len: total,
+                    offset: bs,
+                },
+                batch_size: bs,
+                change_stream: None,
+                _tailable: false,
+                _created_at: Instant::now(),
+                last_accessed: Instant::now(),
+            },
+        );
+
+        Ok((cursor_id, first_batch.unbind()))
+    }
+
+    /// Create a cursor backed by a lazy Python iterator.
+    ///
+    /// The first batch is pulled immediately; subsequent batches are pulled
+    /// on-demand via `get_more`.  The iterator is stored in the registry
+    /// and advanced only as the client requests more results.
+    pub(crate) fn create_from_iter(
+        &self,
+        py: Python<'_>,
+        ns: &str,
+        iter: &Bound<'_, PyAny>,
+        batch_size: Option<usize>,
+    ) -> PyResult<(i64, Py<PyList>)> {
+        let mut inner = self.inner.lock();
+        let bs = batch_size
+            .filter(|&b| b > 0)
+            .unwrap_or(inner.default_batch_size);
+
+        let (first_batch, exhausted) = pull_batch(py, iter, bs)?;
+
+        if exhausted {
+            return Ok((0, first_batch.unbind()));
+        }
+
+        if inner.cursors.len() >= inner.max_cursors {
+            inner.evict_oldest();
+        }
+        let cursor_id = inner.generate_id();
+        inner.cursors.insert(
+            cursor_id,
+            CursorState {
+                _ns: ns.to_string(),
+                cursor_docs: CursorDocs::Streaming {
+                    iter: iter.clone().unbind(),
+                },
                 batch_size: bs,
                 change_stream: None,
                 _tailable: false,
@@ -156,18 +232,36 @@ impl CursorRegistry {
         state.last_accessed = Instant::now();
 
         let bs = batch_size.unwrap_or(state.batch_size);
-        let start = state.offset;
-        let end = (start + bs).min(state.docs_len);
-        let docs_bound = state.docs.bind(py);
-        let batch: Bound<'_, PyList> = docs_bound.get_slice(start, end);
-        state.offset = end;
 
-        if end >= state.docs_len {
-            inner.cursors.remove(&cursor_id);
-            return Ok((Some(0), Some(batch.unbind())));
+        match &mut state.cursor_docs {
+            CursorDocs::Materialized {
+                docs,
+                docs_len,
+                offset,
+            } => {
+                let start = *offset;
+                let end = (start + bs).min(*docs_len);
+                let docs_bound = docs.bind(py);
+                let batch: Bound<'_, PyList> = docs_bound.get_slice(start, end);
+                *offset = end;
+
+                if end >= *docs_len {
+                    inner.cursors.remove(&cursor_id);
+                    return Ok((Some(0), Some(batch.unbind())));
+                }
+
+                Ok((Some(cursor_id), Some(batch.unbind())))
+            }
+            CursorDocs::Streaming { iter } => {
+                let iter_bound = iter.bind(py);
+                let (batch, exhausted) = pull_batch(py, iter_bound.as_any(), bs)?;
+                if exhausted {
+                    inner.cursors.remove(&cursor_id);
+                    return Ok((Some(0), Some(batch.unbind())));
+                }
+                Ok((Some(cursor_id), Some(batch.unbind())))
+            }
         }
-
-        Ok((Some(cursor_id), Some(batch.unbind())))
     }
 
     pub(crate) fn is_tailable(&self, cursor_id: i64) -> bool {
@@ -206,9 +300,11 @@ impl CursorRegistry {
             cursor_id,
             CursorState {
                 _ns: ns.to_string(),
-                docs: empty_list.unbind(),
-                docs_len: 0,
-                offset: 0,
+                cursor_docs: CursorDocs::Materialized {
+                    docs: empty_list.unbind(),
+                    docs_len: 0,
+                    offset: 0,
+                },
                 batch_size: bs,
                 change_stream: Some(stream),
                 _tailable: true,
@@ -348,6 +444,17 @@ impl CursorRegistry {
         batch_size: Option<usize>,
     ) -> PyResult<(i64, Py<PyList>)> {
         self.create(py, ns, docs, batch_size)
+    }
+
+    #[pyo3(name = "create_from_iter", signature = (ns, iter, batch_size=None))]
+    fn create_from_iter_py(
+        &self,
+        py: Python<'_>,
+        ns: &str,
+        iter: &Bound<'_, PyAny>,
+        batch_size: Option<usize>,
+    ) -> PyResult<(i64, Py<PyList>)> {
+        self.create_from_iter(py, ns, iter, batch_size)
     }
 
     #[pyo3(name = "get_more", signature = (cursor_id, batch_size=None))]
