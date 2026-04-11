@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
@@ -13,7 +14,7 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use crate::wire_context::ConnectionContext;
+use crate::wire_context::{CachedImports, ConnectionContext};
 
 // ── Opcounters ──────────────────────────────────────────────────────
 
@@ -72,6 +73,11 @@ pub fn next_timestamp(py: Python<'_>) -> PyResult<Py<PyAny>> {
 }
 
 // ── Op-kind / top-bucket maps ───────────────────────────────────────
+// Note: these map to MongoDB's internal profiler/top naming conventions.
+// "delete" → "remove" matches `db.currentOp()` and `top` output where
+// the operation kind is historically called "remove."  The *opcounters*
+// subsystem (serverStatus) uses "delete" — that naming lives in the
+// individual handlers via `inc_counter("delete")`.
 
 fn op_kind_for(cmd: &str) -> &'static str {
     match cmd {
@@ -96,6 +102,24 @@ fn top_bucket_for(cmd: &str) -> &'static str {
     }
 }
 
+// ── Lazy CachedImports builder ──────────────────────────────────────
+// Construction is centralized in `CachedImports::from_python()` — see
+// `wire_context.rs`.  Both `RustWireServer::new()` and the lazy-init
+// path below call that single method.
+
+/// Return the set of command names handled by Rust-native handlers.
+/// Used by `test_registry_parity.py` to verify registry alignment
+/// without fragile source parsing.
+#[pyfunction]
+pub fn rust_handler_names(py: Python<'_>) -> PyResult<Py<pyo3::types::PyList>> {
+    let handlers = &*crate::wire_commands::RUST_HANDLERS;
+    let list = pyo3::types::PyList::empty(py);
+    for key in handlers.keys() {
+        list.append(*key)?;
+    }
+    Ok(list.unbind())
+}
+
 // ── Dispatch ────────────────────────────────────────────────────────
 
 /// Route a command document to the appropriate handler, with full
@@ -103,6 +127,9 @@ fn top_bucket_for(cmd: &str) -> &'static str {
 ///
 /// `handlers` is the Python `_HANDLERS` dict mapping command names to callables.
 /// `error_response_fn` and `make_error_fn` are the wire error helpers.
+///
+/// **Warning:** `command_doc` is mutated in-place (e.g. `$db` injected if
+/// absent).  Callers must not assume the dict is unchanged after return.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 pub fn rs_dispatch(
@@ -117,6 +144,17 @@ pub fn rs_dispatch(
     audit_mod: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Py<PyAny>> {
     let ctx_typed: &Bound<'_, ConnectionContext> = ctx.cast()?;
+
+    // Lazy-init CachedImports when the context was not created by
+    // RustWireServer (Python wire server path, tests).  This is a
+    // no-op when the Rust wire server already set `cached`.
+    {
+        let needs_init = ctx_typed.borrow().cached.is_none();
+        if needs_init {
+            let imports = CachedImports::from_python(py)?;
+            ctx_typed.borrow_mut().cached = Some(Arc::new(imports));
+        }
+    }
 
     // Ensure $db is present
     if command_doc.get_item("$db")?.is_none() {
@@ -157,6 +195,10 @@ pub fn rs_dispatch(
             .map(|r| r.unbind());
     }
 
+    // Global "command" counter: every dispatched command increments this.
+    // Individual handlers additionally increment their op-specific counter
+    // (e.g. "query", "insert") — matching MongoDB's opcounters semantics
+    // where "command" counts total commands and per-op counters overlap.
     inc_counter("command");
 
     // Build namespace
@@ -215,6 +257,10 @@ pub fn rs_dispatch(
             },
         }
     } else {
+        wire_logger(py)?.call_method1(
+            "debug",
+            (format!("command '{cmd_name}' handled by Python fallback (no Rust handler)"),),
+        )?;
         let handler = handlers.get_item(&cmd_name)?.ok_or_else(|| {
             PyRuntimeError::new_err(format!(
                 "command handler missing for '{cmd_name}' (registry inconsistency)"
@@ -236,15 +282,22 @@ pub fn rs_dispatch(
         }
     };
 
-    // Record timing (always, regardless of success/failure -- mirrors Python finally block)
+    // Record timing (always, regardless of success/failure -- mirrors Python finally block).
+    // Errors in timing/profiling are logged but never propagate — the command response
+    // must still reach the client even if instrumentation fails.
     let elapsed_us = t0.elapsed().as_micros() as i64;
-    let _ = tracker.bind(py).call_method1("finish_op", (&op_id,));
+    if let Err(e) = tracker.bind(py).call_method1("finish_op", (&op_id,)) {
+        log_internal_error(py, "finish_op", &e);
+    }
     let top_bucket = top_bucket_for(&cmd_name);
     {
         let top_stats = ctx_typed.borrow().top_stats.clone_ref(py);
-        let _ = top_stats
+        if let Err(e) = top_stats
             .bind(py)
-            .call_method1("record", (&ns, top_bucket, elapsed_us));
+            .call_method1("record", (&ns, top_bucket, elapsed_us))
+        {
+            log_internal_error(py, "top_stats.record", &e);
+        }
     }
     {
         let (profiler, plan_summary) = {
@@ -254,10 +307,13 @@ pub fn rs_dispatch(
         let kwargs = PyDict::new(py);
         let _ = kwargs.set_item("command", command_doc);
         let _ = kwargs.set_item("plan_summary", &plan_summary);
-        let _ =
+        if let Err(e) =
             profiler
                 .bind(py)
-                .call_method("log", (op_kind, &ns, elapsed_us / 1000), Some(&kwargs));
+                .call_method("log", (op_kind, &ns, elapsed_us / 1000), Some(&kwargs))
+        {
+            log_internal_error(py, "profiler.log", &e);
+        }
     }
     ctx_typed.borrow_mut().last_plan_summary = String::new();
 
@@ -290,7 +346,11 @@ pub fn rs_dispatch(
         let ok_val: f64 = resp_dict
             .ok()
             .and_then(|d| d.get_item("ok").ok().flatten())
-            .and_then(|v| v.extract::<f64>().ok())
+            .and_then(|v| {
+                v.extract::<f64>()
+                    .or_else(|_| v.extract::<i64>().map(|i| i as f64))
+                    .ok()
+            })
             .unwrap_or(0.0);
         let success = ok_val >= 1.0;
         let duration_ms = elapsed_us as f64 / 1000.0;
@@ -331,6 +391,23 @@ pub fn rs_dispatch(
     Ok(resp.unbind())
 }
 
+/// Get a Python logger for ``smongo.wire.commands``.
+fn wire_logger<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    let log_mod = crate::cached_modules::logging_mod(py)?;
+    log_mod.call_method1("getLogger", ("smongo.wire.commands",))
+}
+
+/// Best-effort warning for instrumentation failures that must not propagate.
+fn log_internal_error(py: Python<'_>, context: &str, err: &PyErr) {
+    if let Ok(logger) = wire_logger(py) {
+        let msg = format!(
+            "dispatch instrumentation error in {context}: {err}",
+            err = err.value(py),
+        );
+        let _ = logger.call_method1("warning", (msg,));
+    }
+}
+
 fn map_handler_error<'py>(
     py: Python<'py>,
     err: &PyErr,
@@ -341,7 +418,7 @@ fn map_handler_error<'py>(
 ) -> PyResult<Bound<'py, PyAny>> {
     let msg = err.value(py).str()?.to_string();
 
-    // Check against known exception types
+    // Domain-specific exception types (registered from Python at init time).
     let ns_err_type = exception_types.get_item("NamespaceError")?;
     let tms_err_type = exception_types.get_item("TooManySessions")?;
     let txn_err_type = exception_types.get_item("TransactionError")?;
@@ -383,9 +460,7 @@ fn map_handler_error<'py>(
     // StorageError (embedded engine / I/O)
     if let Some(ty) = storage_err_type {
         if err.is_instance(py, ty.cast()?) {
-            let log_mod = crate::cached_modules::logging_mod(py)?;
-            let logger = log_mod.call_method1("getLogger", ("smongo.wire.commands",))?;
-            logger.call_method1(
+            wire_logger(py)?.call_method1(
                 "exception",
                 (format!("Storage engine error in command '{cmd_name}'"),),
             )?;
@@ -393,7 +468,7 @@ fn map_handler_error<'py>(
         }
     }
 
-    // Catch-all for common exceptions
+    // Catch-all for common Python exceptions
     if err.is_instance_of::<pyo3::exceptions::PyKeyError>(py)
         || err.is_instance_of::<pyo3::exceptions::PyTypeError>(py)
         || err.is_instance_of::<pyo3::exceptions::PyValueError>(py)
@@ -402,15 +477,13 @@ fn map_handler_error<'py>(
         || err.is_instance_of::<pyo3::exceptions::PyOSError>(py)
         || err.is_instance_of::<pyo3::exceptions::PyAttributeError>(py)
     {
-        let log_mod = crate::cached_modules::logging_mod(py)?;
-        let logger = log_mod.call_method1("getLogger", ("smongo.wire.commands",))?;
-        logger.call_method1(
+        wire_logger(py)?.call_method1(
             "exception",
             (format!("Unhandled error in command '{cmd_name}'"),),
         )?;
         return error_response_fn.call1((1i64, "InternalError", &msg));
     }
 
-    // Unknown exception -- re-raise
+    // Unknown exception type -- re-raise to caller
     Err(err.clone_ref(py))
 }

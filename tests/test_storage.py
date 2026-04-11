@@ -1,4 +1,9 @@
-"""Tests for smongo.storage -- redb-backed client, TTLReaper, and related APIs."""
+"""Tests for smongo.storage -- redb-backed client, TTLReaper, and related APIs.
+
+These tests exercise the Python ``RedbClient`` / ``RedbCollection`` wrapper
+layer, so they override the conftest fixtures (which now use the Rust-native
+``RedbLocalClient``) with Python-wrapper equivalents.
+"""
 
 import threading
 from datetime import UTC, datetime, timedelta
@@ -10,6 +15,37 @@ from smongo.index import DuplicateKeyError
 from smongo.objectid import ObjectId
 from smongo.schema import ValidationError
 from smongo.storage import DeleteResult, InsertResult, UpdateResult, _StorageError
+from smongo.storage.redb_engine import RedbClient
+
+
+@pytest.fixture
+def local_client(tmp_redb_dir):
+    client = RedbClient(tmp_redb_dir)
+    yield client
+    client.close()
+
+
+@pytest.fixture
+def durable_client(tmp_redb_dir):
+    client = RedbClient(tmp_redb_dir)
+    yield client
+    client.close()
+
+
+@pytest.fixture
+def local_db(local_client):
+    return local_client.get_db("testdb")
+
+
+@pytest.fixture
+def local_collection(local_db):
+    return local_db.get_collection("testcoll")
+
+
+@pytest.fixture
+def populated_collection(local_collection, sample_docs):
+    local_collection.insert_many(sample_docs)
+    return local_collection
 
 # ── RedbLocalClient ──────────────────────────────────────────────────
 

@@ -1,8 +1,22 @@
-"""
-Redb-backed storage engine - Python wrapper for Rust RedbLocalClient.
+"""Python wrapper layer over the Rust-native ``RedbLocalClient``.
 
-This provides a LocalClient-compatible API backed by smongo-engine's redb backend,
-allowing MongoClient to use the embedded redb engine.
+``RedbClient`` / ``RedbDB`` / ``RedbCollection`` provide a higher-level API
+(e.g. ``update()``, ``delete()`` with ``multi`` parameter, streaming cursors,
+``$jsonSchema`` validation, change-stream wrappers) on top of the underlying
+Rust ``RedbLocal*`` types exposed by ``_smongo_core``.
+
+**Who creates these wrappers:**
+
+- ``MongoClient("local://...")`` — the public client entry point.
+- ``SyncManager`` — bidirectional sync.
+- ``test_storage.py``, ``test_streaming.py`` — Python wrapper tests.
+
+**Wire protocol path does NOT use these wrappers.** ``WireServer`` and
+``RustWireServer`` create a bare ``RedbLocalClient`` and Rust command
+handlers call ``RedbLocalCollection`` directly.  The Rust
+``ConnectionContext`` fallback chains in ``wire_context.rs`` unwrap the
+Python wrapper if one happens to be present, but this is only for the
+``MongoClient`` / ``SyncManager`` path.
 """
 
 from __future__ import annotations
@@ -152,8 +166,12 @@ class RedbClient:
         """
         os.makedirs(db_path, exist_ok=True)
         self._rust_client = _RedbLocalClient(db_path)
+        self._db_path = db_path
         self.durable = durable
         self._dbs: dict[str, RedbDB] = {}
+
+    def __repr__(self) -> str:
+        return f"RedbClient(path={self._db_path!r})"
 
     def get_db(self, name: str) -> RedbDB:
         """Get or create a database handle."""
@@ -192,6 +210,9 @@ class RedbDB:
         self.name = name
         self._collections: dict[str, RedbCollection] = {}
         self._validators: dict[str, dict[str, Any] | None] = {}
+
+    def __repr__(self) -> str:
+        return f"RedbDB(name={self.name!r})"
 
     def get_collection(self, name: str) -> RedbCollection:
         """Return (and lazily create) the named collection."""
@@ -236,8 +257,10 @@ class RedbDB:
         """Return all collection names (on-disk plus opened handles)."""
         try:
             rust_names = list(self._rust_db.list_collection_names())
-        except Exception as e:
-            log.debug("list_collection_names failed: %s", e)
+        except RuntimeError as e:
+            # RuntimeError from Rust FFI is expected when the DB has never
+            # been written to (empty table set).  All other errors propagate.
+            log.debug("list_collection_names: %s", e)
             rust_names = []
         merged = set(rust_names) | set(self._collections.keys())
         return sorted(merged)
@@ -264,6 +287,9 @@ class RedbCollection:
         self._db = db
         self._validator = validator
         self._ttl_reaper = TTLReaper(self)
+
+    def __repr__(self) -> str:
+        return f"RedbCollection(ns={self.db_name!r}.{self.name!r})"
 
     @property
     def _oplog_w(self) -> Any:
@@ -366,6 +392,22 @@ class RedbCollection:
         """Lazily iterate matches for *query* via the engine's streaming cursor."""
         return self._rust_coll.find_iter(query or {})
 
+    def aggregate_engine(
+        self,
+        pipeline: list[dict[str, Any]],
+        *,
+        memory_limit_bytes: int | None = None,
+        allow_disk_use: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Run *pipeline* through the Rust aggregation engine."""
+        return list(
+            self._rust_coll.aggregate_engine(
+                pipeline,
+                memory_limit_bytes=memory_limit_bytes,
+                allow_disk_use=allow_disk_use,
+            )
+        )
+
     def get_all(self) -> list[dict[str, Any]]:
         """Return all documents in the collection (same shape as legacy storage helpers)."""
         return list(self._rust_coll.get_all())
@@ -419,7 +461,13 @@ class RedbCollection:
     def explain(
         self, query: dict[str, Any] | None = None, *, execute: bool = False
     ) -> dict[str, Any]:
-        """Query plan from the engine, plus a ``plan`` string for explain-style output."""
+        """Query plan from the engine, plus a ``plan`` string for explain-style output.
+
+        Delegates plan retrieval to Rust ``RedbLocalCollection.explain`` and
+        adds a human-readable ``plan`` string.  The ``execute=True`` option
+        (running the query and timing it) is Python-only — Rust ``explain``
+        does not support it.
+        """
         q = query or {}
         raw = dict(self._rust_coll.explain(q))
         raw["plan"] = _redb_explain_plan_kind(raw.get("execution_plan"), q)
@@ -522,8 +570,13 @@ class RedbCollection:
         _internal: bool = False,
         **kwargs: Any,
     ) -> str:
-        """Create an index (PyMongo-compatible *keys* and option shapes)."""
-        _ = _internal
+        """Create an index (PyMongo-compatible *keys* and option shapes).
+
+        ``_internal`` is accepted for API parity with CRUD methods (sync
+        layer passes it to suppress oplog echo) but Rust ``create_index``
+        does not yet support it — index creation always writes to the oplog.
+        """
+        del _internal  # not yet forwarded to Rust; see docstring
         if isinstance(keys, str):
             keys_doc: dict[str, Any] = {keys: 1}
         elif isinstance(keys, list):
@@ -595,21 +648,24 @@ class RedbCollection:
         return self.count_documents({})
 
     def data_size_bytes(self) -> int:
-        """Approximate total data size in bytes."""
+        """Approximate total data size in bytes.
+
+        Uses ``storage_stats()["dataSize"]`` (Rust-reported aggregate).
+        Note: Rust ``RedbLocalCollection`` has its own ``data_size_bytes``
+        that does a per-document BSON scan — different cost model, same
+        semantic intent.
+        """
         stats = self.storage_stats()
         return int(stats.get("dataSize", 0))
 
     def verify(self) -> dict[str, Any]:
-        """Run integrity checks on the collection and its indexes."""
-        n_records = self.count_documents({})
-        indexes = self.list_indexes()
-        return {
-            "nrecords": n_records,
-            "nIndexes": len(indexes) + 1,
-            "valid": True,
-            "errors": [],
-            "warnings": [],
-        }
+        """Run integrity checks on the collection and its indexes.
+
+        Delegates to Rust ``RedbLocalCollection.verify`` so that the
+        ``MongoClient`` API path and the wire ``validate`` command produce
+        identical results.
+        """
+        return dict(self._rust_coll.verify())
 
     def compact(self) -> None:
         """Compact the collection (no-op for redb -- auto-compacts on commit)."""

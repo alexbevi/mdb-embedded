@@ -12,9 +12,14 @@ import socket
 import struct
 import threading
 from itertools import count
+from typing import TYPE_CHECKING
 
-from ..storage.redb_engine import RedbClient
+from smongo._smongo_core import RedbLocalClient
+
 from ..sync import SyncManager
+
+if TYPE_CHECKING:
+    from ..storage.redb_engine import RedbClient
 from .commands import dispatch
 from .context import (
     ConnectionContext,
@@ -70,7 +75,7 @@ class WireServer:
         port: int = 27018,
         sync: str | SyncManager | None = None,
         max_connections: int = MAX_CONNECTIONS,
-        local_client: RedbClient | None = None,
+        local_client: RedbClient | RedbLocalClient | None = None,
         auth_required: bool | object = _UNSET,
         tls_cert_file: str | None = None,
         tls_key_file: str | None = None,
@@ -86,16 +91,16 @@ class WireServer:
 
         auth_was_set = auth_required is not WireServer._UNSET
         auth_bool = bool(auth_required) if auth_was_set else False
+        if tls_key_file and not tls_cert_file:
+            raise ValueError(
+                "tls_key_file requires tls_cert_file — cannot enable TLS without a certificate"
+            )
         self._use_rust_server = auth_was_set or tls_cert_file is not None
 
         if local_client is not None:
             self._local_client = local_client
-        elif self._use_rust_server:
-            from smongo._smongo_core import RedbLocalClient
-
-            self._local_client = RedbLocalClient(db_path)
         else:
-            self._local_client = RedbClient(db_path)
+            self._local_client = RedbLocalClient(db_path)
         self._owns_local_client = local_client is None
         self._cursor_registry = CursorRegistry()
         self._session_registry = SessionRegistry()

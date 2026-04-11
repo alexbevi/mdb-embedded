@@ -2,13 +2,14 @@
 resolver = "2"
 members = [
     "smongo-engine",
+    "smongo-macros",
     "smongo-py",
     "smongo-c",
     "smongo-node",
 ]
 
 [workspace.package]
-version = "1.1.9"
+version = "1.2.0"
 edition = "2021"
 rust-version = "1.83"
 

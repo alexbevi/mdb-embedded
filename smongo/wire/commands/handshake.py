@@ -1,3 +1,12 @@
+"""Handshake and authentication command handlers (hello, saslStart, saslContinue, ...).
+
+NOTE: All commands in this module have Rust-native implementations that
+take priority at runtime via ``rs_dispatch``.  These Python handlers serve
+as fallback implementations and reference documentation.  Changes here
+will NOT affect normal wire protocol behavior -- update the corresponding
+Rust handler in ``rust/smongo-py/src/wire_commands/handshake.rs`` instead.
+"""
+
 from __future__ import annotations
 
 import os

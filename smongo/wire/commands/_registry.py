@@ -1,27 +1,30 @@
-"""Shared command dispatch infrastructure -- handler registry, dispatch loop, counters."""
+"""Shared command dispatch infrastructure -- handler registry, counters.
+
+The dispatch loop lives in Rust (``rs_dispatch`` in ``_smongo_core``).
+This module owns:
+
+- The Python handler registry (``_HANDLERS``) and ``@_register`` decorator
+- The thin ``dispatch()`` wrapper that forwards to ``rs_dispatch``
+- Opcounter helpers that delegate to Rust (``_inc_counter``, ``_get_opcounters``)
+
+**Opcounters** are owned by Rust (``wire_dispatch.rs``).  ``_inc_counter``
+and ``_get_opcounters`` are thin wrappers so Python fallback handlers and
+``serverStatus`` can interact with the same counters without importing
+``_smongo_core`` everywhere.
+"""
 
 from __future__ import annotations
 
 import logging
-import threading
 import time
 from collections.abc import Callable
+from typing import Any
 
-from bson import Binary, Int64, Timestamp
 from bson import ObjectId as BsonObjectId
 
-from ..._compat import StorageError as _StorageError
-from ...index import DuplicateKeyError
-from ...schema import ValidationError
 from .._types import CommandDoc, DocSequences, ResponseDoc
-from ..context import (
-    ConnectionContext,
-    NamespaceError,
-    get_git_version,
-)
+from ..context import ConnectionContext, get_git_version
 from ..errors import error_response, make_error
-from ..sessions import TooManySessions
-from ..transactions import TransactionError
 
 log = logging.getLogger("smongo.wire.commands")
 
@@ -96,37 +99,61 @@ _HELP: dict[str, str] = {
     "reIndex": "Rebuild all indexes on a collection",
     "compact": "Compact a collection to reclaim disk space",
     "dataSize": "Return the data size for a namespace",
+    # Rust-only commands (no Python fallback handler)
+    "grantRolesToUser": "Grant roles to an existing database user",
+    "revokeRolesFromUser": "Revoke roles from an existing database user",
+    "createSearchIndex": "Create a search index on a collection",
+    "createSearchIndexes": "Create one or more search indexes on a collection",
+    "listSearchIndexes": "List search indexes on a collection",
+    "dropIndexes": "Drop one or more indexes on a collection",
+    "buildInfo": "Return build environment and version information",
+    "buildinfo": "Return build environment and version information (alias)",
+    "hostInfo": "Return information about the host system",
+    "whatsmyuri": "Return the client IP address as seen by the server",
+    "findandmodify": "Atomically find and modify a single document (alias)",
+    "getlasterror": "Return the result of the previous write operation (alias)",
+    "mapreduce": "Deprecated -- use aggregation pipeline instead (alias)",
+    "connectionStatus": "Return authentication and authorization info for the connection",
+    "getLog": "Return recent log entries",
+    "getFreeMonitoringStatus": "Return free monitoring status",
+    "getCmdLineOpts": "Return server command-line options",
+    "listDatabases": "List all databases and their sizes",
+    "listCollections": "List all collections in a database",
+    "collMod": "Modify collection options",
+    "setFreeMonitoring": "Enable or disable free monitoring",
+    "lockInfo": "Return information about current locks",
+    "listCommands": "List all available commands and their help text",
+    "connPoolStats": "Return connection pool statistics",
 }
 
 _SERVER_START = time.time()
 _TOPOLOGY_PROCESS_ID = BsonObjectId()
 _GIT_VERSION = get_git_version()
 
-_opcounters: dict[str, int] = {
-    "insert": 0,
-    "query": 0,
-    "update": 0,
-    "delete": 0,
-    "getmore": 0,
-    "command": 0,
-}
-_opcounters_lock = threading.Lock()
+# Opcounters live in Rust (wire_dispatch.rs).  These thin wrappers avoid
+# scattering ``from smongo._smongo_core import ...`` across every handler.
+# The underlying functions are cached after first resolution.
 
-_EPOCH = Timestamp(0, 0)
-_logical_clock = 0
-_clock_lock = threading.Lock()
-
-
-def _next_timestamp() -> Timestamp:
-    global _logical_clock
-    with _clock_lock:
-        _logical_clock += 1
-        return Timestamp(int(time.time()), _logical_clock)
+_inc_counter_fn: Any = None
+_get_opcounters_fn: Any = None
 
 
 def _inc_counter(name: str) -> None:
-    with _opcounters_lock:
-        _opcounters[name] = _opcounters.get(name, 0) + 1
+    """Increment a Rust-owned opcounter (insert/query/update/delete/command)."""
+    global _inc_counter_fn
+    if _inc_counter_fn is None:
+        from smongo._smongo_core import inc_counter
+        _inc_counter_fn = inc_counter
+    _inc_counter_fn(name)
+
+
+def _get_opcounters() -> dict[str, int]:
+    """Return a snapshot of all Rust opcounters as a plain dict."""
+    global _get_opcounters_fn
+    if _get_opcounters_fn is None:
+        from smongo._smongo_core import get_opcounters
+        _get_opcounters_fn = get_opcounters
+    return _get_opcounters_fn()
 
 
 def _register(*names: str, help: str = "") -> Callable[[_CommandHandler], _CommandHandler]:
@@ -143,105 +170,79 @@ def _register(*names: str, help: str = "") -> Callable[[_CommandHandler], _Comma
     return decorator
 
 
-_OP_KIND_MAP: dict[str, str] = {
-    "find": "query",
-    "aggregate": "query",
-    "count": "query",
-    "distinct": "query",
-    "getMore": "getmore",
-    "insert": "insert",
-    "update": "update",
-    "delete": "remove",
-    "findAndModify": "command",
-    "findandmodify": "command",
-    "bulkWrite": "command",
-}
+# ── Exception-type dict for rs_dispatch ──────────────────────────────
 
-_TOP_BUCKET_MAP: dict[str, str] = {
-    "find": "queries",
-    "aggregate": "queries",
-    "count": "queries",
-    "distinct": "queries",
-    "getMore": "getmore",
-    "insert": "insert",
-    "update": "update",
-    "delete": "remove",
-}
+_EXCEPTION_TYPES: dict[str, Any] = {}
+
+
+def _init_exception_types() -> None:
+    """Populate *_EXCEPTION_TYPES* lazily (avoids import-time cycles)."""
+    from smongo._smongo_core import (
+        DuplicateKeyError,
+        NamespaceError,
+        TooManySessions,
+        TransactionError,
+        ValidationError,
+    )
+
+    _EXCEPTION_TYPES.update(
+        {
+            "NamespaceError": NamespaceError,
+            "TooManySessions": TooManySessions,
+            "TransactionError": TransactionError,
+            "DuplicateKeyError": DuplicateKeyError,
+            "ValidationError": ValidationError,
+        }
+    )
+
+    try:
+        from smongo._compat import StorageError
+
+        _EXCEPTION_TYPES["StorageError"] = StorageError
+    except ImportError:
+        pass
+
+
+# ── Unified dispatch (delegates to Rust rs_dispatch) ─────────────────
+
+# Lazily resolved singletons to avoid import-time coupling.
+_rs_dispatch: Any = None
+_audit_mod: Any = None
 
 
 def dispatch(
     ctx: ConnectionContext, command_doc: CommandDoc, doc_sequences: DocSequences | None = None
 ) -> ResponseDoc:
-    """Route a command document to the appropriate handler."""
-    if "$db" not in command_doc:
-        command_doc["$db"] = "test"
+    """Route a command document to the appropriate Rust or Python handler.
 
-    lsid = command_doc.get("lsid")
-    if lsid is not None:
-        ctx.session_registry.touch(lsid)
+    Delegates to Rust ``rs_dispatch`` which checks the Rust handler registry
+    first and falls back to ``_HANDLERS`` only when no Rust handler exists
+    for the command name.
 
-    cmd_name = next(iter(command_doc))
-    handler = _HANDLERS.get(cmd_name)
-    if handler is None:
-        return make_error("CommandNotFound", f"no such command: '{cmd_name}'")
+    .. warning::
 
-    _inc_counter("command")
+       ``command_doc`` **may be mutated** by ``rs_dispatch`` (e.g. ``$db``
+       is injected if absent).  Callers must not rely on the dict being
+       unchanged after this call.
+    """
+    global _rs_dispatch, _audit_mod
 
-    db_name = command_doc.get("$db", "test")
-    coll_hint = command_doc.get(cmd_name, "")
-    ns = f"{db_name}.{coll_hint}" if isinstance(coll_hint, str) and coll_hint else db_name
+    if _rs_dispatch is None:
+        from smongo._smongo_core import rs_dispatch
+        _rs_dispatch = rs_dispatch
+    if not _EXCEPTION_TYPES:
+        _init_exception_types()
+    if _audit_mod is None:
+        import smongo.audit
+        _audit_mod = smongo.audit
 
-    op_kind = _OP_KIND_MAP.get(cmd_name, "command")
-    op_id = ctx.op_tracker.start_op(op_kind, ns, command_doc, ctx.connection_id)
-    t0 = time.monotonic()
-
-    try:
-        resp = handler(ctx, command_doc, doc_sequences or {})
-    except NamespaceError as exc:
-        resp = make_error("InvalidNamespace", str(exc))
-    except TooManySessions as exc:
-        resp = error_response(261, "TooManyLogicalSessions", str(exc))
-    except TransactionError as exc:
-        resp = error_response(251, "NoSuchTransaction", str(exc))
-    except DuplicateKeyError as exc:
-        resp = error_response(11000, "DuplicateKey", str(exc))
-    except ValidationError as exc:
-        resp = error_response(121, "DocumentValidationFailure", str(exc))
-    except NotImplementedError as exc:
-        resp = make_error("CommandNotSupported", str(exc))
-    except _StorageError as exc:
-        log.exception("Storage engine error in command '%s'", cmd_name)
-        resp = error_response(1, "InternalError", str(exc))
-    except (
-        KeyError,
-        TypeError,
-        ValueError,
-        IndexError,
-        RuntimeError,
-        OSError,
-        AttributeError,
-    ) as exc:
-        log.exception("Unhandled error in command '%s'", cmd_name)
-        resp = error_response(1, "InternalError", str(exc))
-    finally:
-        elapsed_us = int((time.monotonic() - t0) * 1_000_000)
-        ctx.op_tracker.finish_op(op_id)
-        top_bucket = _TOP_BUCKET_MAP.get(cmd_name, "commands")
-        ctx.top_stats.record(ns, top_bucket, elapsed_us)
-        ctx.profiler.log(
-            op_kind,
-            ns,
-            elapsed_us // 1000,
-            command=command_doc,
-            plan_summary=ctx.last_plan_summary,
-        )
-        ctx.last_plan_summary = ""
-
-    ts = _next_timestamp()
-    resp["operationTime"] = ts
-    resp["$clusterTime"] = {
-        "clusterTime": ts,
-        "signature": {"hash": Binary(b"\x00" * 20), "keyId": Int64(0)},
-    }
-
-    return resp
+    return _rs_dispatch(  # type: ignore[return-value]
+        ctx,
+        _HANDLERS,
+        command_doc,
+        doc_sequences,
+        make_error,
+        error_response,
+        _EXCEPTION_TYPES,
+        _audit_mod,
+    )

@@ -137,6 +137,21 @@ fn cmd_find(
             }
         }
 
+        // Normalize outbound types (engine ObjectId → bson.ObjectId)
+        let norm_fn = pyo3::types::PyCFunction::new_closure(
+            py,
+            None,
+            None,
+            |args: &Bound<'_, pyo3::types::PyTuple>,
+             _kw: Option<&Bound<'_, PyDict>>|
+             -> PyResult<Py<PyAny>> {
+                let doc = args.get_item(0)?;
+                crate::wire_codec::normalize_outbound(doc.py(), &doc)
+            },
+        )?;
+        let builtins = py.import("builtins")?;
+        iter_any = builtins.call_method1("map", (norm_fn, &iter_any))?;
+
         let cr = ctx.borrow().cursor_registry.clone_ref(py);
         let cr_reg = cr.bind(py).cast::<CursorRegistry>()?;
         let (cursor_id, first_batch) = cr_reg
@@ -200,7 +215,8 @@ fn cmd_find(
         sliced
     };
 
-    let result_bound = &projected;
+    let normalized = crate::wire_codec::normalize_outbound_docs(py, &projected)?;
+    let result_bound = normalized.bind(py);
 
     if single_batch || batch_size <= 0 {
         let cursor_dict = PyDict::new(py);
@@ -665,9 +681,10 @@ fn cmd_distinct(
         let doc = item?;
         let v = crate::paths::get_value(&doc, &key)?;
         let v_bound = v.bind(py);
-        // Unhashable types (dicts, lists) fall back to linear contains
-        match seen_set.add(v_bound) {
-            Ok(()) => {
+        match seen_set.contains(v_bound) {
+            Ok(true) => {}
+            Ok(false) => {
+                let _ = seen_set.add(v_bound);
                 values.append(v_bound)?;
             }
             Err(_) => {
@@ -985,15 +1002,17 @@ fn cmd_find_and_modify(
     let resp = PyDict::new(py);
     resp.set_item("ok", 1.0)?;
     if !doc.is_none() {
+        let norm_doc_py = crate::wire_codec::normalize_outbound(py, &doc)?;
+        let norm_doc = norm_doc_py.bind(py);
         if let Some(ref f) = fields {
             if f.is_truthy()? {
-                let projected = apply_projection_single(py, &doc, f)?;
+                let projected = apply_projection_single(py, norm_doc, f)?;
                 resp.set_item("value", projected)?;
             } else {
-                resp.set_item("value", &doc)?;
+                resp.set_item("value", norm_doc)?;
             }
         } else {
-            resp.set_item("value", &doc)?;
+            resp.set_item("value", norm_doc)?;
         }
     } else {
         resp.set_item("value", py.None())?;

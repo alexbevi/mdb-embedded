@@ -8,6 +8,9 @@ Covers:
 - find() vs find_streaming() result parity
 - Cursor skip/limit using itertools.islice (no sort → no full materialization)
 - Client-level Collection.find(), find_one(), count_documents() backed by streaming
+
+These tests exercise the Python ``RedbClient`` / ``RedbCollection`` wrapper
+layer, so they override the conftest fixtures with Python-wrapper equivalents.
 """
 
 from __future__ import annotations
@@ -18,6 +21,30 @@ import pytest
 
 from smongo.aggregation import Cursor
 from smongo.client import Collection, MongoClient
+from smongo.storage.redb_engine import RedbClient
+
+
+@pytest.fixture
+def local_client(tmp_redb_dir):
+    client = RedbClient(tmp_redb_dir)
+    yield client
+    client.close()
+
+
+@pytest.fixture
+def local_db(local_client):
+    return local_client.get_db("testdb")
+
+
+@pytest.fixture
+def local_collection(local_db):
+    return local_db.get_collection("testcoll")
+
+
+@pytest.fixture
+def populated_collection(local_collection, sample_docs):
+    local_collection.insert_many(sample_docs)
+    return local_collection
 
 # ── Fixtures ─────────────────────────────────────────────────────────
 

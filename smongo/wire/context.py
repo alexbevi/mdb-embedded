@@ -7,9 +7,10 @@ Also tracks compression negotiation, logical sessions, per-session transaction
 state with undo-journal rollback, per-connection write result tracking,
 active-operation monitoring, and an operation profiler.
 
-Helper classes (NamespaceError, validate_namespace, LastWriteResult,
-ParameterStore, ConnectionCounter, FreeMonitoringState) live in Rust
-(_smongo_core).  ConnectionContext and LogBuffer remain in Python.
+All classes except LogBuffer and the system-memory helpers live in Rust
+(_smongo_core).  ConnectionContext is the Rust #[pyclass] re-exported here
+so that existing ``from smongo.wire.context import ConnectionContext``
+continues to work.
 """
 
 from __future__ import annotations
@@ -18,10 +19,9 @@ import logging
 import os
 import subprocess
 import threading
-from itertools import count
-from typing import TYPE_CHECKING, Any
 
 from smongo._smongo_core import (
+    ConnectionContext,
     ConnectionCounter,
     FreeMonitoringState,
     LastWriteResult,
@@ -30,21 +30,7 @@ from smongo._smongo_core import (
     validate_namespace,
 )
 
-from ..storage.redb_engine import RedbClient, RedbCollection, RedbDB
-from ..storage.transaction import TransactionSession as _StorageTxnSession
-from . import transactions as _txn
-from .cursors import CursorRegistry
-from .profiler import (
-    OperationTracker,
-    Profiler,
-    TopStats,
-)
 from .sessions import SessionRegistry, TooManySessions  # noqa: F401
-from .transactions import (
-    SessionTransaction,
-    TransactionError,
-    TransactionState,
-)
 
 __all__ = [
     "ConnectionContext",
@@ -54,11 +40,13 @@ __all__ = [
     "LogBuffer",
     "NamespaceError",
     "ParameterStore",
+    "SessionRegistry",
+    "TooManySessions",
+    "get_git_version",
+    "get_total_memory_mb",
+    "get_virtual_memory_mb",
     "validate_namespace",
 ]
-
-if TYPE_CHECKING:
-    from ..sync import SyncManager
 
 
 # =====================================================================
@@ -158,107 +146,3 @@ def get_git_version() -> str:
     except (OSError, subprocess.SubprocessError, FileNotFoundError):
         pass
     return "embedded"
-
-
-# =====================================================================
-# Connection context
-# =====================================================================
-
-
-class ConnectionContext:
-    """Holds per-connection state shared across all commands on that connection."""
-
-    def __init__(
-        self,
-        local_client: RedbClient,
-        connection_id: int,
-        address: tuple[str, int],
-        cursor_registry: CursorRegistry,
-        sync_mgr: SyncManager | None = None,
-        session_registry: SessionRegistry | None = None,
-        op_tracker: OperationTracker | None = None,
-        param_store: ParameterStore | None = None,
-        top_stats: TopStats | None = None,
-        profiler: Profiler | None = None,
-        log_buffer: LogBuffer | None = None,
-        conn_counter: ConnectionCounter | None = None,
-        free_monitoring: FreeMonitoringState | None = None,
-    ) -> None:
-        self.local_client = local_client
-        self.connection_id = connection_id
-        self.address = address
-        self.cursor_registry = cursor_registry
-        self.sync_mgr = sync_mgr
-        self._dbs: dict[str, RedbDB] = {}
-        self.compressor_id: int | None = None
-        self.session_registry = session_registry or SessionRegistry()
-        self.op_tracker = op_tracker or OperationTracker()
-        self.param_store = param_store or ParameterStore()
-        self.top_stats = top_stats or TopStats()
-        self.profiler = profiler or Profiler()
-        self.log_buffer = log_buffer or LogBuffer()
-        self.conn_counter = conn_counter or ConnectionCounter()
-        self.free_monitoring = free_monitoring or FreeMonitoringState()
-
-        self.last_write: LastWriteResult | None = None
-        self.last_plan_summary: str = ""
-        self._txn_sessions: dict[str, SessionTransaction] = {}
-        self._txn_number_gen = count(1)
-
-    def get_db(self, db_name: str) -> RedbDB:
-        if db_name not in self._dbs:
-            self._dbs[db_name] = self.local_client.get_db(db_name)
-        return self._dbs[db_name]
-
-    def get_collection(self, db_name: str, coll_name: str) -> RedbCollection:
-        validate_namespace(db_name, coll_name)
-        return self.get_db(db_name).get_collection(coll_name)
-
-    def list_known_dbs(self) -> list[str]:
-        """Return database names this connection has accessed."""
-        return list(self._dbs.keys())
-
-    # -- transaction state machine -------------------------------------
-
-    @staticmethod
-    def _session_key(lsid: Any) -> str:
-        if isinstance(lsid, dict):
-            return str(lsid.get("id", ""))
-        return str(lsid)
-
-    def start_transaction(self, lsid: Any) -> SessionTransaction:
-        """Begin a new engine transaction on the given logical session."""
-        key = self._session_key(lsid)
-        existing = self._txn_sessions.get(key)
-        if existing and existing.state == TransactionState.ACTIVE:
-            raise TransactionError("Transaction already in progress on this session")
-        storage_txn = _StorageTxnSession(self.local_client)
-        storage_txn.activate()
-        txn = SessionTransaction(next(self._txn_number_gen), storage_txn)
-        self._txn_sessions[key] = txn
-        return txn
-
-    def get_transaction(self, lsid: Any) -> SessionTransaction | None:
-        """Return the active transaction for a session, or None."""
-        if lsid is None:
-            return None
-        key = self._session_key(lsid)
-        txn = self._txn_sessions.get(key)
-        if txn and txn.state == TransactionState.ACTIVE:
-            return txn
-        return None
-
-    def commit_transaction(self, lsid: Any) -> None:
-        """Commit the active transaction."""
-        key = self._session_key(lsid)
-        txn = self._txn_sessions.get(key)
-        _txn.commit_active_transaction(self.local_client, txn)
-
-    def abort_transaction(self, lsid: Any) -> int:
-        """Abort the active transaction and roll back via the undo journal.
-
-        Returns the number of operations rolled back.
-        """
-        key = self._session_key(lsid)
-        txn = self._txn_sessions.get(key)
-        return int(_txn.abort_active_transaction(txn))

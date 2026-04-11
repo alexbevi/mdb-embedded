@@ -1,3 +1,12 @@
+"""Aggregation command handler.
+
+NOTE: All commands in this module have Rust-native implementations that
+take priority at runtime via ``rs_dispatch``.  These Python handlers serve
+as fallback implementations and reference documentation.  Changes here
+will NOT affect normal wire protocol behavior -- update the corresponding
+Rust handler in ``rust/smongo-py/src/wire_commands/aggregate.rs`` instead.
+"""
+
 from __future__ import annotations
 
 from bson import Int64
@@ -95,8 +104,8 @@ def _cmd_aggregate(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) 
             result_docs = normalize_outbound_docs([doc])
         return {"cursor": {"id": Int64(0), "ns": ns, "firstBatch": result_docs}, "ok": 1.0}
 
-    if hasattr(coll, "_rust_coll") and hasattr(coll._rust_coll, "aggregate_engine"):
-        result = list(coll._rust_coll.aggregate_engine(pipeline))
+    if hasattr(coll, "aggregate_engine"):
+        result = list(coll.aggregate_engine(pipeline))
     else:
         docs = coll.get_all()
         coll_getter = lambda name: ctx.get_db(db_name).get_collection(name)

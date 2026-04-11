@@ -1,10 +1,7 @@
 use bson::Document;
 use std::marker::PhantomData;
 
-use super::{
-    apply_projection_to_index_doc, deserialize_document, Collection, CollectionError,
-    CollectionResult,
-};
+use super::{deserialize_document, Collection, CollectionError, CollectionResult};
 use crate::query::eval_query;
 use crate::storage::{StorageCursor, StorageSession};
 
@@ -26,16 +23,6 @@ pub(super) enum FindCursorState<C: StorageCursor> {
     Materialized {
         docs: Vec<Document>,
         next_ix: usize,
-    },
-    /// Streaming covering index scan — reads directly from index keys without
-    /// document fetch.  Each iteration decodes one index entry.
-    #[allow(dead_code)]
-    CoveringIndexStream {
-        index_cursor: C,
-        index_keys: Document,
-        projection: Document,
-        seek_key: Option<Vec<u8>>,
-        positioned: bool,
     },
 }
 
@@ -198,57 +185,6 @@ fn find_cursor_next<C: StorageCursor>(
                     Ok(false) => continue,
                     Err(e) => return Some(Err(CollectionError::QueryError(e))),
                 }
-            }
-            FindCursorState::CoveringIndexStream {
-                index_cursor,
-                index_keys,
-                projection,
-                seek_key,
-                positioned,
-            } => {
-                if !*positioned {
-                    *positioned = true;
-                    if let Some(sk) = seek_key {
-                        index_cursor.set_key_raw(sk);
-                        match index_cursor.search_near() {
-                            Ok(exact) => {
-                                if exact < 0 && index_cursor.next().is_err() {
-                                    return None;
-                                }
-                            }
-                            Err(_) => return None,
-                        }
-                    } else if index_cursor.next().is_err() {
-                        return None;
-                    }
-                } else if index_cursor.next().is_err() {
-                    return None;
-                }
-
-                if let Some(sk) = seek_key {
-                    let raw = match index_cursor.get_key_raw() {
-                        Ok(k) => k,
-                        Err(e) => return Some(Err(e.into())),
-                    };
-                    if !raw.starts_with(sk) {
-                        return None;
-                    }
-                }
-
-                let key_raw = match index_cursor.get_key_raw() {
-                    Ok(k) => k,
-                    Err(e) => return Some(Err(e.into())),
-                };
-                if let Some(mut doc) = crate::index::decode_index_key(&key_raw, index_keys) {
-                    let id_str = match index_cursor.get_value_str() {
-                        Ok(s) => s,
-                        Err(e) => return Some(Err(e.into())),
-                    };
-                    doc.insert("_id".to_string(), bson::Bson::String(id_str));
-                    let projected = apply_projection_to_index_doc(&doc, projection);
-                    return Some(Ok(projected));
-                }
-                continue;
             }
         }
     }

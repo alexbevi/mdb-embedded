@@ -1,3 +1,5 @@
+# Submodule imports trigger @_register decorators that populate _HANDLERS.
+# Do NOT remove these -- they look unused but the side effect is load-bearing.
 from . import admin as _admin  # noqa: F401
 from . import aggregation as _aggregation  # noqa: F401
 from . import crud as _crud  # noqa: F401

@@ -184,7 +184,7 @@ fn cmd_create_indexes(
         coll_py
             .bind(py)
             .borrow()
-            .create_index(py, key_dict, Some(&kwargs))?;
+            .create_index(py, key_dict.as_any(), Some(&kwargs), None)?;
     }
 
     let after: i64 = coll_py.bind(py).borrow().list_indexes(py)?.bind(py).len() as i64 + 1;
@@ -400,7 +400,7 @@ fn atlas_search_index_to_create_indexes(
     coll_py
         .bind(py)
         .borrow()
-        .create_index(py, &key_dict.as_borrowed(), Some(&opts.as_borrowed()))?;
+        .create_index(py, key_dict.as_any(), Some(&opts.as_borrowed()), None)?;
 
     Ok(name)
 }

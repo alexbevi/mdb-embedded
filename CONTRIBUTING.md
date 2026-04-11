@@ -99,7 +99,7 @@ All 27 pipeline stages now run in the Rust engine (`smongo-engine`). To add a ne
 1. Implement the stage in `rust/smongo-engine/src/aggregation/stages.rs` (or a new sub-module)
 2. Wire it into the pipeline dispatch in `rust/smongo-engine/src/aggregation/mod.rs`
 3. If the stage needs PyO3 bridging, update `rust/smongo-py/src/aggregation.rs`
-4. Update the Python reference in `smongo/aggregation/stages.py` (or `joins.py` / `output.py`) for documentation parity
+4. Update the Python reference in `smongo/aggregation/stages.py` (or `joins.py` / `cursor.py`) for documentation parity
 5. Add tests in `tests/test_aggregation.py` and `rust/smongo-engine/src/aggregation/` (Rust unit tests)
 
 ## Adding a New Wire Protocol Command

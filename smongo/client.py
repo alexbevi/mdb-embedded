@@ -27,6 +27,12 @@ from .sync import SyncManager
 log = logging.getLogger("smongo.client")
 
 
+def _get_version() -> str:
+    """Resolve smongo.__version__ lazily to avoid circular imports."""
+    import smongo
+    return smongo.__version__
+
+
 # ------------------------------------------------------------------
 # Bulk-write operation descriptors (lightweight PyMongo work-alikes)
 # ------------------------------------------------------------------
@@ -227,7 +233,7 @@ class MongoClient:
         if self.mode == "remote":
             return self.client.server_info()  # type: ignore[no-any-return]
         return {
-            "version": "1.0.3",
+            "version": _get_version(),
             "storageEngine": {"name": "redb"},
             "ok": 1.0,
             "smongo": True,
@@ -369,15 +375,23 @@ class Collection:
         query = query or {}
         if self.mode == "remote":
             return self.backend.find(query, projection)
-        if isinstance(self.backend, RedbCollection):
-            if projection:
-                docs = self.backend.find(query, projection=projection)
-                coll_getter = self._make_collection_getter()
-                return Cursor(docs, collection_getter=coll_getter)
-            lazy_iter = self.backend.find_streaming(query)
+        # Both RedbCollection and RedbLocalCollection accept projection
+        # as a kwarg on find(); use it when the backend supports it.
+        if projection and hasattr(self.backend, "find"):
+            docs = self.backend.find(query, projection=projection)
             coll_getter = self._make_collection_getter()
-            return Cursor(lazy_iter, collection_getter=coll_getter)
-        docs = self.backend.find_streaming(query)
+            return Cursor(docs, collection_getter=coll_getter)
+        streaming = getattr(self.backend, "find_streaming", None) or getattr(
+            self.backend, "find_iter", None
+        )
+        if streaming is not None:
+            lazy_iter = streaming(query)
+            coll_getter = self._make_collection_getter()
+            c = Cursor(lazy_iter, collection_getter=coll_getter)
+            if projection:
+                c = c.projection(projection)
+            return c
+        docs = self.backend.find(query)
         coll_getter = self._make_collection_getter()
         c = Cursor(docs, collection_getter=coll_getter)
         if projection:
@@ -391,14 +405,14 @@ class Collection:
     ) -> Document | None:
         """Return the first document matching *query*, or ``None``.
 
-        *projection* is supported for remote PyMongo and for :class:`~smongo.storage.redb_engine.RedbCollection`
-        (projection is applied in Python for non-redb legacy paths).
+        *projection* is supported for all backends that accept it as a kwarg
+        (RedbCollection, RedbLocalCollection, PyMongo).
         """
         query = query or {}
         if self.mode == "remote":
             return self.backend.find_one(query, projection)  # type: ignore[no-any-return]
-        if projection is not None and isinstance(self.backend, RedbCollection):
-            return self.backend.find_one(query, projection=projection)
+        if projection is not None:
+            return self.backend.find_one(query, projection=projection)  # type: ignore[no-any-return]
         return self.backend.find_one(query)  # type: ignore[no-any-return]
 
     def aggregate(
@@ -419,23 +433,11 @@ class Collection:
         """
         if self.mode == "remote":
             return list(self.backend.aggregate(pipeline))
-        if isinstance(self.backend, RedbCollection) and hasattr(self.backend, "_rust_coll"):
-            if allowDiskUse:
-                docs = self.backend.get_all()
-                coll_getter = self._make_collection_getter()
-                kwargs: dict[str, Any] = {"allowDiskUse": True}
-                if memory_limit_bytes is not None:
-                    kwargs["memory_limit_bytes"] = memory_limit_bytes
-                return Cursor(docs, collection_getter=coll_getter).aggregate(pipeline, **kwargs)
-            return self.backend._rust_coll.aggregate_engine(pipeline)
-        docs = self.backend.find_streaming()
-        coll_getter = self._make_collection_getter()
-        kwargs = {}
-        if allowDiskUse:
-            kwargs["allowDiskUse"] = True
-        if memory_limit_bytes is not None:
-            kwargs["memory_limit_bytes"] = memory_limit_bytes
-        return Cursor(docs, collection_getter=coll_getter).aggregate(pipeline, **kwargs)
+        return self.backend.aggregate_engine(
+            pipeline,
+            memory_limit_bytes=memory_limit_bytes,
+            allow_disk_use=allowDiskUse,
+        )
 
     def count_documents(self, query: Filter | None = None) -> int:
         """Return the number of documents matching *query*."""

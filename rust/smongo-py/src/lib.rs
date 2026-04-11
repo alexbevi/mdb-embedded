@@ -221,6 +221,7 @@ fn register_wire(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(wire_dispatch::get_opcounters, m)?)?;
     m.add_function(wrap_pyfunction!(wire_dispatch::next_timestamp, m)?)?;
     m.add_function(wrap_pyfunction!(wire_dispatch::rs_dispatch, m)?)?;
+    m.add_function(wrap_pyfunction!(wire_dispatch::rust_handler_names, m)?)?;
     // Wire protocol: Tokio TCP server
     m.add_class::<wire_server::RustWireServer>()?;
     Ok(())

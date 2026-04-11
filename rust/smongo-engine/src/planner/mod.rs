@@ -349,11 +349,6 @@ fn plan_or_query(query: &Document, branches: &[Bson], indexes: &[IndexSpec]) -> 
     }
 }
 
-#[allow(dead_code)]
-fn plan_simple_query(query: &Document, indexes: &[IndexSpec]) -> QueryPlan {
-    plan_simple_query_with_projection(query, indexes, None)
-}
-
 fn plan_simple_query_with_projection(
     query: &Document,
     indexes: &[IndexSpec],
@@ -507,12 +502,6 @@ fn pick_better(current: Option<QueryPlan>, candidate: QueryPlan) -> QueryPlan {
             }
         }
     }
-}
-
-/// Evaluate if a btree index can be used for a query
-#[allow(dead_code)]
-fn evaluate_index_for_query(query: &Document, index_spec: &IndexSpec) -> Option<QueryPlan> {
-    evaluate_index_for_query_with_projection(query, index_spec, None)
 }
 
 /// Evaluate if a btree index can be used for a query, with covering detection

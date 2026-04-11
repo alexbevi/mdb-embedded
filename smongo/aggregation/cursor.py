@@ -7,8 +7,6 @@ Guardrails:
 - ``max_pipeline_docs`` caps the number of documents flowing between stages
   (default 100 000).  Override per-call via ``Cursor.aggregate(pipeline,
   max_pipeline_docs=...)``.
-- ``$out`` batches writes in chunks of ``_OUT_BATCH_SIZE`` to avoid
-  unbounded memory during serialization.
 - ``$lookup`` uses index-backed ``find()`` per-doc when the foreign
   collection has an index on ``foreignField``; falls back to the original
   hash-join otherwise.
@@ -18,6 +16,8 @@ import itertools
 from collections.abc import Iterable, Iterator
 
 from typing import Any, cast
+
+from smongo._smongo_core import facet_stage
 
 from .._types import CollectionGetter, Document, Filter, Pipeline, Projection
 from ..query import compile_query, field_exists, get_value, set_value
@@ -31,7 +31,6 @@ from .constants import (
 )
 from .geo import geo_near_stage
 from .joins import graph_lookup_stage, lookup_stage, pipeline_lookup_stage, union_with_stage
-from .output import facet_stage, merge_stage, out_stage
 from .stages import (
     add_fields_stage,
     bucket_auto_stage,
@@ -285,9 +284,9 @@ class Cursor:
                     docs, spec, self._collection_getter, max_pipeline_docs=max_pipeline_docs
                 )
             elif op == "$out":
-                docs = out_stage(docs, spec, self._collection_getter)
+                docs = _out_stage(docs, spec, self._collection_getter)
             elif op == "$merge":
-                docs = merge_stage(docs, spec, self._collection_getter)
+                docs = _merge_stage(docs, spec, self._collection_getter)
             elif op == "$bucket":
                 docs = bucket_stage(docs, spec)
             elif op == "$bucketAuto":
@@ -380,3 +379,89 @@ def _apply_projection(docs: list[Document], spec: Projection) -> list[Document]:
     from smongo._smongo_core import apply_projection
 
     return [apply_projection(doc, spec) for doc in docs]
+
+
+# ---------------------------------------------------------------------------
+# $out / $merge stage implementations (used by Cursor.aggregate only)
+# ---------------------------------------------------------------------------
+
+_OUT_BATCH_SIZE = 1_000
+
+
+def _out_stage(
+    docs: list[Document],
+    spec: str | dict[str, Any],
+    collection_getter: CollectionGetter | None = None,
+) -> list[Document]:
+    """$out — write pipeline results to a target collection (replaces contents)."""
+    if collection_getter is None:
+        raise RuntimeError("$out requires a collection getter (not available in this context)")
+    if isinstance(spec, str):
+        coll_name = spec
+    else:
+        coll_name = spec.get("coll", "")
+        if not coll_name:
+            raise ValueError("$out dict spec must include 'coll' (the target collection name)")
+    target = collection_getter(coll_name)
+    target.delete_many({})
+    for i in range(0, len(docs), _OUT_BATCH_SIZE):
+        target.insert_many(docs[i : i + _OUT_BATCH_SIZE])
+    return docs
+
+
+def _merge_stage(
+    docs: list[Document],
+    spec: dict[str, Any],
+    collection_getter: CollectionGetter | None = None,
+) -> list[Document]:
+    """$merge — upsert pipeline results into a target collection."""
+    if collection_getter is None:
+        raise RuntimeError("$merge requires a collection getter (not available in this context)")
+    into = spec.get("into", "")
+    if isinstance(into, dict):
+        coll_name = into.get("coll", "")
+    else:
+        coll_name = into
+    target = collection_getter(coll_name)
+    on = spec.get("on", "_id")
+    when_matched: str = spec.get("whenMatched", "replace")
+    when_not_matched: str = spec.get("whenNotMatched", "insert")
+
+    _SUPPORTED_WHEN_MATCHED = ("replace", "merge", "keepExisting", "fail")
+    _SUPPORTED_WHEN_NOT_MATCHED = ("insert", "discard", "fail")
+    if when_matched not in _SUPPORTED_WHEN_MATCHED:
+        raise ValueError(f"$merge unsupported whenMatched value: {when_matched!r}")
+    if when_not_matched not in _SUPPORTED_WHEN_NOT_MATCHED:
+        raise ValueError(f"$merge unsupported whenNotMatched value: {when_not_matched!r}")
+
+    for doc in docs:
+        match_key = doc.get(on) if isinstance(on, str) else {k: doc.get(k) for k in on}
+        query: Document = {on: match_key} if isinstance(on, str) else match_key  # type: ignore[assignment]
+
+        existing = target.find(query)
+        if existing:
+            if when_matched == "replace":
+                replacement = {k: v for k, v in doc.items() if k != "_id"}
+                replacement["_id"] = existing[0]["_id"]
+                target.update_one(
+                    {"_id": existing[0]["_id"]},
+                    {"$set": {k: v for k, v in replacement.items() if k != "_id"}},
+                )
+            elif when_matched == "merge":
+                target.update_one(
+                    {"_id": existing[0]["_id"]},
+                    {"$set": {k: v for k, v in doc.items() if k != "_id"}},
+                )
+            elif when_matched == "keepExisting":
+                pass
+            elif when_matched == "fail":
+                raise ValueError(f"$merge: document already exists with {on}={match_key}")
+        else:
+            if when_not_matched == "insert":
+                target.insert_one(doc)
+            elif when_not_matched == "discard":
+                pass
+            elif when_not_matched == "fail":
+                raise ValueError(f"$merge: no matching document found for {on}={match_key}")
+
+    return docs

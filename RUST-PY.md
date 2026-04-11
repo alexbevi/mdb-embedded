@@ -169,13 +169,11 @@ macro_rules! cached_module {
     };
 }
 
-// 18 stdlib modules: datetime, json, re, builtins, copy, time, operator, uuid,
-//   platform, os, sys, logging, random, secrets, resource, types, threading
+// 15 stdlib modules: datetime, json, re, builtins, copy, time, operator, uuid,
+//   platform, os, sys, logging, random, secrets, resource
 // 2 third-party: bson, bson.json_util
-// 9 smongo internals: aggregation.stages, aggregation.constants,
-//   aggregation.output, aggregation.joins, aggregation.vector,
+// 6 smongo internals: aggregation.stages, aggregation.joins,
 //   wire.context, audit, objectid, storage.transaction
-// (schema module removed -- validation is now pure Rust in schema.rs)
 // 8 cached class attributes (cached_attr! / cached_nested_attr!): bson.ObjectId,
 //   bson.Decimal128, bson.Regex, builtins.int, builtins.float, builtins.round,
 //   datetime.datetime, datetime.timezone.utc

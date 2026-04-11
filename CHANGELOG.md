@@ -7,6 +7,39 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-04-11
+
+### Added
+
+- **`#[derive(PythonImports)]` proc macro** (`smongo-macros` crate) — generates
+  `CachedImports::from_python` from declarative struct annotations. Type-driven
+  resolution: `Py<PyAny>` → `.unbind()`, `Py<T>` → `.cast::<T>()`, primitives
+  → `.extract()`. Zero hand-written `getattr` calls remain.
+- **Rust-native disk spill** — `disk_spill.rs` implements external merge sort
+  for `$sort` and hash-partitioned grouping for `$group` when `allow_disk_use`
+  is enabled and intermediate data exceeds `memory_limit_bytes`.
+
+### Removed
+
+- **Deleted `smongo/aggregation/output.py`** — `facet_stage` imported directly
+  from Rust; `$out`/`$merge` implementations moved into `cursor.py`.
+- **Dead Rust code** — removed unused `plan_simple_query`,
+  `evaluate_index_for_query`, `CoveringIndexStream` enum variant, and
+  `ScramConversation::client_nonce` field.
+- **Redundant deps** — removed unused `proc-macro2` from `smongo-macros`,
+  deduplicated `tempfile` in `smongo-engine`.
+- **Dead Python fallback** — `client.py` `allowDiskUse` branch no longer
+  falls back to `Cursor.aggregate()`; calls Rust engine unconditionally.
+
+### Fixed
+
+- `server_info()` version now reads from `__version__` instead of hardcoded
+  `"1.0.3"`.
+- Stale `output.py` references removed from README, ARCHITECTURE, CONTRIBUTING,
+  and RUST-PY docs.
+- `TestABIDrift` CI lint updated to parse `#[py(attr = "...")]` macro
+  annotations instead of `manifest.getattr("...")` calls.
+
 ## [1.1.9] — 2026-04-11
 
 ### Fixed — Wire protocol fidelity (Compass compatibility)

@@ -601,7 +601,7 @@ class TestAggregateOut:
             def __init__(self):
                 self.data = [{"_id": "old", "x": 1}]
 
-            def delete(self, q, multi=True):
+            def delete_many(self, q):
                 self.data.clear()
 
             def insert_many(self, docs):
@@ -635,7 +635,7 @@ class TestAggregateMerge:
             def find(self, q):
                 return [d for d in self.data if all(d.get(k) == v for k, v in q.items())]
 
-            def update(self, q, update_spec, multi=False):
+            def update_one(self, q, update_spec):
                 for d in self.data:
                     if d["_id"] == q["_id"]:
                         d.update(update_spec.get("$set", {}))

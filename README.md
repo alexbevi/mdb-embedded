@@ -482,10 +482,9 @@ smongo/
     expressions.py     resolve_expr, 60+ expression operators
     paths.py           get_value, set_value, unset_value
   aggregation/       Pipeline engine package (25+ stages, Rust-accelerated)
-    cursor.py          Cursor class (lazy Iterable input), aggregate dispatch
+    cursor.py          Cursor class (lazy Iterable input), aggregate dispatch, $out/$merge
     stages.py          Core stages: $match, $group, $sort, etc.
     joins.py           $lookup, $graphLookup, $unionWith
-    output.py          $facet, $out, $merge
     vector.py          $vectorSearch (NumPy / USearch)
   index.py           Index key encoding, helpers, DuplicateKeyError (engine-backed indexes on redb)
   oplog.py           Append-only operations log with compaction

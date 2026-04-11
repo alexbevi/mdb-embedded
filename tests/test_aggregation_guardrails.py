@@ -3,14 +3,13 @@
 import pytest
 
 from smongo.aggregation import (
-    _OUT_BATCH_SIZE,
     DEFAULT_MAX_PIPELINE_DOCS,
     MAX_PIPELINE_STAGES,
     Cursor,
     DocumentLimitExceeded,
     _optimize_pipeline,
-    out_stage,
 )
+from smongo.aggregation.cursor import _OUT_BATCH_SIZE, _out_stage as out_stage
 
 
 @pytest.fixture
@@ -118,7 +117,7 @@ class TestLookupOptimization:
     def test_lookup_uses_indexed_path(self, local_db):
         main = local_db.collection("orders")
         foreign = local_db.collection("products")
-        foreign.create_index("sku")
+        foreign.create_index({"sku": 1})
         foreign.insert_many(
             [
                 {"sku": "A", "price": 10},

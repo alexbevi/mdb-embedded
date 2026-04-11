@@ -357,8 +357,9 @@ fn cmd_aggregate(
     let result = coll_typed
         .bind(py)
         .borrow()
-        .aggregate_engine(py, pipeline, None)?;
-    let result_bound = result.bind(py);
+        .aggregate_engine(py, pipeline, None, None, false)?;
+    let normalized = crate::wire_codec::normalize_outbound_docs(py, result.bind(py))?;
+    let result_bound = normalized.bind(py);
 
     let cr = ctx.borrow().cursor_registry.clone_ref(py);
     let cr_reg = cr.bind(py).cast::<crate::wire_cursors::CursorRegistry>()?;

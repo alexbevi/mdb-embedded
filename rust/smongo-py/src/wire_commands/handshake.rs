@@ -92,11 +92,11 @@ fn cmd_hello(
             if let Ok(mechs) = user_doc.get_item("mechanisms") {
                 resp.set_item("saslSupportedMechs", mechs)?;
             } else {
-                let mechs = PyList::new(py, ["SCRAM-SHA-256"])?;
+                let mechs = PyList::new(py, ["SCRAM-SHA-1", "SCRAM-SHA-256"])?;
                 resp.set_item("saslSupportedMechs", mechs)?;
             }
         } else {
-            let mechs = PyList::new(py, ["SCRAM-SHA-256"])?;
+            let mechs = PyList::new(py, ["SCRAM-SHA-1", "SCRAM-SHA-256"])?;
             resp.set_item("saslSupportedMechs", mechs)?;
         }
     }

@@ -1395,10 +1395,49 @@ pub fn stage_redact_stream(input: DocStream, expr: &Bson) -> AggregationResult<D
     })))
 }
 
+// --- Memory-limited collect helper ---
+
+pub(crate) fn estimate_doc_bytes(doc: &Document) -> usize {
+    bson::to_vec(doc).map(|v| v.len()).unwrap_or(256)
+}
+
+/// Collect a streaming pipeline into a `Vec`, checking the estimated BSON
+/// byte size against an optional memory limit.  Returns
+/// [`AggregationError::MemoryLimitExceeded`] when the limit is breached.
+pub(crate) fn collect_with_limit(
+    input: DocStream,
+    stage_name: &str,
+    limit: Option<usize>,
+) -> AggregationResult<Vec<Document>> {
+    let docs: Vec<Document> = input.collect::<AggregationResult<Vec<_>>>()?;
+    if let Some(max_bytes) = limit {
+        let estimated: usize = docs.iter().map(estimate_doc_bytes).sum();
+        if estimated > max_bytes {
+            return Err(AggregationError::MemoryLimitExceeded {
+                stage: stage_name.into(),
+                used: estimated,
+                limit: max_bytes,
+            });
+        }
+    }
+    Ok(docs)
+}
+
 // --- Blocking stages (collect, delegate to batch, re-emit) ---
 
-pub fn stage_sort_stream(input: DocStream, sort_spec: &Bson) -> AggregationResult<DocStream> {
-    let docs: Vec<Document> = input.collect::<Result<Vec<_>, _>>()?;
+pub fn stage_sort_stream(
+    input: DocStream,
+    sort_spec: &Bson,
+    memory_limit: Option<usize>,
+    allow_disk_use: bool,
+) -> AggregationResult<DocStream> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if allow_disk_use {
+        let limit = memory_limit.unwrap_or(super::DEFAULT_MEMORY_LIMIT_BYTES);
+        let results = super::disk_spill::external_sort(input, sort_spec, limit)?;
+        return Ok(Box::new(results.into_iter().map(Ok)));
+    }
+    let docs = collect_with_limit(input, "$sort", memory_limit)?;
     let results = stage_sort(docs, sort_spec)?;
     Ok(Box::new(results.into_iter().map(Ok)))
 }
@@ -1411,6 +1450,7 @@ pub fn stage_sort_limit_stream(
     input: DocStream,
     sort_spec: &Bson,
     limit_spec: &Bson,
+    memory_limit: Option<usize>,
 ) -> AggregationResult<DocStream> {
     let sort_doc = sort_spec
         .as_document()
@@ -1425,7 +1465,7 @@ pub fn stage_sort_limit_stream(
         return Ok(Box::new(std::iter::empty()));
     }
 
-    let docs: Vec<Document> = input.collect::<Result<Vec<_>, _>>()?;
+    let docs = collect_with_limit(input, "$sort", memory_limit)?;
 
     // Build a comparator closure based on the sort spec.
     let sort_fields: Vec<(String, i32)> = sort_doc
@@ -1463,38 +1503,49 @@ pub fn stage_sort_limit_stream(
     Ok(Box::new(results.into_iter().map(Ok)))
 }
 
-pub fn stage_group_stream(input: DocStream, group_spec: &Bson) -> AggregationResult<DocStream> {
-    let docs: Vec<Document> = input.collect::<Result<Vec<_>, _>>()?;
+pub fn stage_group_stream(
+    input: DocStream,
+    group_spec: &Bson,
+    memory_limit: Option<usize>,
+    allow_disk_use: bool,
+) -> AggregationResult<DocStream> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if allow_disk_use {
+        let limit = memory_limit.unwrap_or(super::DEFAULT_MEMORY_LIMIT_BYTES);
+        let results = super::disk_spill::external_group(input, group_spec, limit)?;
+        return Ok(Box::new(results.into_iter().map(Ok)));
+    }
+    let docs = collect_with_limit(input, "$group", memory_limit)?;
     let results = stage_group(docs, group_spec)?;
     Ok(Box::new(results.into_iter().map(Ok)))
 }
 
-pub fn stage_count_stream(input: DocStream, field_name: &Bson) -> AggregationResult<DocStream> {
-    let docs: Vec<Document> = input.collect::<Result<Vec<_>, _>>()?;
+pub fn stage_count_stream(input: DocStream, field_name: &Bson, memory_limit: Option<usize>) -> AggregationResult<DocStream> {
+    let docs = collect_with_limit(input, "$count", memory_limit)?;
     let results = stage_count(docs, field_name)?;
     Ok(Box::new(results.into_iter().map(Ok)))
 }
 
-pub fn stage_sample_stream(input: DocStream, spec: &Bson) -> AggregationResult<DocStream> {
-    let docs: Vec<Document> = input.collect::<Result<Vec<_>, _>>()?;
+pub fn stage_sample_stream(input: DocStream, spec: &Bson, memory_limit: Option<usize>) -> AggregationResult<DocStream> {
+    let docs = collect_with_limit(input, "$sample", memory_limit)?;
     let results = stage_sample(docs, spec)?;
     Ok(Box::new(results.into_iter().map(Ok)))
 }
 
-pub fn stage_sort_by_count_stream(input: DocStream, expr: &Bson) -> AggregationResult<DocStream> {
-    let docs: Vec<Document> = input.collect::<Result<Vec<_>, _>>()?;
+pub fn stage_sort_by_count_stream(input: DocStream, expr: &Bson, memory_limit: Option<usize>) -> AggregationResult<DocStream> {
+    let docs = collect_with_limit(input, "$sortByCount", memory_limit)?;
     let results = stage_sort_by_count(docs, expr)?;
     Ok(Box::new(results.into_iter().map(Ok)))
 }
 
-pub fn stage_bucket_stream(input: DocStream, spec: &Bson) -> AggregationResult<DocStream> {
-    let docs: Vec<Document> = input.collect::<Result<Vec<_>, _>>()?;
+pub fn stage_bucket_stream(input: DocStream, spec: &Bson, memory_limit: Option<usize>) -> AggregationResult<DocStream> {
+    let docs = collect_with_limit(input, "$bucket", memory_limit)?;
     let results = stage_bucket(docs, spec)?;
     Ok(Box::new(results.into_iter().map(Ok)))
 }
 
-pub fn stage_bucket_auto_stream(input: DocStream, spec: &Bson) -> AggregationResult<DocStream> {
-    let docs: Vec<Document> = input.collect::<Result<Vec<_>, _>>()?;
+pub fn stage_bucket_auto_stream(input: DocStream, spec: &Bson, memory_limit: Option<usize>) -> AggregationResult<DocStream> {
+    let docs = collect_with_limit(input, "$bucketAuto", memory_limit)?;
     let results = stage_bucket_auto(docs, spec)?;
     Ok(Box::new(results.into_iter().map(Ok)))
 }
@@ -1503,8 +1554,9 @@ pub fn stage_lookup_stream(
     input: DocStream,
     spec: &Bson,
     resolver: Option<&dyn CollectionResolver>,
+    memory_limit: Option<usize>,
 ) -> AggregationResult<DocStream> {
-    let docs: Vec<Document> = input.collect::<Result<Vec<_>, _>>()?;
+    let docs = collect_with_limit(input, "$lookup", memory_limit)?;
     let results = stage_lookup(docs, spec, resolver)?;
     Ok(Box::new(results.into_iter().map(Ok)))
 }
@@ -1513,8 +1565,9 @@ pub fn stage_graph_lookup_stream(
     input: DocStream,
     spec: &Bson,
     resolver: Option<&dyn CollectionResolver>,
+    memory_limit: Option<usize>,
 ) -> AggregationResult<DocStream> {
-    let docs: Vec<Document> = input.collect::<Result<Vec<_>, _>>()?;
+    let docs = collect_with_limit(input, "$graphLookup", memory_limit)?;
     let results = stage_graph_lookup(docs, spec, resolver)?;
     Ok(Box::new(results.into_iter().map(Ok)))
 }
@@ -1523,8 +1576,9 @@ pub fn stage_facet_stream(
     input: DocStream,
     spec: &Bson,
     resolver: Option<&dyn CollectionResolver>,
+    memory_limit: Option<usize>,
 ) -> AggregationResult<DocStream> {
-    let docs: Vec<Document> = input.collect::<Result<Vec<_>, _>>()?;
+    let docs = collect_with_limit(input, "$facet", memory_limit)?;
     let results = stage_facet(docs, spec, resolver)?;
     Ok(Box::new(results.into_iter().map(Ok)))
 }
@@ -1532,8 +1586,9 @@ pub fn stage_facet_stream(
 pub fn stage_set_window_fields_stream(
     input: DocStream,
     spec: &Bson,
+    memory_limit: Option<usize>,
 ) -> AggregationResult<DocStream> {
-    let docs: Vec<Document> = input.collect::<Result<Vec<_>, _>>()?;
+    let docs = collect_with_limit(input, "$setWindowFields", memory_limit)?;
     let results = stage_set_window_fields(docs, spec)?;
     Ok(Box::new(results.into_iter().map(Ok)))
 }
@@ -1546,8 +1601,9 @@ pub fn stage_union_with_stream(
     input: DocStream,
     spec: &Bson,
     resolver: Option<&dyn CollectionResolver>,
+    memory_limit: Option<usize>,
 ) -> AggregationResult<DocStream> {
-    let docs: Vec<Document> = input.collect::<Result<Vec<_>, _>>()?;
+    let docs = collect_with_limit(input, "$unionWith", memory_limit)?;
     let results = stage_union_with(docs, spec, resolver)?;
     Ok(Box::new(results.into_iter().map(Ok)))
 }

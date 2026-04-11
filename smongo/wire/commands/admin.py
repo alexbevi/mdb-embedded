@@ -1,3 +1,12 @@
+"""Administrative command handlers (serverStatus, create, drop, rename, ...).
+
+NOTE: All commands in this module have Rust-native implementations that
+take priority at runtime via ``rs_dispatch``.  These Python handlers serve
+as fallback implementations and reference documentation.  Changes here
+will NOT affect normal wire protocol behavior -- update the corresponding
+Rust handler in ``rust/smongo-py/src/wire_commands/admin.rs`` instead.
+"""
+
 from __future__ import annotations
 
 import os
@@ -18,8 +27,7 @@ from ..context import ConnectionContext, get_virtual_memory_mb
 from ..errors import error_response, make_error
 from ._registry import (
     _SERVER_START,
-    _opcounters,
-    _opcounters_lock,
+    _get_opcounters,
     _register,
     log,
 )
@@ -326,8 +334,7 @@ def _cmd_validate(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -
 @_register("serverStatus")
 def _cmd_server_status(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) -> ResponseDoc:
     uptime = time.time() - _SERVER_START
-    with _opcounters_lock:
-        counters = dict(_opcounters)
+    counters = _get_opcounters()
 
     try:
         rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss

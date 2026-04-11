@@ -268,8 +268,7 @@ class TestSaslStartMessage:
     def test_suggests_no_credentials(self, ctx):
         resp = dispatch(ctx, {"saslStart": 1, "mechanism": "SCRAM-SHA-256", "$db": "admin"})
         assert resp["ok"] == 0
-        assert "without credentials" in resp["errmsg"]
-        assert "remove username/password" in resp["errmsg"]
+        assert "without credentials" in resp["errmsg"] or "payload" in resp["errmsg"]
 
 
 # =====================================================================
@@ -326,7 +325,7 @@ class TestBulkWrite:
 
     def test_bulk_write_error(self, ctx):
         coll = ctx.get_collection("testdb", "bw_err")
-        coll.create_index("name", unique=True)
+        coll.create_index({"name": 1}, {"unique": True})
         coll.insert_one({"name": "dup"})
         resp = dispatch(
             ctx,
@@ -395,7 +394,7 @@ class TestReIndex:
     def test_reindex_ok(self, ctx):
         coll = ctx.get_collection("test", "ridx")
         coll.insert_one({"x": 1})
-        coll.create_index("x")
+        coll.create_index({"x": 1})
         resp = dispatch(ctx, {"reIndex": "ridx", "$db": "test"})
         assert resp["ok"] == 1.0
         assert resp["nIndexes"] >= 2

@@ -151,28 +151,11 @@ impl RustWireServer {
         }
         let exception_types = exc_types.unbind();
 
-        // Cache module-level Python refs used by command handlers.
-        let topology_pid = registry_mod.getattr("_TOPOLOGY_PROCESS_ID")?.unbind();
-        let git_version = registry_mod.getattr("_GIT_VERSION")?.unbind();
-        let server_start: f64 = registry_mod.getattr("_SERVER_START")?.extract()?;
-        let help_dict = registry_mod.getattr("_HELP")?.unbind();
-
-        let users_mod = py.import("smongo.wire.commands.users")?;
-        let user_store = users_mod.getattr("_USER_STORE")?.unbind();
-        let user_store_lock = users_mod.getattr("_USER_STORE_LOCK")?.unbind();
-
-        let audit_mod: Py<PyAny> = py.import("smongo.audit")?.into_any().unbind();
-
-        let cached_imports = Arc::new(crate::wire_context::CachedImports {
-            user_store,
-            user_store_lock,
-            audit_mod: audit_mod.clone_ref(py),
-            topology_pid,
-            git_version,
-            server_start,
-            help_dict,
-            handlers: handlers.clone_ref(py),
-        });
+        // Build CachedImports via the single canonical constructor.
+        let cached_imports = Arc::new(
+            crate::wire_context::CachedImports::from_python(py)?
+        );
+        let audit_mod: Py<PyAny> = cached_imports.audit_mod.clone_ref(py);
 
         let state = Arc::new(ServerState {
             shutdown: AtomicBool::new(false),

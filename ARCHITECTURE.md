@@ -634,10 +634,9 @@ smongo/
 │   ├── expressions.py    #   resolve_expr, 60+ expression operators
 │   └── paths.py          #   get_value, set_value, unset_value
 ├── aggregation/          # Pipeline engine package
-│   ├── cursor.py         #   Cursor (accepts Iterable, lazy materialization), aggregate dispatch
+│   ├── cursor.py         #   Cursor (accepts Iterable, lazy materialization), aggregate dispatch, $out/$merge
 │   ├── stages.py         #   Core stages: $match, $group, $sort, etc.
 │   ├── joins.py          #   $lookup, $graphLookup, $unionWith
-│   ├── output.py         #   $facet, $out, $merge
 │   └── vector.py         #   $vectorSearch (NumPy / USearch)
 ├── index.py              # Index key encoding, helpers, DuplicateKeyError
 ├── oplog.py              # OplogWriter (with compaction), OplogReader, ChangeStream

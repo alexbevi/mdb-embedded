@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 smongo-engine = { path = "../smongo-engine" }
+smongo-macros = { path = "../smongo-macros" }
 pyo3 = { version = "0.28", features = ["auto-initialize"] }
 hex = "0.4"
 getrandom = "0.2"

@@ -64,8 +64,6 @@ pub fn default_iterations() -> u32 {
 
 pub struct ScramConversation {
     pub username: String,
-    #[allow(dead_code)]
-    client_nonce: String,
     server_nonce: String,
     client_first_bare: String,
     server_first: String,
@@ -141,7 +139,6 @@ impl ScramConversation {
 
         Ok(Self {
             username,
-            client_nonce,
             server_nonce: combined_nonce,
             client_first_bare: client_first_bare.to_string(),
             server_first: server_first.clone(),

@@ -18,7 +18,7 @@ class FakeCollection:
     def __init__(self, data=None):
         self.data = list(data or [])
 
-    def delete(self, q, multi=True):
+    def delete_many(self, q):
         self.data.clear()
 
     def insert_many(self, docs):
@@ -30,7 +30,7 @@ class FakeCollection:
     def find(self, q):
         return [d for d in self.data if all(d.get(k) == v for k, v in q.items())]
 
-    def update(self, q, update_spec, multi=False):
+    def update_one(self, q, update_spec):
         for d in self.data:
             if d["_id"] == q["_id"]:
                 d.update(update_spec.get("$set", {}))
@@ -64,7 +64,7 @@ class TestOutErrorConditions:
 
     def test_out_large_batch(self):
         """$out handles large datasets by batching inserts."""
-        from smongo.aggregation.output import _OUT_BATCH_SIZE
+        from smongo.aggregation.cursor import _OUT_BATCH_SIZE
 
         target = FakeCollection()
 

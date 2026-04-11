@@ -226,11 +226,30 @@ pub(crate) fn py_to_bson(val: &Bound<'_, PyAny>) -> PyResult<Bson> {
 }
 
 /// Convert a Python dict to a BSON Document.
+///
+/// Promotes `_id` values that are 24-char hex strings to `Bson::ObjectId`
+/// so that round-tripping through `to_bson` / `from_bson` matches the
+/// MongoDB convention of storing ObjectId-shaped strings as real ObjectIds.
 pub(crate) fn pydict_to_doc(dict: &Bound<'_, PyDict>) -> PyResult<Document> {
     let mut doc = Document::new();
     for (k, v) in dict.iter() {
         let key: String = k.extract()?;
-        doc.insert(key, py_to_bson(&v)?);
+        let bson_val = if key == "_id" {
+            if let Ok(s) = v.extract::<String>() {
+                if crate::wire_codec::is_objectid_hex(&s) {
+                    BsonOid::parse_str(&s)
+                        .map(Bson::ObjectId)
+                        .unwrap_or_else(|_| Bson::String(s))
+                } else {
+                    py_to_bson(&v)?
+                }
+            } else {
+                py_to_bson(&v)?
+            }
+        } else {
+            py_to_bson(&v)?
+        };
+        doc.insert(key, bson_val);
     }
     Ok(doc)
 }

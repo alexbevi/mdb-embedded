@@ -128,7 +128,7 @@ pub fn normalize_inbound<'py>(py: Python<'py>, doc: &Bound<'py, PyAny>) -> PyRes
 // Outbound: engine types -> wire BSON types
 // ---------------------------------------------------------------------------
 
-fn is_objectid_hex(s: &str) -> bool {
+pub(crate) fn is_objectid_hex(s: &str) -> bool {
     s.len() == 24 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 

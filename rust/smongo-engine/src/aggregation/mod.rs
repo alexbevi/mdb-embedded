@@ -11,6 +11,8 @@
 //! `$bottom`, `$topN`, `$bottomN`, `$firstN`, `$lastN`.
 
 pub mod accumulators;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod disk_spill;
 pub mod expressions;
 pub mod stages;
 pub mod total_ord;
@@ -29,12 +31,20 @@ pub type AggregationResult<T> = Result<T, AggregationError>;
 /// while blocking stages collect all input, process it, and re-emit results.
 pub type DocStream = Box<dyn Iterator<Item = AggregationResult<Document>>>;
 
+/// 100 MB — matches MongoDB's default in-memory limit for blocking stages.
+pub const DEFAULT_MEMORY_LIMIT_BYTES: usize = 100 * 1024 * 1024;
+
 #[derive(Debug)]
 pub enum AggregationError {
     InvalidStage(String),
     InvalidOperator(String),
     MissingField(String),
     TypeError(String),
+    MemoryLimitExceeded {
+        stage: String,
+        used: usize,
+        limit: usize,
+    },
     Other(String),
 }
 
@@ -45,6 +55,15 @@ impl std::fmt::Display for AggregationError {
             AggregationError::InvalidOperator(s) => write!(f, "Invalid operator: {}", s),
             AggregationError::MissingField(s) => write!(f, "Missing field: {}", s),
             AggregationError::TypeError(s) => write!(f, "Type error: {}", s),
+            AggregationError::MemoryLimitExceeded { stage, used, limit } => {
+                let used_mb = *used as f64 / (1024.0 * 1024.0);
+                let limit_mb = *limit as f64 / (1024.0 * 1024.0);
+                write!(
+                    f,
+                    "{stage} requires ~{used_mb:.0} MB, exceeding the {limit_mb:.0} MB limit. \
+                     Pass allowDiskUse=True to enable spill-to-disk for memory-intensive stages."
+                )
+            }
             AggregationError::Other(s) => write!(f, "{}", s),
         }
     }
@@ -495,7 +514,7 @@ pub fn aggregate_with_resolver(
     pipeline: &[Document],
     resolver: Option<&dyn CollectionResolver>,
 ) -> AggregationResult<Vec<Document>> {
-    let stream = aggregate_stream_with_resolver(docs, pipeline, resolver)?;
+    let stream = aggregate_stream_with_resolver(docs, pipeline, resolver, None)?;
     stream.collect()
 }
 
@@ -533,6 +552,7 @@ pub fn aggregate_with_db_collection<B: StorageBackend>(
         &main_pipeline,
         Some(resolver),
         idx_ctx.as_ref(),
+        None,
     )?;
     let results: Vec<Document> = stream.collect::<AggregationResult<Vec<_>>>()?;
 
@@ -558,6 +578,30 @@ pub fn aggregate_with_db_collection_streaming<B: StorageBackend, I>(
     pipeline: &[Document],
     ctx: &DatabaseContext<'_, B>,
     source_collection: Option<&str>,
+    memory_limit_bytes: Option<usize>,
+) -> AggregationResult<Vec<Document>>
+where
+    I: Iterator<Item = crate::collection::CollectionResult<Document>> + 'static,
+{
+    aggregate_with_db_collection_streaming_opts(
+        docs,
+        pipeline,
+        ctx,
+        source_collection,
+        memory_limit_bytes,
+        false,
+    )
+}
+
+/// Like [`aggregate_with_db_collection_streaming`] but also accepts
+/// `allow_disk_use` to enable spill-to-disk for `$sort` and `$group`.
+pub fn aggregate_with_db_collection_streaming_opts<B: StorageBackend, I>(
+    docs: I,
+    pipeline: &[Document],
+    ctx: &DatabaseContext<'_, B>,
+    source_collection: Option<&str>,
+    memory_limit_bytes: Option<usize>,
+    allow_disk_use: bool,
 ) -> AggregationResult<Vec<Document>>
 where
     I: Iterator<Item = crate::collection::CollectionResult<Document>> + 'static,
@@ -575,6 +619,8 @@ where
         &main_pipeline,
         Some(resolver),
         idx_ctx.as_ref(),
+        memory_limit_bytes,
+        allow_disk_use,
     )?;
     let results: Vec<Document> = stream.collect::<AggregationResult<Vec<_>>>()?;
 
@@ -622,7 +668,7 @@ pub fn aggregate_stream(
     docs: Vec<Document>,
     pipeline: &[Document],
 ) -> AggregationResult<DocStream> {
-    aggregate_stream_with_resolver(docs, pipeline, None)
+    aggregate_stream_with_resolver(docs, pipeline, None, None)
 }
 
 /// Execute a streaming aggregation pipeline with optional cross-collection support.
@@ -634,8 +680,9 @@ pub fn aggregate_stream_with_resolver(
     docs: Vec<Document>,
     pipeline: &[Document],
     resolver: Option<&dyn CollectionResolver>,
+    memory_limit_bytes: Option<usize>,
 ) -> AggregationResult<DocStream> {
-    aggregate_stream_full(docs, pipeline, resolver, None)
+    aggregate_stream_full(docs, pipeline, resolver, None, memory_limit_bytes)
 }
 
 /// Streaming pipeline with full context: cross-collection resolver **and**
@@ -645,9 +692,10 @@ pub fn aggregate_stream_full(
     pipeline: &[Document],
     resolver: Option<&dyn CollectionResolver>,
     idx_ctx: Option<&PipelineIndexCtx<'_>>,
+    memory_limit_bytes: Option<usize>,
 ) -> AggregationResult<DocStream> {
     let stream: DocStream = Box::new(docs.into_iter().map(Ok));
-    run_pipeline_stages(stream, pipeline, resolver, idx_ctx)
+    run_pipeline_stages(stream, pipeline, resolver, idx_ctx, memory_limit_bytes, false)
 }
 
 /// Like [`aggregate_stream_full`] but accepts a lazy iterator of documents
@@ -659,6 +707,8 @@ pub fn aggregate_stream_full_from_iter<I>(
     pipeline: &[Document],
     resolver: Option<&dyn CollectionResolver>,
     idx_ctx: Option<&PipelineIndexCtx<'_>>,
+    memory_limit_bytes: Option<usize>,
+    allow_disk_use: bool,
 ) -> AggregationResult<DocStream>
 where
     I: Iterator<Item = crate::collection::CollectionResult<Document>> + 'static,
@@ -666,7 +716,7 @@ where
     let stream: DocStream = Box::new(
         docs.map(|r| r.map_err(|e| AggregationError::Other(e.to_string()))),
     );
-    run_pipeline_stages(stream, pipeline, resolver, idx_ctx)
+    run_pipeline_stages(stream, pipeline, resolver, idx_ctx, memory_limit_bytes, allow_disk_use)
 }
 
 fn run_pipeline_stages(
@@ -674,6 +724,8 @@ fn run_pipeline_stages(
     pipeline: &[Document],
     resolver: Option<&dyn CollectionResolver>,
     idx_ctx: Option<&PipelineIndexCtx<'_>>,
+    memory_limit_bytes: Option<usize>,
+    allow_disk_use: bool,
 ) -> AggregationResult<DocStream> {
     // Atlas requires $vectorSearch / $geoNear to be the first stage.
     for (pos, stage) in pipeline.iter().enumerate() {
@@ -704,22 +756,27 @@ fn run_pipeline_stages(
                 if sn == "$sort" && ln == "$limit" {
                     if let Some(ctx) = idx_ctx {
                         if let Some(sorted) = try_index_sort_limit(ctx, sv, lv)? {
-                            // The index produced pre-sorted results; skip both stages
-                            // and drop the input stream (already consumed by the index).
                             drop(stream);
                             stream = Box::new(sorted.into_iter().map(Ok));
                             i += 2;
                             continue;
                         }
                     }
-                    stream = stages::stage_sort_limit_stream(stream, sv, lv)?;
+                    stream = stages::stage_sort_limit_stream(stream, sv, lv, memory_limit_bytes)?;
                     i += 2;
                     continue;
                 }
             }
         }
 
-        stream = execute_stage_stream(stream, stage, resolver, idx_ctx)?;
+        stream = execute_stage_stream(
+            stream,
+            stage,
+            resolver,
+            idx_ctx,
+            memory_limit_bytes,
+            allow_disk_use,
+        )?;
         i += 1;
     }
 
@@ -752,34 +809,37 @@ fn execute_stage_stream(
     stage: &Document,
     resolver: Option<&dyn CollectionResolver>,
     idx_ctx: Option<&PipelineIndexCtx<'_>>,
+    memory_limit_bytes: Option<usize>,
+    allow_disk_use: bool,
 ) -> AggregationResult<DocStream> {
     let (stage_name, stage_value) = stage
         .iter()
         .next()
         .ok_or_else(|| AggregationError::InvalidStage("Empty stage".to_string()))?;
 
+    let ml = memory_limit_bytes;
     match stage_name.as_str() {
         "$match" => stages::stage_match_stream(input, stage_value),
         "$project" => stages::stage_project_stream(input, stage_value),
         "$limit" => stages::stage_limit_stream(input, stage_value),
         "$skip" => stages::stage_skip_stream(input, stage_value),
-        "$sort" => stages::stage_sort_stream(input, stage_value),
-        "$group" => stages::stage_group_stream(input, stage_value),
-        "$count" => stages::stage_count_stream(input, stage_value),
+        "$sort" => stages::stage_sort_stream(input, stage_value, ml, allow_disk_use),
+        "$group" => stages::stage_group_stream(input, stage_value, ml, allow_disk_use),
+        "$count" => stages::stage_count_stream(input, stage_value, ml),
         "$unwind" => stages::stage_unwind_stream(input, stage_value),
         "$addFields" | "$set" => stages::stage_add_fields_stream(input, stage_value),
         "$unset" => stages::stage_unset_stream(input, stage_value),
         "$replaceRoot" | "$replaceWith" => stages::stage_replace_root_stream(input, stage_value),
-        "$sample" => stages::stage_sample_stream(input, stage_value),
+        "$sample" => stages::stage_sample_stream(input, stage_value, ml),
         "$redact" => stages::stage_redact_stream(input, stage_value),
-        "$sortByCount" => stages::stage_sort_by_count_stream(input, stage_value),
-        "$bucket" => stages::stage_bucket_stream(input, stage_value),
-        "$bucketAuto" => stages::stage_bucket_auto_stream(input, stage_value),
-        "$lookup" => stages::stage_lookup_stream(input, stage_value, resolver),
-        "$graphLookup" => stages::stage_graph_lookup_stream(input, stage_value, resolver),
-        "$facet" => stages::stage_facet_stream(input, stage_value, resolver),
-        "$setWindowFields" => stages::stage_set_window_fields_stream(input, stage_value),
-        "$unionWith" => stages::stage_union_with_stream(input, stage_value, resolver),
+        "$sortByCount" => stages::stage_sort_by_count_stream(input, stage_value, ml),
+        "$bucket" => stages::stage_bucket_stream(input, stage_value, ml),
+        "$bucketAuto" => stages::stage_bucket_auto_stream(input, stage_value, ml),
+        "$lookup" => stages::stage_lookup_stream(input, stage_value, resolver, ml),
+        "$graphLookup" => stages::stage_graph_lookup_stream(input, stage_value, resolver, ml),
+        "$facet" => stages::stage_facet_stream(input, stage_value, resolver, ml),
+        "$setWindowFields" => stages::stage_set_window_fields_stream(input, stage_value, ml),
+        "$unionWith" => stages::stage_union_with_stream(input, stage_value, resolver, ml),
         "$out" => stages::stage_out_stream(input, stage_value),
         "$merge" => stages::stage_merge_stream(input, stage_value),
         "$vectorSearch" => {
@@ -1528,7 +1588,7 @@ mod tests {
             "as": "matched",
         }}];
         let results: Vec<Document> =
-            aggregate_stream_with_resolver(orders, &pipeline, Some(&resolver))
+            aggregate_stream_with_resolver(orders, &pipeline, Some(&resolver), None)
                 .unwrap()
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap();

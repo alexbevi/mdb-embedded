@@ -23,6 +23,45 @@ fn strip_table_prefix(uri: &str) -> &str {
     uri.strip_prefix("table:").unwrap_or(uri)
 }
 
+/// Convert flexible Python index key specifications to a BSON `Document`.
+///
+/// Accepts:
+/// - `dict`        – `{"field": 1}` (native format)
+/// - `list[tuple]` – `[("field", 1)]` (PyMongo format)
+/// - `str`         – `"field"` (shorthand for `{"field": 1}`)
+fn keys_to_document(keys: &Bound<'_, PyAny>) -> PyResult<Document> {
+    use pyo3::types::{PyList, PyString, PyTuple};
+    if let Ok(d) = keys.cast::<PyDict>() {
+        return crate::bson_helpers::pydict_to_doc(d);
+    }
+    if let Ok(s) = keys.cast::<PyString>() {
+        let field: String = s.extract()?;
+        let mut doc = Document::new();
+        doc.insert(field, Bson::Int32(1));
+        return Ok(doc);
+    }
+    if let Ok(list) = keys.cast::<PyList>() {
+        let mut doc = Document::new();
+        for item in list.iter() {
+            let tuple: &Bound<'_, PyTuple> = item.cast().map_err(|_| {
+                PyRuntimeError::new_err("index key list items must be (field, direction) tuples")
+            })?;
+            if tuple.len() != 2 {
+                return Err(PyRuntimeError::new_err(
+                    "index key tuples must have exactly 2 elements",
+                ));
+            }
+            let field: String = tuple.get_item(0)?.extract()?;
+            let direction = crate::bson_helpers::py_to_bson(&tuple.get_item(1)?)?;
+            doc.insert(field, direction);
+        }
+        return Ok(doc);
+    }
+    Err(PyRuntimeError::new_err(
+        "create_index keys must be a dict, list of (field, direction) tuples, or a string",
+    ))
+}
+
 /// Oplog URI string passed to sync helpers (historical `table:` prefix; stripped before redb I/O).
 fn sync_oplog_uri(db: &str, coll: &str) -> String {
     format!("table:__oplog_{db}_{coll}")
@@ -239,6 +278,7 @@ impl RedbLocalDB {
                 oplog_node_id: node_id,
                 oplog_writer: oplog_w.clone_ref(py),
                 txn_slot: self.txn_slot.clone(),
+                validator: None,
             },
         )?;
         colls.insert(name.to_string(), col.clone_ref(py));
@@ -251,6 +291,38 @@ impl RedbLocalDB {
         name: &str,
     ) -> PyResult<Py<RedbLocalCollection>> {
         self.collection(py, name)
+    }
+
+    /// Create (or return) a collection, compatible with the Python
+    /// ``RedbDB.create_collection`` API used by wire command handlers.
+    /// In redb collections are lazily created, so this delegates to
+    /// ``get_collection``.  If a ``validator`` kwarg is provided, its
+    /// ``$jsonSchema`` (or the raw dict) is stored on the collection's
+    /// ``validator`` attribute for compatibility.
+    #[pyo3(signature = (name, **kwargs))]
+    pub fn create_collection(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Py<RedbLocalCollection>> {
+        let coll = self.collection(py, name)?;
+        // Force the engine to create the backing table so that
+        // list_collection_names() can discover even empty collections.
+        let _ = self.db.collection(name);
+        if let Some(kw) = kwargs {
+            if let Some(validator) = kw.get_item("validator")? {
+                let schema = if let Ok(vd) = validator.cast::<PyDict>() {
+                    vd.get_item("$jsonSchema")?
+                        .map(|v| v.unbind())
+                        .unwrap_or_else(|| validator.clone().unbind())
+                } else {
+                    validator.unbind()
+                };
+                coll.bind(py).borrow_mut().validator = Some(schema);
+            }
+        }
+        Ok(coll)
     }
 
     pub fn list_collection_names(&self) -> PyResult<Vec<String>> {
@@ -359,6 +431,10 @@ pub struct RedbLocalCollection {
     oplog_node_id: Arc<Mutex<Option<String>>>,
     oplog_writer: Py<RedbOplogWriterBridge>,
     txn_slot: RedbTxnSlot,
+    /// JSON schema validator set by ``create``/``collMod`` commands.
+    /// Stored for API compatibility; not enforced at the storage layer.
+    #[pyo3(get, set)]
+    pub validator: Option<Py<PyAny>>,
 }
 
 impl RedbLocalCollection {
@@ -594,6 +670,17 @@ impl RedbLocalCollection {
         )
     }
 
+    /// Return all oplog entries as a list of dicts (including internal ops).
+    pub fn get_oplog(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        let reader_py = self.get_oplog_reader(py)?;
+        let pairs = reader_py.bind(py).borrow().read_from(py, None, false)?;
+        let result = PyList::empty(py);
+        for (_key, entry) in &pairs {
+            result.append(entry.bind(py))?;
+        }
+        Ok(result.into())
+    }
+
     /// Drop oldest oplog rows so at most *keep* entries remain (matches Python :meth:`OplogWriter.truncate_count`).
     pub fn compact_oplog(&self, py: Python<'_>, keep: i64) -> PyResult<i64> {
         let _ = py;
@@ -654,6 +741,9 @@ impl RedbLocalCollection {
         document: &Bound<'_, PyDict>,
         internal: bool,
     ) -> PyResult<Py<PyDict>> {
+        if let Some(ref schema) = self.validator {
+            crate::schema::py_validate_document(document, schema.bind(py))?;
+        }
         let doc = crate::bson_helpers::pydict_to_doc(document)?;
         let guard = self.txn_slot.lock();
         let result = if let Some(ref ts) = *guard {
@@ -684,6 +774,15 @@ impl RedbLocalCollection {
         documents: &Bound<'_, PyList>,
         internal: bool,
     ) -> PyResult<Py<PyDict>> {
+        if let Some(ref schema) = self.validator {
+            let schema_bound = schema.bind(py);
+            for item in documents.iter() {
+                let d = item
+                    .cast::<PyDict>()
+                    .map_err(|_| PyRuntimeError::new_err("Expected dict"))?;
+                crate::schema::py_validate_document(d, schema_bound)?;
+            }
+        }
         let docs: Vec<_> = documents
             .iter()
             .map(|d| {
@@ -874,12 +973,14 @@ impl RedbLocalCollection {
     /// Leading `$match` stages are automatically extracted and pushed into the
     /// storage-layer `find()` so the query planner can use indexes instead of
     /// scanning the entire collection.
-    #[pyo3(signature = (pipeline, *, filter=None))]
+    #[pyo3(signature = (pipeline, *, filter=None, memory_limit_bytes=None, allow_disk_use=false))]
     pub fn aggregate_engine(
         &self,
         py: Python<'_>,
         pipeline: &Bound<'_, PyList>,
         filter: Option<&Bound<'_, PyDict>>,
+        memory_limit_bytes: Option<usize>,
+        allow_disk_use: bool,
     ) -> PyResult<Py<PyList>> {
         let explicit_filter = match filter {
             Some(f) => crate::bson_helpers::pydict_to_doc(f)?,
@@ -905,11 +1006,13 @@ impl RedbLocalCollection {
             .map_err(|e| map_collection_error(e, "aggregate_engine find_into_iter"))?;
 
         let ctx = smongo_engine::aggregation::DatabaseContext::new(&*self.db);
-        let results = smongo_engine::aggregation::aggregate_with_db_collection_streaming(
+        let results = smongo_engine::aggregation::aggregate_with_db_collection_streaming_opts(
             iter,
             &remaining_pipeline,
             &ctx,
             Some(&self.name),
+            memory_limit_bytes,
+            allow_disk_use,
         )
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
@@ -1148,44 +1251,59 @@ impl RedbLocalCollection {
         Ok(result_dict.unbind())
     }
 
-    #[pyo3(signature = (keys, options=None))]
+    #[pyo3(signature = (keys, options=None, **kwargs))]
     pub fn create_index(
         &self,
         _py: Python<'_>,
-        keys: &Bound<'_, PyDict>,
+        keys: &Bound<'_, PyAny>,
         options: Option<&Bound<'_, PyDict>>,
+        kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<String> {
         if self.txn_slot.lock().is_some() {
             return Err(PyRuntimeError::new_err(
                 "createIndex not supported during multi-document transaction",
             ));
         }
-        let keys_doc = crate::bson_helpers::pydict_to_doc(keys)?;
-        let opts = if let Some(opts_dict) = options {
-            let mut opts_doc = crate::bson_helpers::pydict_to_doc(opts_dict)?;
-            // Wire / PyMongo often omit false defaults; engine serde expects these keys.
-            opts_doc
-                .entry("unique".to_string())
-                .or_insert(Bson::Boolean(false));
-            opts_doc
-                .entry("sparse".to_string())
-                .or_insert(Bson::Boolean(false));
-            opts_doc
-                .entry("background".to_string())
-                .or_insert(Bson::Boolean(false));
-            if let Some(v) = opts_doc.remove("expireAfterSeconds") {
-                opts_doc.insert("expire_after_seconds", v);
+        let keys_doc = keys_to_document(keys)?;
+
+        // Merge explicit `options` dict and flattened **kwargs into one options doc.
+        let opts = {
+            let mut opts_doc = if let Some(opts_dict) = options {
+                crate::bson_helpers::pydict_to_doc(opts_dict)?
+            } else {
+                Document::new()
+            };
+            if let Some(kw) = kwargs {
+                for (k, v) in kw.iter() {
+                    let key: String = k.extract()?;
+                    let val = crate::bson_helpers::py_to_bson(&v)?;
+                    opts_doc.insert(key, val);
+                }
             }
-            if let Some(v) = opts_doc.remove("partialFilterExpression") {
-                opts_doc.insert("partial_filter_expression", v);
+            if opts_doc.is_empty() {
+                None
+            } else {
+                opts_doc
+                    .entry("unique".to_string())
+                    .or_insert(Bson::Boolean(false));
+                opts_doc
+                    .entry("sparse".to_string())
+                    .or_insert(Bson::Boolean(false));
+                opts_doc
+                    .entry("background".to_string())
+                    .or_insert(Bson::Boolean(false));
+                if let Some(v) = opts_doc.remove("expireAfterSeconds") {
+                    opts_doc.insert("expire_after_seconds", v);
+                }
+                if let Some(v) = opts_doc.remove("partialFilterExpression") {
+                    opts_doc.insert("partial_filter_expression", v);
+                }
+                Some(
+                    bson::from_document::<smongo_engine::index::IndexOptions>(opts_doc).map_err(
+                        |e| PyRuntimeError::new_err(format!("Invalid index options: {}", e)),
+                    )?,
+                )
             }
-            Some(
-                bson::from_document::<smongo_engine::index::IndexOptions>(opts_doc).map_err(
-                    |e| PyRuntimeError::new_err(format!("Invalid index options: {}", e)),
-                )?,
-            )
-        } else {
-            None
         };
         let collection = self.engine_col()?;
         collection
@@ -1296,6 +1414,23 @@ impl RedbLocalCollection {
             },
         )
     }
+
+    /// Integrity check matching Python ``RedbCollection.verify()``.
+    pub fn verify(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
+        let n_records = self.count_documents(&PyDict::new(py))?;
+        let indexes = self.list_indexes(py)?;
+        let n_indexes = indexes.bind(py).len() + 1;
+        let d = PyDict::new(py);
+        d.set_item("nrecords", n_records)?;
+        d.set_item("nIndexes", n_indexes)?;
+        d.set_item("valid", true)?;
+        d.set_item("errors", pyo3::types::PyList::empty(py))?;
+        d.set_item("warnings", pyo3::types::PyList::empty(py))?;
+        Ok(d.unbind())
+    }
+
+    /// No-op: redb auto-compacts on commit.
+    pub fn compact(&self) {}
 
     #[getter]
     pub fn name(&self) -> &str {

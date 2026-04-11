@@ -469,9 +469,7 @@ fn cmd_rename_collection(
     }
     if existing.is_truthy()? && drop_target {
         let empty = PyDict::new(py);
-        let kwargs = PyDict::new(py);
-        kwargs.set_item("multi", true)?;
-        dst_collection.call_method("delete", (empty,), Some(&kwargs))?;
+        dst_collection.call_method1("delete_many", (empty,))?;
     }
 
     for doc in docs.try_iter()? {
@@ -480,9 +478,7 @@ fn cmd_rename_collection(
     }
 
     let empty = PyDict::new(py);
-    let kwargs = PyDict::new(py);
-    kwargs.set_item("multi", true)?;
-    src_collection.call_method("delete", (empty,), Some(&kwargs))?;
+    src_collection.call_method1("delete_many", (empty,))?;
     let src_dbobj = get_db(ctx, src_db)?;
     src_dbobj.call_method1("drop_collection", (src_coll,))?;
 
@@ -697,9 +693,8 @@ fn cmd_server_status(
     .unwrap_or(0.0);
 
     let conn_meta: Bound<'_, PyDict> = (|| -> PyResult<Bound<'_, PyDict>> {
-        let lc = ctx.borrow().local_client.clone_ref(py);
-        let lc_ref = lc.bind(py).cast::<crate::redb_client::RedbLocalClient>()?;
-        Ok(lc_ref.borrow().connection_stats(py)?.into_bound(py))
+        let lc = ctx.borrow().local_client_typed(py)?;
+        Ok(lc.bind(py).borrow().connection_stats(py)?.into_bound(py))
     })()
     .unwrap_or_else(|_| PyDict::new(py));
 
@@ -1349,21 +1344,19 @@ fn persist_user_to_redb(
     key: &str,
     user_doc: &Bound<'_, PyAny>,
 ) -> PyResult<()> {
-    let lc = ctx.borrow().local_client.clone_ref(py);
-    let lc_ref = lc.bind(py).cast::<crate::redb_client::RedbLocalClient>()?;
+    let lc = ctx.borrow().local_client_typed(py)?;
     let json_util = crate::cached_modules::bson_json_util(py)?;
     let value: String = json_util.call_method1("dumps", (user_doc,))?.extract()?;
-    lc_ref.borrow().sync_kv_put("table:__users", key, &value)
+    lc.bind(py).borrow().sync_kv_put("table:__users", key, &value)
 }
 
 fn delete_user_from_redb(
-    _py: Python<'_>,
+    py: Python<'_>,
     ctx: &Bound<'_, ConnectionContext>,
     key: &str,
 ) -> PyResult<()> {
-    let lc = ctx.borrow().local_client.clone_ref(_py);
-    let lc_ref = lc.bind(_py).cast::<crate::redb_client::RedbLocalClient>()?;
-    lc_ref.borrow().sync_kv_remove("table:__users", key)
+    let lc = ctx.borrow().local_client_typed(py)?;
+    lc.bind(py).borrow().sync_kv_remove("table:__users", key)
 }
 
 fn cmd_drop_user(
