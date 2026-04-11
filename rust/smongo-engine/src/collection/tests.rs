@@ -869,9 +869,7 @@ fn test_aggregate_uses_index_for_leading_match() {
 
     for i in 0..20 {
         collection
-            .insert_one(
-                doc! { "status": if i % 2 == 0 { "active" } else { "inactive" }, "val": i },
-            )
+            .insert_one(doc! { "status": if i % 2 == 0 { "active" } else { "inactive" }, "val": i })
             .unwrap();
     }
 

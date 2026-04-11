@@ -197,10 +197,7 @@ impl VectorIndex {
                 continue;
             }
             let dist = compute_distance(&prepared_query, &self.graph_vectors[offset..end], metric);
-            scored.push((
-                self.reverse_map[i].clone(),
-                atlas_score(dist, is_euclidean),
-            ));
+            scored.push((self.reverse_map[i].clone(), atlas_score(dist, is_euclidean)));
         }
 
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -210,8 +207,8 @@ impl VectorIndex {
 
     /// Serialize the index to bytes for persistence.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let estimated = 12 + self.metric.len()
-            + self.reverse_map.len() * (4 + 24 + self.dimensions * 4);
+        let estimated =
+            12 + self.metric.len() + self.reverse_map.len() * (4 + 24 + self.dimensions * 4);
         let mut buf = Vec::with_capacity(estimated);
         buf.extend_from_slice(&(self.dimensions as u32).to_le_bytes());
         let metric_bytes = self.metric.as_bytes();
@@ -592,37 +589,58 @@ mod tests {
         let mut cos_idx = VectorIndex::new(3, "cosine");
         cos_idx.insert("a", &[1.0, 0.0, 0.0]);
         let r = cos_idx.search(&[1.0, 0.0, 0.0], 1);
-        assert!((r[0].1 - 1.0).abs() < 1e-5, "cosine self-sim should be 1.0, got {}", r[0].1);
+        assert!(
+            (r[0].1 - 1.0).abs() < 1e-5,
+            "cosine self-sim should be 1.0, got {}",
+            r[0].1
+        );
 
         // cosine: orthogonal vectors -> score = 0.5
         cos_idx.insert("b", &[0.0, 1.0, 0.0]);
         let r = cos_idx.search(&[1.0, 0.0, 0.0], 2);
         let orth_score = r.iter().find(|(id, _)| id == "b").unwrap().1;
-        assert!((orth_score - 0.5).abs() < 1e-5, "cosine orthogonal should be 0.5, got {orth_score}");
+        assert!(
+            (orth_score - 0.5).abs() < 1e-5,
+            "cosine orthogonal should be 0.5, got {orth_score}"
+        );
 
         // euclidean: identical -> score = 1.0
         let mut euc_idx = VectorIndex::new(2, "euclidean");
         euc_idx.insert("a", &[0.0, 0.0]);
         let r = euc_idx.search(&[0.0, 0.0], 1);
-        assert!((r[0].1 - 1.0).abs() < 1e-5, "euclidean self-dist should be 1.0, got {}", r[0].1);
+        assert!(
+            (r[0].1 - 1.0).abs() < 1e-5,
+            "euclidean self-dist should be 1.0, got {}",
+            r[0].1
+        );
 
         // euclidean: distance=1 -> score = 0.5
         euc_idx.insert("b", &[1.0, 0.0]);
         let r = euc_idx.search(&[0.0, 0.0], 2);
         let dist1_score = r.iter().find(|(id, _)| id == "b").unwrap().1;
-        assert!((dist1_score - 0.5).abs() < 1e-5, "euclidean dist=1 should be 0.5, got {dist1_score}");
+        assert!(
+            (dist1_score - 0.5).abs() < 1e-5,
+            "euclidean dist=1 should be 0.5, got {dist1_score}"
+        );
 
         // dotProduct: unit vectors, dot=1 -> score = 1.0
         let mut dp_idx = VectorIndex::new(3, "dotProduct");
         dp_idx.insert("a", &[1.0, 0.0, 0.0]);
         let r = dp_idx.search(&[1.0, 0.0, 0.0], 1);
-        assert!((r[0].1 - 1.0).abs() < 1e-5, "dotProduct self should be 1.0, got {}", r[0].1);
+        assert!(
+            (r[0].1 - 1.0).abs() < 1e-5,
+            "dotProduct self should be 1.0, got {}",
+            r[0].1
+        );
 
         // dotProduct: orthogonal -> score = 0.5
         dp_idx.insert("b", &[0.0, 1.0, 0.0]);
         let r = dp_idx.search(&[1.0, 0.0, 0.0], 2);
         let orth_score = r.iter().find(|(id, _)| id == "b").unwrap().1;
-        assert!((orth_score - 0.5).abs() < 1e-5, "dotProduct orthogonal should be 0.5, got {orth_score}");
+        assert!(
+            (orth_score - 0.5).abs() < 1e-5,
+            "dotProduct orthogonal should be 0.5, got {orth_score}"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -694,7 +712,12 @@ mod tests {
         assert_eq!(hnsw_results.len(), exact_results.len());
         for (h, e) in hnsw_results.iter().zip(exact_results.iter()) {
             assert_eq!(h.0, e.0, "ranking mismatch");
-            assert!((h.1 - e.1).abs() < 1e-4, "score mismatch: {} vs {}", h.1, e.1);
+            assert!(
+                (h.1 - e.1).abs() < 1e-4,
+                "score mismatch: {} vs {}",
+                h.1,
+                e.1
+            );
         }
     }
 

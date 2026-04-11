@@ -143,6 +143,7 @@ def _inc_counter(name: str) -> None:
     global _inc_counter_fn
     if _inc_counter_fn is None:
         from smongo._smongo_core import inc_counter
+
         _inc_counter_fn = inc_counter
     _inc_counter_fn(name)
 
@@ -152,8 +153,10 @@ def _get_opcounters() -> dict[str, int]:
     global _get_opcounters_fn
     if _get_opcounters_fn is None:
         from smongo._smongo_core import get_opcounters
+
         _get_opcounters_fn = get_opcounters
-    return _get_opcounters_fn()
+    result: dict[str, int] = _get_opcounters_fn()
+    return result
 
 
 def _register(*names: str, help: str = "") -> Callable[[_CommandHandler], _CommandHandler]:
@@ -229,14 +232,16 @@ def dispatch(
 
     if _rs_dispatch is None:
         from smongo._smongo_core import rs_dispatch
+
         _rs_dispatch = rs_dispatch
     if not _EXCEPTION_TYPES:
         _init_exception_types()
     if _audit_mod is None:
         import smongo.audit
+
         _audit_mod = smongo.audit
 
-    return _rs_dispatch(  # type: ignore[return-value]
+    result: ResponseDoc = _rs_dispatch(
         ctx,
         _HANDLERS,
         command_doc,
@@ -246,3 +251,4 @@ def dispatch(
         _EXCEPTION_TYPES,
         _audit_mod,
     )
+    return result

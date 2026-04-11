@@ -24,6 +24,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
       - run: pip install pre-commit==${{ env.PRE_COMMIT_VERSION }}
       - run: pre-commit run --all-files
 

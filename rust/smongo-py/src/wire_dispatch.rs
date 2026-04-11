@@ -259,7 +259,9 @@ pub fn rs_dispatch(
     } else {
         wire_logger(py)?.call_method1(
             "debug",
-            (format!("command '{cmd_name}' handled by Python fallback (no Rust handler)"),),
+            (format!(
+                "command '{cmd_name}' handled by Python fallback (no Rust handler)"
+            ),),
         )?;
         let handler = handlers.get_item(&cmd_name)?.ok_or_else(|| {
             PyRuntimeError::new_err(format!(

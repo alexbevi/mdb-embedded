@@ -9,7 +9,8 @@ from smongo.aggregation import (
     DocumentLimitExceeded,
     _optimize_pipeline,
 )
-from smongo.aggregation.cursor import _OUT_BATCH_SIZE, _out_stage as out_stage
+from smongo.aggregation.cursor import _OUT_BATCH_SIZE
+from smongo.aggregation.cursor import _out_stage as out_stage
 
 
 @pytest.fixture

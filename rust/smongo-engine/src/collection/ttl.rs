@@ -1,4 +1,4 @@
-use super::{deserialize_document, now_epoch_millis, CollectionResult, Collection};
+use super::{deserialize_document, now_epoch_millis, Collection, CollectionResult};
 use crate::storage::{StorageCursor, StorageSession};
 
 impl<S: StorageSession> Collection<S> {

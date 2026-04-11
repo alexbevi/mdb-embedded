@@ -34,9 +34,12 @@ pub(crate) fn raw_decode_document<'py>(
             data.len()
         )));
     }
-    let doc_len =
-        i32::from_le_bytes([data[*offset], data[*offset + 1], data[*offset + 2], data[*offset + 3]])
-            as usize;
+    let doc_len = i32::from_le_bytes([
+        data[*offset],
+        data[*offset + 1],
+        data[*offset + 2],
+        data[*offset + 3],
+    ]) as usize;
     if doc_len < 5 {
         return Err(PyValueError::new_err(format!(
             "BSON document length {doc_len} is too small"

@@ -298,7 +298,9 @@ fn apply_positional_operator(
                 if let Some(ref sfx) = suffix {
                     if let Bson::Document(ref mut d) = elem {
                         let should_set = match get_value(d, sfx) {
-                            Some(cur) => compare_numbers(value, cur) == Some(std::cmp::Ordering::Less),
+                            Some(cur) => {
+                                compare_numbers(value, cur) == Some(std::cmp::Ordering::Less)
+                            }
                             None => true,
                         };
                         if should_set {

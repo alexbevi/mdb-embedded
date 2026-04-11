@@ -446,8 +446,7 @@ fn plan_simple_query_with_projection(
                             .map(|v| v.metric.clone())
                             .unwrap_or_else(|| "cosine".to_string());
                         if dimensions > 0 {
-                            let ef_construction =
-                                vopts.as_ref().and_then(|v| v.ef_construction);
+                            let ef_construction = vopts.as_ref().and_then(|v| v.ef_construction);
                             let m = vopts.as_ref().and_then(|v| v.m);
                             let indexing_method = vopts
                                 .as_ref()

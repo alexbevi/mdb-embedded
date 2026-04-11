@@ -128,10 +128,7 @@ pub(crate) fn py_to_bson(val: &Bound<'_, PyAny>) -> PyResult<Bson> {
             let bytes: Vec<u8> = val.extract()?;
             let subtype_int: u8 = val.getattr("subtype")?.extract()?;
             let subtype = BinarySubtype::from(subtype_int);
-            return Ok(Bson::Binary(bson::Binary {
-                subtype,
-                bytes,
-            }));
+            return Ok(Bson::Binary(bson::Binary { subtype, bytes }));
         }
     }
 

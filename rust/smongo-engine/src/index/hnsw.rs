@@ -369,8 +369,7 @@ impl HnswGraph {
             let candidates =
                 self.search_layer_beam(query, &entry_points, self.ef_construction, lc, vectors);
 
-            let selected =
-                self.select_neighbors_heuristic(&candidates, m_max, lc, vectors);
+            let selected = self.select_neighbors_heuristic(&candidates, m_max, lc, vectors);
 
             // Connect id -> selected neighbors.
             if let Some(ref mut nbrs) = self.layers[lc].neighbors[id] {
@@ -391,10 +390,7 @@ impl HnswGraph {
                 let layer = &mut self.layers[lc];
                 layer.ensure_capacity(sel.id);
                 if let Some(ref mut nbrs) = layer.neighbors[sel.id] {
-                    nbrs.push(Neighbor {
-                        id,
-                        dist: sel.dist,
-                    });
+                    nbrs.push(Neighbor { id, dist: sel.dist });
                     if nbrs.len() > m_max {
                         Self::prune_neighbors(nbrs, m_max, vectors, dim, metric);
                     }
@@ -495,7 +491,10 @@ impl HnswGraph {
                 let farthest_dist = results.peek().map_or(f32::INFINITY, |r| r.0.dist);
 
                 if results.len() < ef || d < farthest_dist {
-                    let item = HeapItem { dist: d, id: nbr.id };
+                    let item = HeapItem {
+                        dist: d,
+                        id: nbr.id,
+                    };
                     candidates.push(MinItem(item));
                     results.push(MaxItem(item));
                     if results.len() > ef {
@@ -628,8 +627,7 @@ fn select_neighbors_diversified(
 
         let mut good = true;
         for s in &selected {
-            let dist_to_selected =
-                compute_distance(vec_of(candidate.id), vec_of(s.id), metric);
+            let dist_to_selected = compute_distance(vec_of(candidate.id), vec_of(s.id), metric);
             if dist_to_selected < candidate.dist {
                 good = false;
                 break;
@@ -708,11 +706,7 @@ mod tests {
 
     #[test]
     fn test_basic_insert_and_search() {
-        let vecs: Vec<f32> = vec![
-            1.0, 0.0, 0.0,
-            0.0, 1.0, 0.0,
-            0.9, 0.1, 0.0,
-        ];
+        let vecs: Vec<f32> = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.9, 0.1, 0.0];
 
         let mut g = HnswGraph::new(3, 4, 32, DistanceMetric::NegDotProduct);
         for i in 0..3 {
@@ -726,11 +720,7 @@ mod tests {
 
     #[test]
     fn test_euclidean_basic() {
-        let vecs: Vec<f32> = vec![
-            0.0, 0.0,
-            1.0, 0.0,
-            3.0, 4.0,
-        ];
+        let vecs: Vec<f32> = vec![0.0, 0.0, 1.0, 0.0, 3.0, 4.0];
 
         let mut g = HnswGraph::new(2, 4, 32, DistanceMetric::Euclidean);
         for i in 0..3 {
@@ -897,9 +887,6 @@ mod tests {
             .iter()
             .filter(|r| brute_ids.contains(&r.0))
             .count();
-        assert!(
-            recall >= 9,
-            "recall@10 too low at 1K vectors: {recall}/10"
-        );
+        assert!(recall >= 9, "recall@10 too low at 1K vectors: {recall}/10");
     }
 }

@@ -392,28 +392,25 @@ impl ConnectionContext {
     /// Slow path: `local_client` is a Python `RedbClient` wrapper — extract via
     /// `_rust_client` attribute.  This path exists for `MongoClient("local://...")`
     /// and `SyncManager` which create `RedbClient`.
-    pub(crate) fn local_client_typed(
-        &self,
-        py: Python<'_>,
-    ) -> PyResult<Py<RedbLocalClient>> {
+    pub(crate) fn local_client_typed(&self, py: Python<'_>) -> PyResult<Py<RedbLocalClient>> {
         let lc = self.local_client.bind(py);
         if let Ok(rs_client) = lc.extract::<Py<RedbLocalClient>>() {
             return Ok(rs_client);
         }
-        let type_name = lc.get_type().qualname().map_or(
-            "<unknown>".into(),
-            |s| s.to_string(),
-        );
+        let type_name = lc
+            .get_type()
+            .qualname()
+            .map_or("<unknown>".into(), |s| s.to_string());
         let attr = lc.getattr("_rust_client").map_err(|_| {
             PyRuntimeError::new_err(format!(
                 "local_client is {type_name} which is neither RedbLocalClient \
                  nor has a _rust_client attribute",
             ))
         })?;
-        let attr_type = attr.get_type().qualname().map_or(
-            "<unknown>".into(),
-            |s| s.to_string(),
-        );
+        let attr_type = attr
+            .get_type()
+            .qualname()
+            .map_or("<unknown>".into(), |s| s.to_string());
         attr.extract::<Py<RedbLocalClient>>().map_err(|_| {
             PyRuntimeError::new_err(format!(
                 "local_client._rust_client is {attr_type} -- expected RedbLocalClient",
@@ -439,20 +436,20 @@ impl ConnectionContext {
             if let Ok(rs_db) = py_db.extract::<Py<RedbLocalDB>>() {
                 rs_db
             } else {
-                let db_type = py_db.get_type().qualname().map_or(
-                    "<unknown>".into(),
-                    |s| s.to_string(),
-                );
+                let db_type = py_db
+                    .get_type()
+                    .qualname()
+                    .map_or("<unknown>".into(), |s| s.to_string());
                 let attr = py_db.getattr("_rust_db").map_err(|_| {
                     PyRuntimeError::new_err(format!(
                         "get_db returned {db_type} which is neither RedbLocalDB \
                          nor has a _rust_db attribute",
                     ))
                 })?;
-                let attr_type = attr.get_type().qualname().map_or(
-                    "<unknown>".into(),
-                    |s| s.to_string(),
-                );
+                let attr_type = attr
+                    .get_type()
+                    .qualname()
+                    .map_or("<unknown>".into(), |s| s.to_string());
                 attr.extract::<Py<RedbLocalDB>>().map_err(|_| {
                     PyRuntimeError::new_err(format!(
                         "get_db(...)._rust_db is {attr_type} -- expected RedbLocalDB",

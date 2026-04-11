@@ -47,6 +47,7 @@ def populated_collection(local_collection, sample_docs):
     local_collection.insert_many(sample_docs)
     return local_collection
 
+
 # ── RedbLocalClient ──────────────────────────────────────────────────
 
 

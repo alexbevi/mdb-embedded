@@ -30,7 +30,7 @@ from smongo._smongo_core import (
     validate_namespace,
 )
 
-from .sessions import SessionRegistry, TooManySessions  # noqa: F401
+from .sessions import SessionRegistry, TooManySessions
 
 __all__ = [
     "ConnectionContext",

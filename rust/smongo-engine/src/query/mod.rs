@@ -462,9 +462,7 @@ fn eval_in(value: Option<&Bson>, cond_val: &Bson) -> Result<bool, String> {
     };
 
     match value {
-        Some(Bson::Array(val_arr)) => {
-            Ok(val_arr.iter().any(&contains))
-        }
+        Some(Bson::Array(val_arr)) => Ok(val_arr.iter().any(&contains)),
         Some(val) => Ok(contains(val)),
         None => Ok(false),
     }
@@ -612,10 +610,8 @@ fn eval_all(value: Option<&Bson>, cond_val: &Bson) -> Result<bool, String> {
 
     // Build a set of canonical keys for O(1) membership tests instead
     // of O(|val_arr|) per condition element.
-    let val_keys: std::collections::HashSet<Vec<u8>> = val_arr
-        .iter()
-        .map(canonical_bson_key)
-        .collect();
+    let val_keys: std::collections::HashSet<Vec<u8>> =
+        val_arr.iter().map(canonical_bson_key).collect();
 
     for cond_item in cond_arr {
         if !val_keys.contains(&canonical_bson_key(cond_item)) {

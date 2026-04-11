@@ -49,7 +49,10 @@ impl StorageSession for OpfsSession {
     }
 
     fn drop_table(&self, name: &str) -> StorageResult<()> {
-        self.handles.lock().unwrap_or_else(|e| e.into_inner()).remove(name);
+        self.handles
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(name);
         Ok(())
     }
 
@@ -408,10 +411,7 @@ fn parse_file(bytes: &[u8]) -> StorageResult<Vec<(Vec<u8>, Vec<u8>)>> {
 }
 
 fn serialize_file(entries: &[(Vec<u8>, Vec<u8>)]) -> Vec<u8> {
-    let total: usize = entries
-        .iter()
-        .map(|(k, v)| 8 + k.len() + v.len())
-        .sum();
+    let total: usize = entries.iter().map(|(k, v)| 8 + k.len() + v.len()).sum();
     let mut buf = Vec::with_capacity(total);
 
     for (key, value) in entries {

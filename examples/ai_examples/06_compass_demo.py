@@ -255,12 +255,19 @@ def seed_data(db_path: str) -> SmongoClient:
             {
                 "text": t,
                 "embedding": (
-                    np.random.rand(dim).astype(np.float32)
-                    / np.linalg.norm(np.random.rand(dim))
+                    np.random.rand(dim).astype(np.float32) / np.linalg.norm(np.random.rand(dim))
                 ).tolist(),
                 "chunk_id": i,
-                "topic": ["engine", "wire", "vector", "transactions",
-                          "aggregation", "sync", "indexes", "perf"][i],
+                "topic": [
+                    "engine",
+                    "wire",
+                    "vector",
+                    "transactions",
+                    "aggregation",
+                    "sync",
+                    "indexes",
+                    "perf",
+                ][i],
             }
             for i, t in enumerate(texts)
         ]
@@ -307,10 +314,7 @@ def run_self_demo(port: int) -> None:
 
     for emp in engineers:
         bar = "█" * (emp["salary"] // 10000)
-        print(
-            f"     {emp['name']:18s}  ${emp['salary']:>7,}  "
-            f"{emp['level']:6s}  {bar}"
-        )
+        print(f"     {emp['name']:18s}  ${emp['salary']:>7,}  " f"{emp['level']:6s}  {bar}")
     print(f"     ({ms:.0f}ms, {len(engineers)} results)\n")
 
     # ── Query 2: aggregation — avg salary by dept ─────────────
@@ -434,7 +438,7 @@ def run_self_demo(port: int) -> None:
     print(f"   {separator()}\n")
 
     t0 = time.time()
-    facets = list(
+    facets = next(
         db.employees.aggregate(
             [
                 {
@@ -462,7 +466,7 @@ def run_self_demo(port: int) -> None:
                 }
             ]
         )
-    )[0]
+    )
     ms = (time.time() - t0) * 1000
 
     print("     By City:")
@@ -473,10 +477,7 @@ def run_self_demo(port: int) -> None:
     print("\n     By Level:")
     for r in facets["by_level"]:
         bar = "█" * r["count"]
-        print(
-            f"       {r['_id']:12s}  {r['count']:2d}  "
-            f"avg ${r['avg_salary']:>9,.0f}  {bar}"
-        )
+        print(f"       {r['_id']:12s}  {r['count']:2d}  " f"avg ${r['avg_salary']:>9,.0f}  {bar}")
     print(f"     ({ms:.0f}ms)\n")
 
     client.close()
@@ -497,9 +498,7 @@ def main() -> None:
     # ── 2. Start the wire server ───────────────────────────────
     print(f"\n2. Starting wire protocol server on port {PORT}...")
 
-    server = WireServer(
-        DB_PATH, port=PORT, local_client=native.get_local_client()
-    )
+    server = WireServer(DB_PATH, port=PORT, local_client=native.get_local_client())
     server.start()
     time.sleep(0.3)
 
@@ -558,10 +557,7 @@ def main() -> None:
         server.stop()
         native.close()
         print("Server stopped. Data preserved at:", DB_PATH)
-        print(
-            "Restart anytime:  "
-            "python examples/ai_examples/06_compass_demo.py\n"
-        )
+        print("Restart anytime:  " "python examples/ai_examples/06_compass_demo.py\n")
         sys.exit(0)
 
     signal.signal(signal.SIGINT, handle_shutdown)

@@ -397,10 +397,12 @@ fn atlas_search_index_to_create_indexes(
     let type_str = "vectorSearch";
     opts.set_item("type", type_str)?;
 
-    coll_py
-        .bind(py)
-        .borrow()
-        .create_index(py, key_dict.as_any(), Some(&opts.as_borrowed()), None)?;
+    coll_py.bind(py).borrow().create_index(
+        py,
+        key_dict.as_any(),
+        Some(&opts.as_borrowed()),
+        None,
+    )?;
 
     Ok(name)
 }

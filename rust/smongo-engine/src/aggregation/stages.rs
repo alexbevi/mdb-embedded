@@ -771,9 +771,11 @@ fn substitute_var(expr: &Bson, var_name: &str, value: &Bson) -> Bson {
             }
             Bson::Document(new_doc)
         }
-        Bson::Array(arr) => {
-            Bson::Array(arr.iter().map(|v| substitute_var(v, var_name, value)).collect())
-        }
+        Bson::Array(arr) => Bson::Array(
+            arr.iter()
+                .map(|v| substitute_var(v, var_name, value))
+                .collect(),
+        ),
         other => other.clone(),
     }
 }
@@ -1070,13 +1072,21 @@ pub fn stage_set_window_fields(
                             count += 1;
                             min_val = Some(match min_val {
                                 Some(prev) => {
-                                    if n < bson_to_f64(&prev).unwrap_or(f64::INFINITY) { v.clone() } else { prev }
+                                    if n < bson_to_f64(&prev).unwrap_or(f64::INFINITY) {
+                                        v.clone()
+                                    } else {
+                                        prev
+                                    }
                                 }
                                 None => v.clone(),
                             });
                             max_val = Some(match max_val {
                                 Some(prev) => {
-                                    if n > bson_to_f64(&prev).unwrap_or(f64::NEG_INFINITY) { v.clone() } else { prev }
+                                    if n > bson_to_f64(&prev).unwrap_or(f64::NEG_INFINITY) {
+                                        v.clone()
+                                    } else {
+                                        prev
+                                    }
                                 }
                                 None => v.clone(),
                             });
@@ -1156,7 +1166,10 @@ pub fn stage_project_stream(input: DocStream, projection: &Bson) -> AggregationR
                 if field == "_id" {
                     continue;
                 }
-                if !matches!(value, Bson::Int32(0) | Bson::Int64(0) | Bson::Boolean(false)) {
+                if !matches!(
+                    value,
+                    Bson::Int32(0) | Bson::Int64(0) | Bson::Boolean(false)
+                ) {
                     computed.push((field.clone(), evaluate_expression(&doc, value)?));
                 }
             }
@@ -1165,7 +1178,10 @@ pub fn stage_project_stream(input: DocStream, projection: &Bson) -> AggregationR
                 if field == "_id" {
                     continue;
                 }
-                if matches!(value, Bson::Int32(0) | Bson::Int64(0) | Bson::Boolean(false)) {
+                if matches!(
+                    value,
+                    Bson::Int32(0) | Bson::Int64(0) | Bson::Boolean(false)
+                ) {
                     nd.remove(field);
                 }
             }
@@ -1520,31 +1536,51 @@ pub fn stage_group_stream(
     Ok(Box::new(results.into_iter().map(Ok)))
 }
 
-pub fn stage_count_stream(input: DocStream, field_name: &Bson, memory_limit: Option<usize>) -> AggregationResult<DocStream> {
+pub fn stage_count_stream(
+    input: DocStream,
+    field_name: &Bson,
+    memory_limit: Option<usize>,
+) -> AggregationResult<DocStream> {
     let docs = collect_with_limit(input, "$count", memory_limit)?;
     let results = stage_count(docs, field_name)?;
     Ok(Box::new(results.into_iter().map(Ok)))
 }
 
-pub fn stage_sample_stream(input: DocStream, spec: &Bson, memory_limit: Option<usize>) -> AggregationResult<DocStream> {
+pub fn stage_sample_stream(
+    input: DocStream,
+    spec: &Bson,
+    memory_limit: Option<usize>,
+) -> AggregationResult<DocStream> {
     let docs = collect_with_limit(input, "$sample", memory_limit)?;
     let results = stage_sample(docs, spec)?;
     Ok(Box::new(results.into_iter().map(Ok)))
 }
 
-pub fn stage_sort_by_count_stream(input: DocStream, expr: &Bson, memory_limit: Option<usize>) -> AggregationResult<DocStream> {
+pub fn stage_sort_by_count_stream(
+    input: DocStream,
+    expr: &Bson,
+    memory_limit: Option<usize>,
+) -> AggregationResult<DocStream> {
     let docs = collect_with_limit(input, "$sortByCount", memory_limit)?;
     let results = stage_sort_by_count(docs, expr)?;
     Ok(Box::new(results.into_iter().map(Ok)))
 }
 
-pub fn stage_bucket_stream(input: DocStream, spec: &Bson, memory_limit: Option<usize>) -> AggregationResult<DocStream> {
+pub fn stage_bucket_stream(
+    input: DocStream,
+    spec: &Bson,
+    memory_limit: Option<usize>,
+) -> AggregationResult<DocStream> {
     let docs = collect_with_limit(input, "$bucket", memory_limit)?;
     let results = stage_bucket(docs, spec)?;
     Ok(Box::new(results.into_iter().map(Ok)))
 }
 
-pub fn stage_bucket_auto_stream(input: DocStream, spec: &Bson, memory_limit: Option<usize>) -> AggregationResult<DocStream> {
+pub fn stage_bucket_auto_stream(
+    input: DocStream,
+    spec: &Bson,
+    memory_limit: Option<usize>,
+) -> AggregationResult<DocStream> {
     let docs = collect_with_limit(input, "$bucketAuto", memory_limit)?;
     let results = stage_bucket_auto(docs, spec)?;
     Ok(Box::new(results.into_iter().map(Ok)))
@@ -1753,8 +1789,14 @@ pub fn stage_vector_search_stream(input: DocStream, spec: &Bson) -> AggregationR
         candidates.push(doc);
     }
 
-    let scored =
-        super::vector::score_documents(&candidates, s.path, &s.query_vec, s.limit, s.metric, s.exact)?;
+    let scored = super::vector::score_documents(
+        &candidates,
+        s.path,
+        &s.query_vec,
+        s.limit,
+        s.metric,
+        s.exact,
+    )?;
 
     let results: Vec<Document> = scored
         .into_iter()
@@ -1791,10 +1833,7 @@ pub fn stage_vector_search_stream_indexed(
                     let results: Vec<Document> = scored
                         .into_iter()
                         .map(|(mut doc, score)| {
-                            doc.insert(
-                                s.score_field.to_string(),
-                                bson::Bson::Double(score as f64),
-                            );
+                            doc.insert(s.score_field.to_string(), bson::Bson::Double(score as f64));
                             doc
                         })
                         .collect();
@@ -1823,9 +1862,9 @@ pub fn stage_geo_near_stream_indexed(
     spec: &Bson,
     idx_ctx: Option<&super::PipelineIndexCtx<'_>>,
 ) -> AggregationResult<DocStream> {
-    let gn_doc = spec.as_document().ok_or_else(|| {
-        AggregationError::InvalidStage("$geoNear requires document".into())
-    })?;
+    let gn_doc = spec
+        .as_document()
+        .ok_or_else(|| AggregationError::InvalidStage("$geoNear requires document".into()))?;
 
     if let Some(ctx) = idx_ctx {
         let near = gn_doc.get("near");

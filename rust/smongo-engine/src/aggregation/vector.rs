@@ -110,7 +110,14 @@ pub fn vector_search_stage(docs: Vec<Document>, spec: &Bson) -> AggregationResul
         docs
     };
 
-    let scored = score_documents(&candidates, s.path, &s.query_vec, s.limit, s.metric, s.exact)?;
+    let scored = score_documents(
+        &candidates,
+        s.path,
+        &s.query_vec,
+        s.limit,
+        s.metric,
+        s.exact,
+    )?;
 
     let mut results = Vec::with_capacity(scored.len());
     for (mut doc, score) in scored {
@@ -145,8 +152,7 @@ pub fn score_documents(
         idx.search(query_vec, limit)
     };
 
-    let id_score: std::collections::HashMap<String, f32> =
-        hits.into_iter().collect();
+    let id_score: std::collections::HashMap<String, f32> = hits.into_iter().collect();
 
     let mut results: Vec<(Document, f32)> = Vec::with_capacity(id_score.len());
     for doc in docs {
@@ -287,7 +293,10 @@ mod tests {
 
         // Score must be a real number, not null
         let score = results[0].get_f64("score").expect("score should be f64");
-        assert!(score > 0.0, "top result score should be positive, got {score}");
+        assert!(
+            score > 0.0,
+            "top result score should be positive, got {score}"
+        );
 
         // Ranking preserved: doc 1 is the closest cosine match
         assert_eq!(results[0].get_i32("_id").unwrap(), 1);
@@ -348,10 +357,7 @@ mod tests {
         let results = vector_search_stage(docs, &Bson::Document(spec)).unwrap();
         for r in &results {
             let score = r.get_f64("_vectorScore").unwrap();
-            assert!(
-                (0.0..=1.0).contains(&score),
-                "score {score} outside [0, 1]"
-            );
+            assert!((0.0..=1.0).contains(&score), "score {score} outside [0, 1]");
         }
         // Identical vector → score ≈ 1.0
         let top_score = results[0].get_f64("_vectorScore").unwrap();
@@ -530,10 +536,7 @@ mod tests {
     /// from each result doc. Verify this works end-to-end with dotProduct.
     #[test]
     fn test_langchain_dotproduct_pipeline() {
-        let docs = vec![
-            make_doc(1, vec![1.0, 0.0]),
-            make_doc(2, vec![0.0, 1.0]),
-        ];
+        let docs = vec![make_doc(1, vec![1.0, 0.0]), make_doc(2, vec![0.0, 1.0])];
         let pipeline = vec![
             doc! { "$vectorSearch": {
                 "queryVector": [1.0, 0.0],

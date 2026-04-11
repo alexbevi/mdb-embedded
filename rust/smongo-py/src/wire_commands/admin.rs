@@ -465,7 +465,10 @@ fn cmd_rename_collection(
 
     let db = get_db(ctx, src_db)?;
     let db_ref = db.cast::<RedbLocalDB>()?;
-    match db_ref.borrow().rename_collection(py, src_coll, dst_coll, drop_target) {
+    match db_ref
+        .borrow()
+        .rename_collection(py, src_coll, dst_coll, drop_target)
+    {
         Ok(()) => Ok(ok_dict(py)?.into_any().unbind()),
         Err(e) => {
             let msg = e.value(py).str()?.to_string();
@@ -1337,7 +1340,9 @@ fn persist_user_to_redb(
     let lc = ctx.borrow().local_client_typed(py)?;
     let json_util = crate::cached_modules::bson_json_util(py)?;
     let value: String = json_util.call_method1("dumps", (user_doc,))?.extract()?;
-    lc.bind(py).borrow().sync_kv_put("table:__users", key, &value)
+    lc.bind(py)
+        .borrow()
+        .sync_kv_put("table:__users", key, &value)
 }
 
 fn delete_user_from_redb(

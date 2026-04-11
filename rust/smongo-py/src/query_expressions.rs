@@ -54,7 +54,8 @@ pub(crate) fn apply_projection_single<'py>(
         return Ok(doc.clone());
     }
 
-    let doc_dict = doc.cast::<PyDict>()
+    let doc_dict = doc
+        .cast::<PyDict>()
         .map_err(|_| PyValueError::new_err("apply_projection: doc must be a dict"))?;
 
     let id_excluded = fields_dict

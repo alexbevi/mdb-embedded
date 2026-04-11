@@ -55,14 +55,16 @@ def _cmd_aggregate(ctx: ConnectionContext, cmd: CommandDoc, seqs: DocSequences) 
     if pipeline and "$indexStats" in pipeline[0]:
         index_docs = []
         for idx_info in coll.list_indexes():
-            index_docs.append({
-                "name": idx_info.get("name", ""),
-                "key": idx_info.get("key", {}),
-                "host": "localhost:embedded",
-                "accesses": {"ops": Int64(0), "since": "2026-01-01T00:00:00.000Z"},
-                "shard": "embedded",
-                "spec": idx_info,
-            })
+            index_docs.append(
+                {
+                    "name": idx_info.get("name", ""),
+                    "key": idx_info.get("key", {}),
+                    "host": "localhost:embedded",
+                    "accesses": {"ops": Int64(0), "since": "2026-01-01T00:00:00.000Z"},
+                    "shard": "embedded",
+                    "spec": idx_info,
+                }
+            )
         remaining = pipeline[1:]
         if remaining:
             coll_getter = lambda name: ctx.get_db(db_name).get_collection(name)

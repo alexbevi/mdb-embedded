@@ -140,7 +140,11 @@ pub struct IndexOptions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index_type: Option<IndexType>,
     /// Options specific to vector search indexes.
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "vectorSearchOptions")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "vectorSearchOptions"
+    )]
     pub vector_options: Option<VectorIndexOptions>,
     /// Options specific to full-text indexes.
     #[serde(default, skip_serializing_if = "Option::is_none")]

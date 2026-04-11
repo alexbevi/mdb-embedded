@@ -30,6 +30,7 @@ log = logging.getLogger("smongo.client")
 def _get_version() -> str:
     """Resolve smongo.__version__ lazily to avoid circular imports."""
     import smongo
+
     return smongo.__version__
 
 

@@ -30,31 +30,24 @@ PORT = 27023
 KNOWLEDGE = [
     "smongo is an embedded MongoDB engine that runs entirely in-process on redb. "
     "No server process, no Docker, no network -- just import and go.",
-
     "The wire protocol server lets any standard MongoDB driver (PyMongo, mongosh, "
     "Compass) connect to smongo over TCP. Clients have no idea they're talking to "
     "an embedded engine.",
-
     "smongo supports $vectorSearch as a native aggregation stage with a vendored "
     "HNSW index for approximate nearest-neighbor search and a flat index for "
     "exact brute-force search, with Atlas-compatible cosine/euclidean/dotProduct "
     "scoring and optional MQL pre-filtering.",
-
     "Full ACID transactions with snapshot isolation are supported across multiple "
     "collections via the embedded engine's MVCC storage layer.",
-
     "The aggregation pipeline supports 25+ stages including $lookup joins, "
     "$graphLookup, $facet for parallel sub-pipelines, $setWindowFields, and "
     "$merge for materialized views.",
-
     "Atlas sync pushes local writes to MongoDB Atlas and pulls remote changes "
     "back, with per-document vector clocks for causal ordering and automatic "
     "conflict resolution.",
-
     "The query planner uses heuristic prefix-scoring to automatically select "
     "B-tree indexes. It supports compound, unique, sparse, TTL, text, hashed, "
     "wildcard, partial, and vector search indexes.",
-
     "The Rust core eliminates ~50 Python method dispatches per command by using "
     "typed PyO3 borrow() calls instead of call_method(). The GIL is still "
     "acquired but held for actual work only.",
@@ -72,10 +65,7 @@ def main() -> None:
         from langchain_mongodb import MongoDBAtlasVectorSearch
         from langchain_ollama import ChatOllama, OllamaEmbeddings
     except ImportError:
-        print(
-            "Install deps:  pip install langchain-ollama langchain-mongodb "
-            "pymongo smongo"
-        )
+        print("Install deps:  pip install langchain-ollama langchain-mongodb " "pymongo smongo")
         return
 
     print("╔══════════════════════════════════════════════════════════╗")
@@ -126,9 +116,7 @@ def main() -> None:
     # ── 4. Start wire server ─────────────────────────────────
     print(f"4. Starting wire protocol server on port {PORT}...")
 
-    with WireServer(
-        db_path, port=PORT, local_client=native.get_local_client()
-    ) as _srv:
+    with WireServer(db_path, port=PORT, local_client=native.get_local_client()) as _srv:
         time.sleep(0.3)
 
         from pymongo import MongoClient as PyMongoClient
@@ -216,24 +204,15 @@ def main() -> None:
             gen_ms = (time.time() - t0) * 1000
 
             print(f"   A: {answer}")
-            print(
-                f"      (retrieval: {retrieve_ms:.0f}ms, "
-                f"generation: {gen_ms:.0f}ms)\n"
-            )
+            print(f"      (retrieval: {retrieve_ms:.0f}ms, " f"generation: {gen_ms:.0f}ms)\n")
 
         # ── 8. Summary ──────────────────────────────────────
         print(f"   {separator('═')}")
         print("   Every component ran locally on your machine:\n")
         print("     Embeddings : Ollama nomic-embed-text")
-        print(
-            "     Vector DB  : smongo "
-            "(via official MongoDBAtlasVectorSearch)"
-        )
+        print("     Vector DB  : smongo " "(via official MongoDBAtlasVectorSearch)")
         print("     LLM        : Ollama llama3.2")
-        print(
-            "     Framework  : LangChain "
-            "(official integrations, zero custom code)"
-        )
+        print("     Framework  : LangChain " "(official integrations, zero custom code)")
         print(f"   {separator('═')}\n")
 
         client.close()

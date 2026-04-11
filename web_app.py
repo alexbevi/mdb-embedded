@@ -491,7 +491,7 @@ def drop_index(name: str) -> Response | tuple[Response, int]:
 
 
 @app.route("/api/oplog")
-def get_oplog() -> Response:
+def get_oplog() -> Response | tuple[Response, int]:
     coll = _coll(request.args.get("coll", "users"))
     try:
         limit = int(request.args.get("limit", 50))

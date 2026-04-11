@@ -1,6 +1,6 @@
 use bson::Document;
 
-use super::{deserialize_document, CollectionError, CollectionResult, Collection};
+use super::{deserialize_document, Collection, CollectionError, CollectionResult};
 use crate::explain::{ExecutionStats, ExplainResult};
 use crate::planner::{plan_query, ExecutionPlan};
 use crate::query::eval_query;

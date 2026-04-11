@@ -10,6 +10,9 @@ expected symbol is present and correctly typed.
 
 from __future__ import annotations
 
+# ── smongo.audit (module reference, not individual attrs) ─────────────
+import smongo.audit as audit_mod
+
 # ── smongo.wire.commands._registry ────────────────────────────────────
 from smongo.wire.commands._registry import (
     _GIT_VERSION,
@@ -21,9 +24,6 @@ from smongo.wire.commands._registry import (
 
 # ── smongo.wire.commands.users ────────────────────────────────────────
 from smongo.wire.commands.users import _USER_STORE, _USER_STORE_LOCK
-
-# ── smongo.audit (module reference, not individual attrs) ─────────────
-import smongo.audit as audit_mod
 
 __all__ = [
     "_GIT_VERSION",

@@ -69,10 +69,10 @@ class AsyncCursor:
             doc = self._list[self._index]
             self._index += 1
             return doc
-        doc = await asyncio.to_thread(next, self._iter, _SENTINEL)
-        if doc is _SENTINEL:
+        result: Any = await asyncio.to_thread(lambda: next(self._iter, _SENTINEL))
+        if result is _SENTINEL:
             raise StopAsyncIteration
-        return doc
+        return result  # type: ignore[no-any-return]
 
     def to_list(self) -> list[Document]:
         if self._list is not None:

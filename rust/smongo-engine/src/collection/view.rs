@@ -4,9 +4,7 @@ use super::{
     deserialize_document, ensure_id, extract_id_string, serialize_document, Collection,
     CollectionError, CollectionResult, DeleteResult, InsertOneResult, UpdateResult,
 };
-use crate::index::{
-    extract_index_key_with_collation, resolve_index_type, IndexSpec, IndexType,
-};
+use crate::index::{extract_index_key_with_collation, resolve_index_type, IndexSpec, IndexType};
 use crate::query::eval_query;
 use crate::storage::{DefaultSession, StorageCursor, StorageResult, StorageSession};
 use crate::update::apply_update;
@@ -65,11 +63,8 @@ impl<'a, S: StorageSession> CollectionView<'a, S> {
                     .collation
                     .as_ref()
                     .map(crate::collation::Collation::from_doc);
-                let key_bytes = extract_index_key_with_collation(
-                    doc,
-                    &spec.keys,
-                    collation.as_ref(),
-                );
+                let key_bytes =
+                    extract_index_key_with_collation(doc, &spec.keys, collation.as_ref());
                 if spec.options.unique
                     && Collection::<S>::index_has_prefix(&mut idx_cursor, &key_bytes)?
                 {
@@ -102,11 +97,8 @@ impl<'a, S: StorageSession> CollectionView<'a, S> {
                     .collation
                     .as_ref()
                     .map(crate::collation::Collation::from_doc);
-                let key_bytes = extract_index_key_with_collation(
-                    doc,
-                    &spec.keys,
-                    collation.as_ref(),
-                );
+                let key_bytes =
+                    extract_index_key_with_collation(doc, &spec.keys, collation.as_ref());
                 let mut combined = key_bytes;
                 combined.extend_from_slice(id_str.as_bytes());
                 idx_cursor.set_key_raw(&combined);

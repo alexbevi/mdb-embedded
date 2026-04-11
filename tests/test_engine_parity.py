@@ -94,9 +94,7 @@ class TestUpdateParity:
         assert len(engine_collection.find({"x": 99})) == 2
 
     def test_upsert_creates_document(self, engine_collection):
-        engine_collection.update_one(
-            {"x": "missing"}, {"$set": {"x": "created"}}, upsert=True
-        )
+        engine_collection.update_one({"x": "missing"}, {"$set": {"x": "created"}}, upsert=True)
         assert engine_collection.find_one({"x": "created"}) is not None
 
 
@@ -157,14 +155,18 @@ class TestAggregateEngineParity:
         assert len(result) == 2
 
     def test_group(self, engine_collection):
-        engine_collection.insert_many([
-            {"dept": "eng", "salary": 100},
-            {"dept": "eng", "salary": 200},
-            {"dept": "sales", "salary": 150},
-        ])
-        result = list(engine_collection.aggregate_engine([
-            {"$group": {"_id": "$dept", "total": {"$sum": "$salary"}}}
-        ]))
+        engine_collection.insert_many(
+            [
+                {"dept": "eng", "salary": 100},
+                {"dept": "eng", "salary": 200},
+                {"dept": "sales", "salary": 150},
+            ]
+        )
+        result = list(
+            engine_collection.aggregate_engine(
+                [{"$group": {"_id": "$dept", "total": {"$sum": "$salary"}}}]
+            )
+        )
         by_dept = {r["_id"]: r["total"] for r in result}
         assert by_dept["eng"] == 300
         assert by_dept["sales"] == 150

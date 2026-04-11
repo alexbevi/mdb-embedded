@@ -168,14 +168,22 @@ fn cmd_aggregate(
 
                 if let Some(remaining_pipeline) = remaining {
                     let input_docs = PyList::new(py, [doc.as_any()])?;
-                    let result =
-                        crate::aggregation::aggregate_pipeline(py, &input_docs, &remaining_pipeline, None, None, 100_000, false, 104_857_600)?;
+                    let result = crate::aggregation::aggregate_pipeline(
+                        py,
+                        &input_docs,
+                        &remaining_pipeline,
+                        None,
+                        None,
+                        100_000,
+                        false,
+                        104_857_600,
+                    )?;
                     let cr = ctx.borrow().cursor_registry.clone_ref(py);
-                    let cr_reg =
-                        cr.bind(py).cast::<crate::wire_cursors::CursorRegistry>()?;
-                    let (cursor_id, first_batch_py) = cr_reg
-                        .borrow()
-                        .create(py, &ns, &result, Some(batch_size as usize))?;
+                    let cr_reg = cr.bind(py).cast::<crate::wire_cursors::CursorRegistry>()?;
+                    let (cursor_id, first_batch_py) =
+                        cr_reg
+                            .borrow()
+                            .create(py, &ns, &result, Some(batch_size as usize))?;
                     let cursor_dict = PyDict::new(py);
                     cursor_dict.set_item("id", bson_int64(py, cursor_id)?)?;
                     cursor_dict.set_item("ns", &ns)?;
@@ -233,14 +241,22 @@ fn cmd_aggregate(
                 };
 
                 if let Some(remaining_pipeline) = remaining {
-                    let result =
-                        crate::aggregation::aggregate_pipeline(py, &index_docs, &remaining_pipeline, None, None, 100_000, false, 104_857_600)?;
+                    let result = crate::aggregation::aggregate_pipeline(
+                        py,
+                        &index_docs,
+                        &remaining_pipeline,
+                        None,
+                        None,
+                        100_000,
+                        false,
+                        104_857_600,
+                    )?;
                     let cr = ctx.borrow().cursor_registry.clone_ref(py);
-                    let cr_reg =
-                        cr.bind(py).cast::<crate::wire_cursors::CursorRegistry>()?;
-                    let (cursor_id, first_batch_py) = cr_reg
-                        .borrow()
-                        .create(py, &ns, &result, Some(batch_size as usize))?;
+                    let cr_reg = cr.bind(py).cast::<crate::wire_cursors::CursorRegistry>()?;
+                    let (cursor_id, first_batch_py) =
+                        cr_reg
+                            .borrow()
+                            .create(py, &ns, &result, Some(batch_size as usize))?;
                     let cursor_dict = PyDict::new(py);
                     cursor_dict.set_item("id", bson_int64(py, cursor_id)?)?;
                     cursor_dict.set_item("ns", &ns)?;

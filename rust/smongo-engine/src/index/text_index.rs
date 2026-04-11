@@ -20,8 +20,9 @@ use regex::Regex;
 /// function so behavior is consistent between indexed and brute-force paths.
 pub fn tokenize(text: &str) -> Vec<String> {
     #[allow(clippy::expect_used)]
-    static WORD_RE: std::sync::LazyLock<Regex> =
-        std::sync::LazyLock::new(|| Regex::new(r"\w+").expect("static \\w+ tokenizer regex must compile"));
+    static WORD_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(r"\w+").expect("static \\w+ tokenizer regex must compile")
+    });
     let lowered = text.to_lowercase();
     WORD_RE
         .find_iter(&lowered)

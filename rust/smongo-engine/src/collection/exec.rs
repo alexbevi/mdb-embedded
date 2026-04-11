@@ -3,7 +3,7 @@ use std::collections::HashSet;
 
 use super::{
     apply_projection_to_index_doc, build_seek_prefix, deserialize_document, extract_id_string,
-    extract_vector_query, should_include_id, CollectionError, CollectionResult, Collection,
+    extract_vector_query, should_include_id, Collection, CollectionError, CollectionResult,
 };
 use crate::index::{decode_index_key, extract_index_key};
 use crate::planner::ExecutionPlan;
@@ -250,7 +250,10 @@ impl<S: StorageSession> Collection<S> {
         Ok(out)
     }
 
-    pub(super) fn collect_collection_scan(&self, filter: &Document) -> CollectionResult<Vec<Document>> {
+    pub(super) fn collect_collection_scan(
+        &self,
+        filter: &Document,
+    ) -> CollectionResult<Vec<Document>> {
         let mut cursor = self.cursor().map_err(CollectionError::from)?;
         let mut out = Vec::new();
         if cursor.next().is_err() {
@@ -643,8 +646,14 @@ impl<S: StorageSession> Collection<S> {
         };
 
         let all_docs = self.collect_collection_scan(&Document::new())?;
-        let mut vec_idx =
-            VectorIndex::build_with_params(&all_docs, field, dimensions, metric, ef_construction, m);
+        let mut vec_idx = VectorIndex::build_with_params(
+            &all_docs,
+            field,
+            dimensions,
+            metric,
+            ef_construction,
+            m,
+        );
 
         let results = if indexing_method == "flat" {
             vec_idx.search_exact(&query_vec, k)

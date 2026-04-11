@@ -91,12 +91,7 @@ fn bench_apply_update(c: &mut Criterion) {
     c.bench_function("apply_update/$push", |b| {
         b.iter_batched(
             || sample_doc(1),
-            |mut doc| {
-                apply_update(
-                    &mut doc,
-                    black_box(&doc! { "$push": { "tags": "delta" } }),
-                )
-            },
+            |mut doc| apply_update(&mut doc, black_box(&doc! { "$push": { "tags": "delta" } })),
             criterion::BatchSize::SmallInput,
         )
     });

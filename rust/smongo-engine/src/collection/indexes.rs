@@ -1,14 +1,14 @@
 use bson::{Bson, Document};
 
 use super::{
-    deserialize_document, extract_id_string, CollectionError, CollectionResult, Collection,
+    deserialize_document, extract_id_string, Collection, CollectionError, CollectionResult,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use crate::index::twodsphere_index_key;
 use crate::index::{
     extract_index_key, extract_index_key_with_collation, generate_index_name, is_2dsphere_keys,
     validate_custom_index_name, IndexOptions, IndexSpec,
 };
-#[cfg(not(target_arch = "wasm32"))]
-use crate::index::twodsphere_index_key;
 use crate::storage::{StorageCursor, StorageSession};
 
 impl<S: StorageSession> Collection<S> {
@@ -269,7 +269,10 @@ impl<S: StorageSession> Collection<S> {
     /// Uses `search_near` to jump close to `prefix` in the sorted key space,
     /// then checks whether the landing position (or its immediate successor)
     /// starts with `prefix`.
-    pub(super) fn index_has_prefix<C: StorageCursor>(cursor: &mut C, prefix: &[u8]) -> CollectionResult<bool> {
+    pub(super) fn index_has_prefix<C: StorageCursor>(
+        cursor: &mut C,
+        prefix: &[u8],
+    ) -> CollectionResult<bool> {
         cursor.set_key_raw(prefix);
         match cursor.search_near() {
             Ok(exact) => {
@@ -419,11 +422,8 @@ impl<S: StorageSession> Collection<S> {
                         .collation
                         .as_ref()
                         .map(crate::collation::Collation::from_doc);
-                    let index_key_bytes = extract_index_key_with_collation(
-                        doc,
-                        &index_spec.keys,
-                        collation.as_ref(),
-                    );
+                    let index_key_bytes =
+                        extract_index_key_with_collation(doc, &index_spec.keys, collation.as_ref());
 
                     if index_spec.options.unique
                         && Self::index_has_prefix(&mut index_cursor, &index_key_bytes)?
@@ -528,11 +528,8 @@ impl<S: StorageSession> Collection<S> {
                         .collation
                         .as_ref()
                         .map(crate::collation::Collation::from_doc);
-                    let index_key_bytes = extract_index_key_with_collation(
-                        doc,
-                        &index_spec.keys,
-                        collation.as_ref(),
-                    );
+                    let index_key_bytes =
+                        extract_index_key_with_collation(doc, &index_spec.keys, collation.as_ref());
                     let mut combined_key = index_key_bytes;
                     combined_key.extend_from_slice(id_str.as_bytes());
                     cursor.set_key_raw(&combined_key);
@@ -593,7 +590,11 @@ impl<S: StorageSession> Collection<S> {
     }
 
     /// Update document in all indexes (remove old, insert new)
-    pub(super) fn update_in_indexes(&self, old_doc: &Document, new_doc: &Document) -> CollectionResult<()> {
+    pub(super) fn update_in_indexes(
+        &self,
+        old_doc: &Document,
+        new_doc: &Document,
+    ) -> CollectionResult<()> {
         self.remove_from_indexes(old_doc)?;
         self.insert_into_indexes(new_doc)?;
         Ok(())

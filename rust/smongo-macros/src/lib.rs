@@ -1,3 +1,4 @@
+#![allow(clippy::panic, clippy::unwrap_used)]
 //! Proc macros for declarative Rust ↔ Python FFI bindings.
 //!
 //! # `#[derive(PythonImports)]`
@@ -23,7 +24,7 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, DeriveInput, Data, Fields, Type, PathArguments, GenericArgument};
+use syn::{parse_macro_input, Data, DeriveInput, Fields, GenericArgument, PathArguments, Type};
 
 #[proc_macro_derive(PythonImports, attributes(py))]
 pub fn derive_python_imports(input: TokenStream) -> TokenStream {
@@ -41,25 +42,28 @@ pub fn derive_python_imports(input: TokenStream) -> TokenStream {
         _ => panic!("PythonImports can only be derived for structs"),
     };
 
-    let field_inits: Vec<_> = fields.iter().map(|f| {
-        let field_name = f.ident.as_ref()
-            .unwrap_or_else(|| panic!("unnamed field"));
-        let attr_name = extract_field_attr(&f.attrs)
-            .unwrap_or_else(|| panic!("#[py(attr = \"...\")] is required on field `{field_name}`"));
+    let field_inits: Vec<_> = fields
+        .iter()
+        .map(|f| {
+            let field_name = f.ident.as_ref().unwrap_or_else(|| panic!("unnamed field"));
+            let attr_name = extract_field_attr(&f.attrs).unwrap_or_else(|| {
+                panic!("#[py(attr = \"...\")] is required on field `{field_name}`")
+            });
 
-        let strategy = classify_type(&f.ty);
-        match strategy {
-            FieldStrategy::PyAny => quote! {
-                #field_name: manifest.getattr(#attr_name)?.unbind()
-            },
-            FieldStrategy::PyCast(inner) => quote! {
-                #field_name: manifest.getattr(#attr_name)?.cast::<#inner>()?.clone().unbind()
-            },
-            FieldStrategy::Extract => quote! {
-                #field_name: manifest.getattr(#attr_name)?.extract()?
-            },
-        }
-    }).collect();
+            let strategy = classify_type(&f.ty);
+            match strategy {
+                FieldStrategy::PyAny => quote! {
+                    #field_name: manifest.getattr(#attr_name)?.unbind()
+                },
+                FieldStrategy::PyCast(inner) => quote! {
+                    #field_name: manifest.getattr(#attr_name)?.cast::<#inner>()?.clone().unbind()
+                },
+                FieldStrategy::Extract => quote! {
+                    #field_name: manifest.getattr(#attr_name)?.extract()?
+                },
+            }
+        })
+        .collect();
 
     let expanded = quote! {
         impl #name {
@@ -77,7 +81,7 @@ pub fn derive_python_imports(input: TokenStream) -> TokenStream {
 
 enum FieldStrategy {
     PyAny,
-    PyCast(syn::Type),
+    PyCast(Box<syn::Type>),
     Extract,
 }
 
@@ -92,7 +96,7 @@ fn classify_type(ty: &Type) -> FieldStrategy {
                         if is_py_any(inner_ty) {
                             return FieldStrategy::PyAny;
                         }
-                        return FieldStrategy::PyCast(inner_ty.clone());
+                        return FieldStrategy::PyCast(Box::new(inner_ty.clone()));
                     }
                 }
             }

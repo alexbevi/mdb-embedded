@@ -342,7 +342,9 @@ impl RedbLocalDB {
         drop_target: bool,
     ) -> PyResult<()> {
         // If the destination already exists, optionally drop it first.
-        let existing = self.db.list_collection_names()
+        let existing = self
+            .db
+            .list_collection_names()
             .map_err(|e| PyRuntimeError::new_err(format!("list_collection_names: {e}")))?;
         if existing.iter().any(|n| n == to) {
             if !drop_target {
@@ -505,10 +507,7 @@ impl RedbLocalCollection {
             Some(v) => Some(v.cast::<PyDict>()?.clone()),
             None => None,
         };
-        let iter = coll
-            .bind(py)
-            .borrow()
-            .find_iter(filter.as_ref())?;
+        let iter = coll.bind(py).borrow().find_iter(filter.as_ref())?;
         Ok(Py::new(py, iter)?.into_any())
     }
 

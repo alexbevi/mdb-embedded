@@ -15,7 +15,6 @@ This test catches four classes of drift:
 
 from __future__ import annotations
 
-import smongo.wire.commands  # triggers @_register side effects
 from smongo._smongo_core import rust_handler_names as _rust_handler_names_list
 from smongo.wire.commands._registry import _HANDLERS, _HELP
 
@@ -35,23 +34,19 @@ class TestRegistryParity:
     def test_every_rust_handler_has_help(self):
         rust = _rust_handler_names()
         missing = rust - set(_HELP)
-        assert not missing, (
-            f"Rust handlers without _HELP entries (will be invisible in listCommands): {sorted(missing)}"
-        )
+        assert not missing, f"Rust handlers without _HELP entries (will be invisible in listCommands): {sorted(missing)}"
 
     def test_every_python_handler_has_help(self):
         missing = set(_HANDLERS) - set(_HELP)
-        assert not missing, (
-            f"Python handlers without _HELP entries: {sorted(missing)}"
-        )
+        assert not missing, f"Python handlers without _HELP entries: {sorted(missing)}"
 
     def test_no_stale_help_entries(self):
         rust = _rust_handler_names()
         all_known = rust | set(_HANDLERS)
         stale = set(_HELP) - all_known
-        assert not stale, (
-            f"_HELP entries for commands that exist in neither registry: {sorted(stale)}"
-        )
+        assert (
+            not stale
+        ), f"_HELP entries for commands that exist in neither registry: {sorted(stale)}"
 
     def test_rust_covers_all_python_handlers(self):
         """Every Python handler must either have a Rust equivalent or be

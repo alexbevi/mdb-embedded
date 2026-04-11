@@ -12,7 +12,7 @@ import socket
 import struct
 import threading
 from itertools import count
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from smongo._smongo_core import RedbLocalClient
 
@@ -403,7 +403,7 @@ class WireServer:
         header, _flags, _coll_name, _skip, _limit, query_doc = decode_query(data)
 
         if any(k in query_doc for k in ("isMaster", "ismaster", "hello")):
-            hello_doc: dict = {"hello": 1}
+            hello_doc: dict[str, Any] = {"hello": 1}
             for k, v in query_doc.items():
                 if k not in ("isMaster", "ismaster"):
                     hello_doc[k] = v

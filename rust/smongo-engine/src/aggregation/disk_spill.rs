@@ -9,7 +9,7 @@
 use std::collections::BinaryHeap;
 use std::io::{BufReader, BufWriter, Read, Write};
 
-use bson::{Document, Bson};
+use bson::{Bson, Document};
 use tempfile::NamedTempFile;
 
 use super::expressions::evaluate_expression;
@@ -53,7 +53,8 @@ impl SpillWriter {
         writer
             .flush()
             .map_err(|e| AggregationError::Other(format!("disk spill: flush: {e}")))?;
-        let tmp = writer.into_inner()
+        let tmp = writer
+            .into_inner()
             .map_err(|e| AggregationError::Other(format!("disk spill: into_inner: {e}")))?;
         let file = tmp
             .reopen()
@@ -301,7 +302,10 @@ pub(crate) fn external_group(
             let key = evaluate_expression(&doc, &id_expr)?;
             let key_str = bson_to_key_string(&key);
             let partition = hash_group_key(&key_str);
-            partition_writers.as_mut().unwrap()[partition].write_doc(&doc)?;
+            partition_writers.as_mut().ok_or_else(|| {
+                AggregationError::Other("disk spill: missing partition writers".into())
+            })?[partition]
+                .write_doc(&doc)?;
         }
     }
 
@@ -309,7 +313,8 @@ pub(crate) fn external_group(
         return super::stages::stage_group(buffer, group_spec);
     }
 
-    let writers = partition_writers.unwrap();
+    let writers = partition_writers
+        .ok_or_else(|| AggregationError::Other("disk spill: missing partition writers".into()))?;
     let mut all_results: Vec<Document> = Vec::new();
 
     for writer in writers {

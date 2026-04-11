@@ -14,7 +14,6 @@ Guardrails:
 
 import itertools
 from collections.abc import Iterable, Iterator
-
 from typing import Any, cast
 
 from smongo._smongo_core import facet_stage

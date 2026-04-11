@@ -102,9 +102,7 @@ fn check_bson_type(value: &Bson, type_name: &str) -> bool {
 fn check_bson_type_name(actual_type: &str, type_spec: &Bson) -> bool {
     match type_spec {
         Bson::String(s) => s == actual_type,
-        Bson::Array(arr) => arr
-            .iter()
-            .any(|t| t.as_str() == Some(actual_type)),
+        Bson::Array(arr) => arr.iter().any(|t| t.as_str() == Some(actual_type)),
         _ => true,
     }
 }

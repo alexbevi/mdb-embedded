@@ -45,10 +45,7 @@ impl Default for Collation {
 impl Collation {
     /// Parse a collation from a BSON document.
     pub fn from_doc(doc: &Document) -> Self {
-        let locale = doc
-            .get_str("locale")
-            .unwrap_or("simple")
-            .to_string();
+        let locale = doc.get_str("locale").unwrap_or("simple").to_string();
         let strength = doc
             .get("strength")
             .and_then(|v| match v {
@@ -57,9 +54,7 @@ impl Collation {
                 _ => None,
             })
             .unwrap_or(3);
-        let numeric_ordering = doc
-            .get_bool("numericOrdering")
-            .unwrap_or(false);
+        let numeric_ordering = doc.get_bool("numericOrdering").unwrap_or(false);
         let case_first = match doc.get_str("caseFirst").unwrap_or("off") {
             "upper" => CaseFirst::Upper,
             "lower" => CaseFirst::Lower,
@@ -110,9 +105,7 @@ impl Collation {
         match (a, b) {
             (Some(Bson::String(sa)), Some(Bson::String(sb))) => self.compare_str(sa, sb),
             // numericOrdering: treat numeric-looking strings as numbers
-            (Some(Bson::String(sa)), Some(nb))
-                if self.numeric_ordering && is_numeric_bson(nb) =>
-            {
+            (Some(Bson::String(sa)), Some(nb)) if self.numeric_ordering && is_numeric_bson(nb) => {
                 match sa.parse::<f64>() {
                     Ok(fa) => fa
                         .partial_cmp(&bson_as_f64(nb).unwrap_or(0.0))

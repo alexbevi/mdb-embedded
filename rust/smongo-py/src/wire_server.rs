@@ -152,9 +152,7 @@ impl RustWireServer {
         let exception_types = exc_types.unbind();
 
         // Build CachedImports via the single canonical constructor.
-        let cached_imports = Arc::new(
-            crate::wire_context::CachedImports::from_python(py)?
-        );
+        let cached_imports = Arc::new(crate::wire_context::CachedImports::from_python(py)?);
         let audit_mod: Py<PyAny> = cached_imports.audit_mod.clone_ref(py);
 
         let state = Arc::new(ServerState {

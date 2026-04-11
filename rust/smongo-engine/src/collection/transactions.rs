@@ -1,4 +1,4 @@
-use super::{CollectionError, CollectionResult, Collection};
+use super::{Collection, CollectionError, CollectionResult};
 use crate::storage::StorageSession;
 
 impl<S: StorageSession> Collection<S> {

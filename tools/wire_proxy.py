@@ -7,6 +7,7 @@ Usage:
     python tools/wire_proxy.py --listen 27099 --target 27018
     # Then connect Compass to localhost:27099
 """
+
 import argparse
 import socket
 import struct
@@ -26,18 +27,22 @@ OP_QUERY = 2004
 
 OPCODE_NAMES = {1: "OP_REPLY", 2004: "OP_QUERY", 2012: "OP_COMPRESSED", 2013: "OP_MSG"}
 
+
 # Decompressors (best-effort)
 def _decompress(cid, data, expected_size):
     if cid == 0:
         return data
     if cid == 1:
         import snappy
+
         return snappy.decompress(data)
     if cid == 2:
         import zlib
+
         return zlib.decompress(data)
     if cid == 3:
         import zstandard
+
         return zstandard.ZstdDecompressor().decompress(data, max_output_size=expected_size)
     return data
 
@@ -62,7 +67,7 @@ def read_message(sock):
 def decode_op_msg_body(payload):
     """Decode the OP_MSG payload (after header). Returns (flags, bson_doc)."""
     flags = struct.unpack("<I", payload[:4])[0]
-    kind = payload[4]
+    _kind = payload[4]
     bson_bytes = payload[5:]
     try:
         doc = pybson.decode(bson_bytes)
@@ -74,7 +79,12 @@ def decode_op_msg_body(payload):
 def decode_message(raw, msg_len, req_id, resp_to, opcode):
     """Decode a wire message and return a human-readable summary."""
     body = raw[16:]
-    info = {"opcode": OPCODE_NAMES.get(opcode, str(opcode)), "req_id": req_id, "resp_to": resp_to, "len": msg_len}
+    info = {
+        "opcode": OPCODE_NAMES.get(opcode, str(opcode)),
+        "req_id": req_id,
+        "resp_to": resp_to,
+        "len": msg_len,
+    }
 
     if opcode == OP_MSG:
         flags, doc = decode_op_msg_body(body)
@@ -111,9 +121,9 @@ def decode_message(raw, msg_len, req_id, resp_to, opcode):
             # cstring collection name
             end = body.index(b"\x00", 4)
             coll = body[4:end].decode("utf-8")
-            skip = struct.unpack("<i", body[end+1:end+5])[0]
-            limit = struct.unpack("<i", body[end+5:end+9])[0]
-            bson_bytes = body[end+9:]
+            _skip = struct.unpack("<i", body[end + 1 : end + 5])[0]
+            _limit = struct.unpack("<i", body[end + 5 : end + 9])[0]
+            bson_bytes = body[end + 9 :]
             doc = pybson.decode(bson_bytes)
             info["collection"] = coll
             info["doc"] = doc
@@ -122,15 +132,15 @@ def decode_message(raw, msg_len, req_id, resp_to, opcode):
 
     elif opcode == OP_REPLY:
         try:
-            resp_flags = struct.unpack("<i", body[:4])[0]
+            _resp_flags = struct.unpack("<i", body[:4])[0]
             cursor_id = struct.unpack("<q", body[4:12])[0]
-            starting = struct.unpack("<i", body[12:16])[0]
+            _starting = struct.unpack("<i", body[12:16])[0]
             num_returned = struct.unpack("<i", body[16:20])[0]
             docs = []
             offset = 20
             for _ in range(num_returned):
-                doc_len = struct.unpack("<i", body[offset:offset+4])[0]
-                doc = pybson.decode(body[offset:offset+doc_len])
+                doc_len = struct.unpack("<i", body[offset : offset + 4])[0]
+                doc = pybson.decode(body[offset : offset + doc_len])
                 docs.append(doc)
                 offset += doc_len
             info["cursor_id"] = cursor_id
@@ -200,11 +210,13 @@ def proxy_stream(src, dst, direction, conn_id):
             if "flags" in info:
                 print(f"{tag} flags: {info['flags']}")
             if opcode == OP_COMPRESSED:
-                print(f"{tag} compressor={info.get('compressor_id')} "
-                      f"compressed={info.get('compressed_size')} "
-                      f"uncompressed={info.get('uncompressed_size')} "
-                      f"decompressed={info.get('decompressed_size')} "
-                      f"match={info.get('size_match')}")
+                print(
+                    f"{tag} compressor={info.get('compressor_id')} "
+                    f"compressed={info.get('compressed_size')} "
+                    f"uncompressed={info.get('uncompressed_size')} "
+                    f"decompressed={info.get('decompressed_size')} "
+                    f"match={info.get('size_match')}"
+                )
                 if "decompress_error" in info:
                     print(f"{tag} *** DECOMPRESS ERROR: {info['decompress_error']} ***")
 
@@ -236,6 +248,7 @@ def proxy_stream(src, dst, direction, conn_id):
 
 _conn_counter = 0
 
+
 def handle_connection(client_sock, target_host, target_port):
     global _conn_counter
     _conn_counter += 1
@@ -248,8 +261,12 @@ def handle_connection(client_sock, target_host, target_port):
         client_sock.close()
         return
 
-    t1 = threading.Thread(target=proxy_stream, args=(client_sock, server_sock, "CLIENT->", cid), daemon=True)
-    t2 = threading.Thread(target=proxy_stream, args=(server_sock, client_sock, "SERVER->", cid), daemon=True)
+    t1 = threading.Thread(
+        target=proxy_stream, args=(client_sock, server_sock, "CLIENT->", cid), daemon=True
+    )
+    t2 = threading.Thread(
+        target=proxy_stream, args=(server_sock, client_sock, "SERVER->", cid), daemon=True
+    )
     t1.start()
     t2.start()
     t1.join()
@@ -274,7 +291,9 @@ def main():
     try:
         while True:
             client, addr = listener.accept()
-            threading.Thread(target=handle_connection, args=(client, "127.0.0.1", args.target), daemon=True).start()
+            threading.Thread(
+                target=handle_connection, args=(client, "127.0.0.1", args.target), daemon=True
+            ).start()
     except KeyboardInterrupt:
         print("\nStopping proxy")
     finally:

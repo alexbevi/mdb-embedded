@@ -264,17 +264,12 @@ impl<B: StorageBackend> IndexProvider for DatabaseContext<'_, B> {
 
         // Determine whether to use flat scan: explicit `exact: true` in the
         // query, or the index was created with `indexingMethod: "flat"`.
-        let use_flat = exact
-            || vopts
-                .map(|v| v.indexing_method == "flat")
-                .unwrap_or(false);
+        let use_flat = exact || vopts.map(|v| v.indexing_method == "flat").unwrap_or(false);
 
         // Atlas resolves the similarity metric from the index definition, not
         // the query.  If the query supplied a metric we honour it, but when
         // the default ("cosine") was used we prefer the index's metric.
-        let resolved_metric = vopts
-            .map(|v| v.metric.as_str())
-            .unwrap_or(metric);
+        let resolved_metric = vopts.map(|v| v.metric.as_str()).unwrap_or(metric);
 
         let candidates = match filter {
             Some(f) => coll
@@ -286,8 +281,14 @@ impl<B: StorageBackend> IndexProvider for DatabaseContext<'_, B> {
         };
 
         let effective_limit = num_candidates.max(limit);
-        let scored =
-            vector::score_documents(&candidates, field, query_vec, effective_limit, resolved_metric, use_flat)?;
+        let scored = vector::score_documents(
+            &candidates,
+            field,
+            query_vec,
+            effective_limit,
+            resolved_metric,
+            use_flat,
+        )?;
         let trimmed = if scored.len() > limit {
             scored.into_iter().take(limit).collect()
         } else {
@@ -315,11 +316,9 @@ impl<B: StorageBackend> IndexProvider for DatabaseContext<'_, B> {
             .list_indexes()
             .map_err(|e| AggregationError::Other(e.to_string()))?;
 
-        let geo_index = indexes.iter().find(|idx| {
-            crate::index::twodsphere_field(&idx.keys)
-                .as_deref()
-                == Some(field)
-        });
+        let geo_index = indexes
+            .iter()
+            .find(|idx| crate::index::twodsphere_field(&idx.keys).as_deref() == Some(field));
 
         let Some(idx) = geo_index else {
             return Ok(None);
@@ -547,13 +546,8 @@ pub fn aggregate_with_db_collection<B: StorageBackend>(
 
     let (main_pipeline, write_stage) = split_write_stage(pipeline);
 
-    let stream = aggregate_stream_full(
-        docs,
-        &main_pipeline,
-        Some(resolver),
-        idx_ctx.as_ref(),
-        None,
-    )?;
+    let stream =
+        aggregate_stream_full(docs, &main_pipeline, Some(resolver), idx_ctx.as_ref(), None)?;
     let results: Vec<Document> = stream.collect::<AggregationResult<Vec<_>>>()?;
 
     if let Some(stage) = write_stage {
@@ -695,7 +689,14 @@ pub fn aggregate_stream_full(
     memory_limit_bytes: Option<usize>,
 ) -> AggregationResult<DocStream> {
     let stream: DocStream = Box::new(docs.into_iter().map(Ok));
-    run_pipeline_stages(stream, pipeline, resolver, idx_ctx, memory_limit_bytes, false)
+    run_pipeline_stages(
+        stream,
+        pipeline,
+        resolver,
+        idx_ctx,
+        memory_limit_bytes,
+        false,
+    )
 }
 
 /// Like [`aggregate_stream_full`] but accepts a lazy iterator of documents
@@ -713,10 +714,16 @@ pub fn aggregate_stream_full_from_iter<I>(
 where
     I: Iterator<Item = crate::collection::CollectionResult<Document>> + 'static,
 {
-    let stream: DocStream = Box::new(
-        docs.map(|r| r.map_err(|e| AggregationError::Other(e.to_string()))),
-    );
-    run_pipeline_stages(stream, pipeline, resolver, idx_ctx, memory_limit_bytes, allow_disk_use)
+    let stream: DocStream =
+        Box::new(docs.map(|r| r.map_err(|e| AggregationError::Other(e.to_string()))));
+    run_pipeline_stages(
+        stream,
+        pipeline,
+        resolver,
+        idx_ctx,
+        memory_limit_bytes,
+        allow_disk_use,
+    )
 }
 
 fn run_pipeline_stages(
@@ -842,9 +849,7 @@ fn execute_stage_stream(
         "$unionWith" => stages::stage_union_with_stream(input, stage_value, resolver, ml),
         "$out" => stages::stage_out_stream(input, stage_value),
         "$merge" => stages::stage_merge_stream(input, stage_value),
-        "$vectorSearch" => {
-            stages::stage_vector_search_stream_indexed(input, stage_value, idx_ctx)
-        }
+        "$vectorSearch" => stages::stage_vector_search_stream_indexed(input, stage_value, idx_ctx),
         "$geoNear" => stages::stage_geo_near_stream_indexed(input, stage_value, idx_ctx),
         _ => Err(AggregationError::InvalidStage(format!(
             "Unknown stage: {}",

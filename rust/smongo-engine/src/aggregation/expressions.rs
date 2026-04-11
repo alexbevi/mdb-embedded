@@ -687,9 +687,7 @@ fn expr_object_to_array(doc: &Document, args: &Bson) -> AggregationResult<Bson> 
         Bson::Document(d) => {
             let arr: Vec<Bson> = d
                 .into_iter()
-                .map(|(k, v)| {
-                    Bson::Document(bson::doc! { "k": k, "v": v })
-                })
+                .map(|(k, v)| Bson::Document(bson::doc! { "k": k, "v": v }))
                 .collect();
             Ok(Bson::Array(arr))
         }

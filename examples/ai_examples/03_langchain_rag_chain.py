@@ -151,10 +151,7 @@ def main() -> None:
     try:
         from langchain_mongodb import MongoDBAtlasVectorSearch
     except ImportError:
-        print(
-            "Install deps:  pip install langchain-mongodb langchain-core "
-            "pymongo numpy"
-        )
+        print("Install deps:  pip install langchain-mongodb langchain-core " "pymongo numpy")
         return
 
     db_path = tempfile.mkdtemp(prefix="smongo_lc_official_")
@@ -182,10 +179,7 @@ def main() -> None:
             for doc in KNOWLEDGE
         ]
     )
-    print(
-        f"   Stored {coll.count_documents({})} documents "
-        f"with {DIM}-dim embeddings"
-    )
+    print(f"   Stored {coll.count_documents({})} documents " f"with {DIM}-dim embeddings")
 
     coll.create_index(
         {"embedding": "vectorSearch"},
@@ -198,9 +192,7 @@ def main() -> None:
     # ── 2. Start the wire server ──────────────────────────────
     print(f"2. Starting wire protocol server on port {PORT}...")
 
-    with WireServer(
-        db_path, port=PORT, local_client=native.get_local_client()
-    ) as _srv:
+    with WireServer(db_path, port=PORT, local_client=native.get_local_client()) as _srv:
         time.sleep(0.3)
 
         from pymongo import MongoClient as PyMongoClient
@@ -213,10 +205,7 @@ def main() -> None:
         pymongo_coll = client["langchain_db"]["vectors"]
 
         # ── 3. Official LangChain vectorstore ─────────────────
-        print(
-            "3. Using official MongoDBAtlasVectorSearch "
-            "(zero custom code)...\n"
-        )
+        print("3. Using official MongoDBAtlasVectorSearch " "(zero custom code)...\n")
 
         vectorstore = MongoDBAtlasVectorSearch(
             collection=pymongo_coll,
@@ -303,10 +292,7 @@ def main() -> None:
         vectorstore.add_documents(new_docs)
         ms = (time.time() - t0) * 1000
         total = pymongo_coll.count_documents({})
-        print(
-            f"   Added {len(new_docs)} documents via LangChain "
-            f"({ms:.0f}ms)"
-        )
+        print(f"   Added {len(new_docs)} documents via LangChain " f"({ms:.0f}ms)")
         print(f"   Total documents in collection: {total}\n")
 
         t0 = time.time()
@@ -338,9 +324,7 @@ def main() -> None:
         for i, doc in enumerate(docs, 1):
             src = doc.metadata.get("source", "?")
             print(f"      {i}. [{src}] {doc.page_content[:70]}...")
-        print(
-            f"\n   Retrieved {len(docs)} context documents in {ms:.0f}ms\n"
-        )
+        print(f"\n   Retrieved {len(docs)} context documents in {ms:.0f}ms\n")
 
         # ── 8. RAG prompt assembly ────────────────────────────
         print(f"   {separator()}")
@@ -349,9 +333,7 @@ def main() -> None:
 
         from langchain_core.prompts import ChatPromptTemplate
 
-        context = "\n".join(
-            f"  - {d.page_content}" for d in docs
-        )
+        context = "\n".join(f"  - {d.page_content}" for d in docs)
         user_question = "What makes smongo special for AI applications?"
 
         rag_prompt = ChatPromptTemplate.from_messages(
@@ -364,19 +346,13 @@ def main() -> None:
             ]
         )
 
-        formatted = rag_prompt.format(
-            context=context, question=user_question
-        )
+        formatted = rag_prompt.format(context=context, question=user_question)
         for line in formatted.split("\n"):
             print(f"   {line}")
 
         print(f"\n   {separator('═')}")
-        print(
-            "   This used the OFFICIAL MongoDBAtlasVectorSearch class."
-        )
-        print(
-            "   Zero custom code. Zero wrappers. Just a connection string."
-        )
+        print("   This used the OFFICIAL MongoDBAtlasVectorSearch class.")
+        print("   Zero custom code. Zero wrappers. Just a connection string.")
         print("   LangChain had no idea smongo was the engine.")
         print(f"   {separator('═')}\n")
 

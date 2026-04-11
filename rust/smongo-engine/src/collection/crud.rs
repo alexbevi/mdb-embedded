@@ -1,10 +1,10 @@
 use bson::{oid::ObjectId, Bson, Document};
 use std::marker::PhantomData;
 
-use super::cursor::{FindCursorState, FindCursor, OwnedFindIter};
+use super::cursor::{FindCursor, FindCursorState, OwnedFindIter};
 use super::{
     build_seek_prefix, deserialize_document, ensure_id, extract_equality_fields, extract_id_string,
-    serialize_document, CollectionError, CollectionResult, Collection, DeleteOptions, DeleteResult,
+    serialize_document, Collection, CollectionError, CollectionResult, DeleteOptions, DeleteResult,
     FindOptions, InsertManyResult, InsertOneResult, InsertOptions, UpdateOptions, UpdateResult,
 };
 use crate::planner::{plan_query, ExecutionPlan};

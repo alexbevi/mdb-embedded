@@ -86,9 +86,7 @@ fn cmd_find(
         Some(filter_dict.as_any()),
     )?;
 
-    let needs_sort = sort_spec
-        .as_ref()
-        .is_some_and(|s| !s.is_none());
+    let needs_sort = sort_spec.as_ref().is_some_and(|s| !s.is_none());
 
     let ns = format!("{db_name}.{coll_name}");
 
@@ -100,18 +98,12 @@ fn cmd_find(
         // Apply skip lazily via islice(skip, None)
         if skip_val > 0 {
             let itertools = py.import("itertools")?;
-            iter_any = itertools.call_method1(
-                "islice",
-                (&iter_any, skip_val, py.None()),
-            )?;
+            iter_any = itertools.call_method1("islice", (&iter_any, skip_val, py.None()))?;
         }
         // Apply limit lazily via islice(limit)
         if limit_val > 0 {
             let itertools = py.import("itertools")?;
-            iter_any = itertools.call_method1(
-                "islice",
-                (&iter_any, limit_val),
-            )?;
+            iter_any = itertools.call_method1("islice", (&iter_any, limit_val))?;
         }
         // Apply projection lazily via map
         if let Some(ref proj) = projection {
@@ -127,8 +119,7 @@ fn cmd_find(
                         let item = args.get_item(0)?;
                         let py = item.py();
                         let proj_bound = proj_unbound.bind(py);
-                        let result =
-                            apply_projection_single(py, &item, proj_bound)?;
+                        let result = apply_projection_single(py, &item, proj_bound)?;
                         Ok(result.unbind())
                     },
                 )?;
@@ -154,9 +145,10 @@ fn cmd_find(
 
         let cr = ctx.borrow().cursor_registry.clone_ref(py);
         let cr_reg = cr.bind(py).cast::<CursorRegistry>()?;
-        let (cursor_id, first_batch) = cr_reg
-            .borrow()
-            .create_from_iter(py, &ns, &iter_any, Some(batch_size as usize))?;
+        let (cursor_id, first_batch) =
+            cr_reg
+                .borrow()
+                .create_from_iter(py, &ns, &iter_any, Some(batch_size as usize))?;
 
         let cursor_dict = PyDict::new(py);
         cursor_dict.set_item("id", bson_int64(py, cursor_id)?)?;

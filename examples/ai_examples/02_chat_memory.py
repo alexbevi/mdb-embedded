@@ -19,7 +19,7 @@ import shutil
 import sys
 import tempfile
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from smongo import WireServer
 
@@ -31,7 +31,7 @@ def separator(char="─", width=60):
 
 
 def ts(offset_s: float = 0) -> datetime:
-    return datetime.now(timezone.utc) + timedelta(seconds=offset_s)
+    return datetime.now(UTC) + timedelta(seconds=offset_s)
 
 
 def main() -> None:
@@ -209,13 +209,8 @@ def main() -> None:
         print('   CROSS-SESSION SEARCH: "vector"')
         print(f"   {separator()}\n")
 
-        for m in messages.find(
-            {"content": {"$regex": "vector", "$options": "i"}}
-        ):
-            print(
-                f"   [{m['session_id']}] {m['role']:9s}  "
-                f"{m['content'][:65]}..."
-            )
+        for m in messages.find({"content": {"$regex": "vector", "$options": "i"}}):
+            print(f"   [{m['session_id']}] {m['role']:9s}  " f"{m['content'][:65]}...")
         print()
 
         # ── 7. Analytics via aggregation ─────────────────────
@@ -246,10 +241,7 @@ def main() -> None:
                 {"$sort": {"_id": 1}},
             ]
         ):
-            print(
-                f"     {r['_id']:12s}  {r['count']:2d} msgs  "
-                f"{r['total_tokens']:4d} tokens"
-            )
+            print(f"     {r['_id']:12s}  {r['count']:2d} msgs  " f"{r['total_tokens']:4d} tokens")
 
         print("\n   Average tokens per message:")
         for r in messages.aggregate(
@@ -284,14 +276,8 @@ def main() -> None:
         llm_messages = [{"role": "system", "content": system_msg}]
         llm_messages.extend(history)
 
-        print(
-            f"   Prompt: {len(llm_messages)} messages "
-            f"(1 system + {len(history)} history)"
-        )
-        print(
-            "   Ready to send to OpenAI / Anthropic / Ollama / "
-            "any LLM API\n"
-        )
+        print(f"   Prompt: {len(llm_messages)} messages " f"(1 system + {len(history)} history)")
+        print("   Ready to send to OpenAI / Anthropic / Ollama / " "any LLM API\n")
 
         for m in llm_messages[:5]:
             tag = m["role"].upper()

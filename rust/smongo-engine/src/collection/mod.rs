@@ -316,7 +316,10 @@ fn apply_projection_to_index_doc(index_doc: &Document, projection: &Document) ->
 }
 
 fn should_include_id(projection: &Document) -> bool {
-    !matches!(projection.get("_id"), Some(Bson::Int32(0)) | Some(Bson::Int64(0)) | Some(Bson::Boolean(false)))
+    !matches!(
+        projection.get("_id"),
+        Some(Bson::Int32(0)) | Some(Bson::Int64(0)) | Some(Bson::Boolean(false))
+    )
 }
 
 // ── Collection struct & core impl ────────────────────────────────────

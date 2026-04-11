@@ -16,7 +16,6 @@ import threading
 import types
 from pathlib import Path
 
-import smongo.wire.commands  # triggers @_register side effects
 from smongo._ffi_manifest import (
     _GIT_VERSION,
     _HANDLERS,
@@ -94,11 +93,7 @@ class TestFFIManifestCompleteness:
 
 # Path from repo root to the Rust source that consumes the manifest.
 _WIRE_CONTEXT_RS = (
-    Path(__file__).resolve().parent.parent
-    / "rust"
-    / "smongo-py"
-    / "src"
-    / "wire_context.rs"
+    Path(__file__).resolve().parent.parent / "rust" / "smongo-py" / "src" / "wire_context.rs"
 )
 
 
@@ -118,9 +113,7 @@ class TestABIDrift:
         rust_names = self._rust_py_attr_names()
         manifest_names = set(__all__)
         missing = rust_names - manifest_names
-        assert not missing, (
-            f"Rust declares #[py(attr)] names not in __all__: {sorted(missing)}"
-        )
+        assert not missing, f"Rust declares #[py(attr)] names not in __all__: {sorted(missing)}"
 
     def test_no_manifest_names_unused_by_rust(self):
         """Every name in __all__ must have a corresponding #[py(attr = "...")] in Rust."""
@@ -129,6 +122,4 @@ class TestABIDrift:
         rust_names = self._rust_py_attr_names()
         manifest_names = set(__all__)
         unused = manifest_names - rust_names
-        assert not unused, (
-            f"__all__ exports names Rust never declares: {sorted(unused)}"
-        )
+        assert not unused, f"__all__ exports names Rust never declares: {sorted(unused)}"

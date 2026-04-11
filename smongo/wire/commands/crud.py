@@ -450,7 +450,8 @@ def _apply_projection_single(doc: dict[str, Any], fields: dict[str, Any]) -> dic
         return doc
     from smongo._smongo_core import apply_projection
 
-    return apply_projection(doc, fields)
+    result: dict[str, Any] = apply_projection(doc, fields)
+    return result
 
 
 @_register("bulkWrite")
