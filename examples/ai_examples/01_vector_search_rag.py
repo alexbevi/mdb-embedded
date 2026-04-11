@@ -60,16 +60,26 @@ class TinyVectorizer:
 # Knowledge base
 # ---------------------------------------------------------------------------
 KNOWLEDGE = [
-    "redb is an embedded key-value store used by smongo for B-tree-backed collections and indexes.",
-    "smongo supports full ACID transactions with snapshot isolation across multiple collections.",
-    "The $vectorSearch aggregation stage performs in-memory cosine similarity search with no external database.",
-    "Change streams let you watch a collection for real-time insert, update, and delete events.",
-    "The query planner automatically selects B-tree indexes, falling back to collection scan when no index fits.",
-    "smongo runs entirely in-process -- no server, no network, no Docker. Just import and go.",
-    "The aggregation pipeline supports 25+ stages including $lookup joins, $facet, and $graphLookup.",
-    "Atlas sync pushes local writes to MongoDB Atlas and pulls remote changes with conflict resolution.",
-    "Schema validation uses $jsonSchema to enforce document structure at write time.",
-    "Bulk write operations batch inserts, updates, and deletes into a single atomic call.",
+    "redb is an embedded key-value store used by smongo for B-tree-backed "
+    "collections and indexes.",
+    "smongo supports full ACID transactions with snapshot isolation across "
+    "multiple collections.",
+    "The $vectorSearch aggregation stage performs cosine similarity search "
+    "using a vendored HNSW index, with no external database required.",
+    "Change streams let you watch a collection for real-time insert, update, "
+    "and delete events.",
+    "The query planner automatically selects B-tree indexes, falling back to "
+    "collection scan when no index fits.",
+    "smongo runs entirely in-process -- no server, no network, no Docker. "
+    "Just import and go.",
+    "The aggregation pipeline supports 25+ stages including $lookup joins, "
+    "$facet, and $graphLookup.",
+    "Atlas sync pushes local writes to MongoDB Atlas and pulls remote changes "
+    "with conflict resolution.",
+    "Schema validation uses $jsonSchema to enforce document structure at "
+    "write time.",
+    "Bulk write operations batch inserts, updates, and deletes into a single "
+    "atomic call.",
 ]
 
 
@@ -81,22 +91,37 @@ def main() -> None:
     print("1. Building knowledge base via native smongo client...")
 
     vectorizer = TinyVectorizer().fit(KNOWLEDGE)
-    print(f"   Vocabulary size: {len(vectorizer.vocab)} terms")
+    dims = len(vectorizer.vocab)
+    print(f"   Vocabulary size: {dims} terms")
 
     native = SmongoClient(f"local://{db_path}")
     coll = native["rag_demo"]["knowledge_base"]
     coll.insert_many(
         [
-            {"text": text, "embedding": vectorizer.embed(text), "source": f"chunk_{i}"}
+            {
+                "text": text,
+                "embedding": vectorizer.embed(text),
+                "source": f"chunk_{i}",
+            }
             for i, text in enumerate(KNOWLEDGE)
         ]
     )
     print(f"   Inserted {coll.count_documents({})} documents with embeddings")
 
+    coll.create_index(
+        {"embedding": "vectorSearch"},
+        vectorSearchOptions={"dimensions": dims, "metric": "cosine"},
+        name="default",
+        type="vectorSearch",
+    )
+    print(f"   Created vector search index 'default' ({dims} dims, cosine)")
+
     # ── 2. Start wire server ───────────────────────────────────
     print(f"\n2. Starting wire protocol server on port {PORT}...")
 
-    with WireServer(db_path, port=PORT, local_client=native.get_local_client()) as _srv:
+    with WireServer(
+        db_path, port=PORT, local_client=native.get_local_client()
+    ) as _srv:
         time.sleep(0.3)
 
         # ── 3. Connect with STANDARD PyMongo ───────────────────
@@ -108,9 +133,12 @@ def main() -> None:
             directConnection=True,
         )
         kb = client["rag_demo"]["knowledge_base"]
-        print(f"   PyMongo connected -- sees {kb.count_documents({})} documents\n")
+        print(
+            f"   PyMongo connected -- sees {kb.count_documents({})} "
+            "documents\n"
+        )
 
-        # ── 4. Semantic search via standard pymongo.aggregate ──
+        # ── 4. Semantic search via $vectorSearch + $meta ───────
         print("3. Semantic search: 'How does smongo handle queries?'\n")
 
         query_vec = vectorizer.embed("How does smongo handle queries?")
@@ -122,19 +150,35 @@ def main() -> None:
                             "path": "embedding",
                             "queryVector": query_vec,
                             "limit": 3,
-                            "metric": "cosine",
+                            "numCandidates": 10,
+                            "index": "default",
                         }
                     },
-                    {"$project": {"text": 1, "_vectorScore": 1, "source": 1, "_id": 0}},
+                    {
+                        "$set": {
+                            "score": {"$meta": "vectorSearchScore"},
+                        }
+                    },
+                    {
+                        "$project": {
+                            "text": 1,
+                            "score": 1,
+                            "source": 1,
+                            "_id": 0,
+                        }
+                    },
                 ]
             )
         )
 
         for r in results:
-            print(f"   [{r['_vectorScore']:.4f}] {r['text'][:80]}...")
+            print(f"   [{r['score']:.4f}] {r['text'][:80]}...")
 
         # ── 5. Filtered vector search ──────────────────────────
-        print("\n4. Filtered search (only chunks 0-4): 'transactions and isolation'\n")
+        print(
+            "\n4. Filtered search (only chunks 0-4): "
+            "'transactions and isolation'\n"
+        )
 
         results = list(
             kb.aggregate(
@@ -142,19 +186,41 @@ def main() -> None:
                     {
                         "$vectorSearch": {
                             "path": "embedding",
-                            "queryVector": vectorizer.embed("transactions and isolation"),
+                            "queryVector": vectorizer.embed(
+                                "transactions and isolation"
+                            ),
                             "limit": 2,
-                            "metric": "cosine",
-                            "filter": {"source": {"$in": [f"chunk_{i}" for i in range(5)]}},
+                            "numCandidates": 10,
+                            "index": "default",
+                            "filter": {
+                                "source": {
+                                    "$in": [f"chunk_{i}" for i in range(5)]
+                                }
+                            },
                         }
                     },
-                    {"$project": {"text": 1, "_vectorScore": 1, "source": 1, "_id": 0}},
+                    {
+                        "$set": {
+                            "score": {"$meta": "vectorSearchScore"},
+                        }
+                    },
+                    {
+                        "$project": {
+                            "text": 1,
+                            "score": 1,
+                            "source": 1,
+                            "_id": 0,
+                        }
+                    },
                 ]
             )
         )
 
         for r in results:
-            print(f"   [{r['_vectorScore']:.4f}] ({r['source']}) {r['text'][:70]}...")
+            print(
+                f"   [{r['score']:.4f}] ({r['source']}) "
+                f"{r['text'][:70]}..."
+            )
 
         # ── 6. RAG prompt assembly ─────────────────────────────
         print("\n5. Assembling RAG prompt...\n")
@@ -170,7 +236,8 @@ def main() -> None:
                             "path": "embedding",
                             "queryVector": q_vec,
                             "limit": 3,
-                            "metric": "cosine",
+                            "numCandidates": 10,
+                            "index": "default",
                         }
                     },
                     {"$project": {"text": 1, "_id": 0}},
@@ -178,7 +245,9 @@ def main() -> None:
             )
         )
 
-        context_block = "\n".join(f"  - {d['text']}" for d in context_docs)
+        context_block = "\n".join(
+            f"  - {d['text']}" for d in context_docs
+        )
         prompt = (
             f"Answer the user's question using ONLY the context below.\n\n"
             f"Context:\n{context_block}\n\n"
@@ -191,8 +260,16 @@ def main() -> None:
         for line in prompt.split("\n"):
             print(f"     {line}")
 
-        print("\n   Every query above used standard PyMongo .aggregate().")
-        print("   smongo executed $vectorSearch transparently over the wire.\n")
+        print(
+            "\n   Every query above used standard PyMongo .aggregate()."
+        )
+        print(
+            "   smongo executed $vectorSearch transparently over the wire."
+        )
+        print(
+            "   Scores are Atlas-compatible via "
+            "{$meta: 'vectorSearchScore'}.\n"
+        )
 
         client.close()
 

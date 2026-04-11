@@ -118,7 +118,7 @@ with WireServer(db_path, port=27018) as srv:
 
 **Why this matters for AI:**
 
-- **`$vectorSearch`** runs cosine/euclidean similarity in-memory via USearch (or NumPy fallback) -- no external vector database needed
+- **`$vectorSearch`** runs cosine/euclidean/dotProduct similarity via a vendored HNSW index (ANN) or flat exhaustive scan -- no external vector database needed
 - **Local-first** means zero network latency for RAG retrieval, chat memory, and agent tool calls
 - **Offline-capable** -- the oplog accumulates mutations while disconnected; sync catches up when connectivity returns
 - **Free-threaded Python (3.13t)** -- no GIL means concurrent request handling with true thread parallelism for mixed AI workloads
@@ -154,8 +154,8 @@ See the [`examples/ai_examples/`](examples/ai_examples/) directory for complete 
    │  └───┬───┘  │
    │      │      │
    │  ┌───┴───┐  │
-   │  │B-Tree │  │  ◄── smongo-engine indexes on redb
-   │  │Indexes│  │      single, compound, unique, sparse, TTL
+   │  │Indexes│  │  ◄── B-tree, text, 2dsphere, bitmap, prefix
+   │  │& HNSW │  │      + HNSW / flat vector indexes ($vectorSearch)
    │  └───┬───┘  │
    │      │      │
    │  ┌───┴───┐  │
@@ -205,9 +205,11 @@ A Rust-accelerated compiler translates MongoDB query dictionaries into executabl
 ### Aggregation Pipeline
 Pipeline execution with 27 stages (all running in Rust via `smongo-engine`): `$match`, `$group`, `$project`, `$sort`, `$limit`, `$skip`, `$unwind`, `$lookup`, `$graphLookup`, `$unionWith`, `$addFields`/`$set`, `$count`, `$replaceRoot`/`$replaceWith`, `$sample`, `$bucket`, `$bucketAuto`, `$sortByCount`, `$redact`, `$setWindowFields`, `$unset`, `$vectorSearch`, `$facet`, `$out`, `$merge`. Memory-bounded with spill-to-disk for `$sort` and `$group` when `allowDiskUse=True`. Group accumulators: `$sum`, `$avg`, `$min`, `$max`, `$push`, `$addToSet`, `$first`, `$last`, `$firstN`, `$lastN`, `$stdDevPop`, `$stdDevSamp`, `$mergeObjects`, `$top`, `$bottom`, `$topN`, `$bottomN`.
 
-`$vectorSearch` runs fully in memory with:
-- **USearch** (`usearch`) for fast RAM-native vector indexing/search
-- **NumPy** fallback when USearch is unavailable
+`$vectorSearch` runs fully in Rust with:
+- **Vendored HNSW** (Hierarchical Navigable Small Worlds) for approximate nearest-neighbor search on larger datasets
+- **Flat (exact) scan** via `exact: true` or `indexingMethod: "flat"` for exhaustive brute-force search -- optimal for multi-tenant workloads where each tenant has < 10K vectors after pre-filtering
+- **Atlas-compatible score normalization** in `[0, 1]` for `cosine`, `euclidean`, and `dotProduct` metrics
+- **Multi-tenant support** -- `tenant_id` pre-filter, one collection for all tenants, matching [Atlas multi-tenant guidance](https://www.mongodb.com/docs/atlas/atlas-vector-search/multi-tenant-architecture/)
 
 `$facet` runs independent sub-pipelines against the same input. `$out` replaces a target collection's contents. `$merge` upserts into a target collection with `whenMatched`/`whenNotMatched` semantics.
 

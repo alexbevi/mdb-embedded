@@ -63,6 +63,7 @@ impl<S: StorageSession> Collection<S> {
                 metric,
                 ef_construction,
                 m,
+                indexing_method,
             } => self.collect_vector_index_search(
                 filter,
                 index_name,
@@ -71,6 +72,7 @@ impl<S: StorageSession> Collection<S> {
                 metric,
                 *ef_construction,
                 *m,
+                indexing_method,
             ),
             ExecutionPlan::GeoNear { .. }
             | ExecutionPlan::GeoCapWithin { .. }
@@ -621,6 +623,7 @@ impl<S: StorageSession> Collection<S> {
         self.collect_collection_scan(filter)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn collect_vector_index_search(
         &self,
         filter: &Document,
@@ -630,6 +633,7 @@ impl<S: StorageSession> Collection<S> {
         metric: &str,
         ef_construction: Option<usize>,
         m: Option<usize>,
+        indexing_method: &str,
     ) -> CollectionResult<Vec<Document>> {
         use crate::index::vector_index::VectorIndex;
 
@@ -641,7 +645,12 @@ impl<S: StorageSession> Collection<S> {
         let all_docs = self.collect_collection_scan(&Document::new())?;
         let mut vec_idx =
             VectorIndex::build_with_params(&all_docs, field, dimensions, metric, ef_construction, m);
-        let results = vec_idx.search(&query_vec, k);
+
+        let results = if indexing_method == "flat" {
+            vec_idx.search_exact(&query_vec, k)
+        } else {
+            vec_idx.search(&query_vec, k)
+        };
 
         let id_set: HashSet<String> = results.into_iter().map(|(id, _)| id).collect();
 

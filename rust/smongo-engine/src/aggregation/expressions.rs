@@ -526,12 +526,15 @@ fn expr_map(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
         _ => return Ok(Bson::Null),
     };
 
+    // Precompute variable substitution once, outside the per-element loop.
     let var_key = format!("$${}", as_name);
+    let temp_field = format!("__{}", as_name);
+    let in_replaced = replace_var_refs(in_expr, &var_key, &format!("${}", temp_field));
+
     let mut result = Vec::with_capacity(arr.len());
     for item in arr {
         let mut scoped_doc = doc.clone();
-        scoped_doc.insert(format!("__{}", as_name), item);
-        let in_replaced = replace_var_refs(in_expr, &var_key, &format!("$__{}", as_name));
+        scoped_doc.insert(temp_field.clone(), item);
         result.push(evaluate_expression(&scoped_doc, &in_replaced)?);
     }
     Ok(Bson::Array(result))
@@ -552,12 +555,15 @@ fn expr_filter(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
         _ => return Ok(Bson::Null),
     };
 
+    // Precompute variable substitution once, outside the per-element loop.
     let var_key = format!("$${}", as_name);
+    let temp_field = format!("__{}", as_name);
+    let cond_replaced = replace_var_refs(cond_expr, &var_key, &format!("${}", temp_field));
+
     let mut result = Vec::new();
     for item in arr {
         let mut scoped_doc = doc.clone();
-        scoped_doc.insert(format!("__{}", as_name), item.clone());
-        let cond_replaced = replace_var_refs(cond_expr, &var_key, &format!("$__{}", as_name));
+        scoped_doc.insert(temp_field.clone(), item.clone());
         let cond_val = evaluate_expression(&scoped_doc, &cond_replaced)?;
         if is_truthy(&cond_val) {
             result.push(item);

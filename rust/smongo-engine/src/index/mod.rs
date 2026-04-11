@@ -7,6 +7,7 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod bitmap_index;
+pub mod hnsw;
 pub mod prefix_index;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod text_index;
@@ -29,7 +30,7 @@ pub enum IndexType {
     TwoDSphere,
     /// Full-text inverted index.  Keys use `"text"` string values.
     Text,
-    /// HNSW approximate nearest-neighbor index for vector similarity search.
+    /// Vector similarity search index (HNSW or flat, per `indexingMethod`).
     VectorSearch,
     /// Roaring-bitmap index for low-cardinality fields.
     Bitmap,
@@ -139,7 +140,7 @@ pub struct IndexOptions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index_type: Option<IndexType>,
     /// Options specific to vector search indexes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "vectorSearchOptions")]
     pub vector_options: Option<VectorIndexOptions>,
     /// Options specific to full-text indexes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -153,20 +154,49 @@ pub struct IndexOptions {
 // Per-type option structs
 // ---------------------------------------------------------------------------
 
-/// Configuration for HNSW vector search indexes.
+/// Configuration for vector search indexes.
+///
+/// Supports two indexing methods matching
+/// [Atlas Vector Search](https://www.mongodb.com/docs/atlas/atlas-vector-search/vector-search-type/):
+///
+/// - **`"hnsw"`** (default): approximate nearest-neighbor via HNSW graph.
+///   Best for datasets > 10K vectors per filtered partition.
+/// - **`"flat"`**: exhaustive brute-force scan.  Optimal for multi-tenant
+///   workloads with many small tenants (< 10K vectors each after
+///   pre-filtering by `tenant_id`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VectorIndexOptions {
     /// Number of dimensions in each vector.
+    /// Atlas uses `numDimensions` in index definitions; both are accepted.
+    #[serde(alias = "numDimensions")]
     pub dimensions: usize,
     /// Similarity metric: `"cosine"`, `"euclidean"`, or `"dotProduct"`.
-    #[serde(default = "default_vector_metric")]
+    /// Atlas uses `similarity` in index definitions; both are accepted.
+    #[serde(default = "default_vector_metric", alias = "similarity")]
     pub metric: String,
+    /// Indexing method: `"hnsw"` (default) or `"flat"`.
+    ///
+    /// Flat indexes skip HNSW graph construction and perform exhaustive scan.
+    /// Recommended for multi-tenant workloads where each tenant has < 10K
+    /// vectors and queries always include a `tenant_id` pre-filter.
+    #[serde(default = "default_indexing_method", skip_serializing_if = "is_hnsw")]
+    pub indexing_method: String,
     /// HNSW construction-time expansion factor (default 200).
+    /// Ignored when `indexing_method` is `"flat"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ef_construction: Option<usize>,
     /// HNSW max connections per layer (default 16).
+    /// Ignored when `indexing_method` is `"flat"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub m: Option<usize>,
+}
+
+fn default_indexing_method() -> String {
+    "hnsw".to_string()
+}
+
+fn is_hnsw(s: &String) -> bool {
+    s == "hnsw"
 }
 
 fn default_vector_metric() -> String {

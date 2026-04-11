@@ -28,18 +28,16 @@ from smongo import MongoClient as SmongoClient
 from smongo import WireServer
 
 PORT = 27020
+DIM = 64
 
 
-# ── Fast local embeddings (no model download) ─────────────────
 class LocalEmbeddings(Embeddings):
     """Deterministic hash-based embeddings so the demo runs instantly.
-    Swap for OpenAIEmbeddings or HuggingFaceEmbeddings in production."""
-
-    DIM = 64
+    Swap for OpenAIEmbeddings or OllamaEmbeddings in production."""
 
     def _embed(self, text: str) -> list[float]:
         np.random.seed(abs(hash(text)) % (2**32))
-        vec = np.random.rand(self.DIM).astype(np.float32)
+        vec = np.random.rand(DIM).astype(np.float32)
         return (vec / np.linalg.norm(vec)).tolist()
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
@@ -53,47 +51,71 @@ def main() -> None:
     try:
         from langchain_mongodb import MongoDBAtlasVectorSearch
     except ImportError:
-        print("Install deps:  pip install langchain-mongodb langchain-core pymongo numpy")
+        print(
+            "Install deps:  pip install langchain-mongodb langchain-core "
+            "pymongo numpy"
+        )
         return
 
     db_path = tempfile.mkdtemp(prefix="smongo_lc_official_")
 
-    # ── 1. Seed documents + embeddings via native smongo ───────
     print("── Official LangChain MongoDBAtlasVectorSearch + smongo ──\n")
+
+    # ── 1. Seed documents + embeddings via native smongo ───────
     print("1. Seeding knowledge base via native smongo client...")
 
     embeddings = LocalEmbeddings()
 
     texts = [
-        "LangChain is a framework for developing applications powered by language models.",
-        "smongo is an embedded MongoDB engine that runs locally using redb storage.",
-        "Vector search finds semantically similar documents using cosine similarity.",
-        "Retrieval-Augmented Generation grounds LLM answers in real data from a knowledge base.",
-        "Agents use LLMs to decide what actions to take and which tools to call.",
-        "MongoDB Atlas provides a fully managed cloud database service with vector search.",
-        "The wire protocol lets any MongoDB driver connect to smongo over TCP.",
-        "The engine provides MVCC-style concurrency and durable on-disk storage.",
+        "LangChain is a framework for developing applications powered by "
+        "language models.",
+        "smongo is an embedded MongoDB engine that runs locally using redb "
+        "storage.",
+        "Vector search finds semantically similar documents using cosine "
+        "similarity with a vendored HNSW index.",
+        "Retrieval-Augmented Generation grounds LLM answers in real data "
+        "from a knowledge base.",
+        "Agents use LLMs to decide what actions to take and which tools "
+        "to call.",
+        "MongoDB Atlas provides a fully managed cloud database service "
+        "with vector search.",
+        "The wire protocol lets any MongoDB driver connect to smongo "
+        "over TCP.",
+        "The engine provides MVCC-style concurrency and durable on-disk "
+        "storage.",
     ]
 
     native = SmongoClient(f"local://{db_path}")
     coll = native["langchain_db"]["vectors"]
     coll.insert_many(
         [
-            {"text": t, "embedding": embeddings.embed_documents([t])[0], "source": f"doc_{i}"}
+            {
+                "text": t,
+                "embedding": embeddings.embed_documents([t])[0],
+                "source": f"doc_{i}",
+            }
             for i, t in enumerate(texts)
         ]
     )
-    print(
-        f"   Stored {coll.count_documents({})} documents with {LocalEmbeddings.DIM}-dim embeddings."
+    print(f"   Stored {coll.count_documents({})} documents with {DIM}-dim embeddings.")
+
+    # Create the vector search index so $vectorSearch knows the metric
+    coll.create_index(
+        {"embedding": "vectorSearch"},
+        vectorSearchOptions={"dimensions": DIM, "metric": "cosine"},
+        name="default",
+        type="vectorSearch",
     )
+    print("   Created vector search index 'default' (cosine, HNSW)")
 
     # ── 2. Start the wire server ───────────────────────────────
     print(f"\n2. Starting wire protocol server on port {PORT}...")
 
-    with WireServer(db_path, port=PORT, local_client=native.get_local_client()) as _srv:
+    with WireServer(
+        db_path, port=PORT, local_client=native.get_local_client()
+    ) as _srv:
         time.sleep(0.3)
 
-        # ── 3. Connect with STANDARD PyMongo ───────────────────
         from pymongo import MongoClient as PyMongoClient
 
         client = PyMongoClient(
@@ -103,7 +125,7 @@ def main() -> None:
         )
         pymongo_coll = client["langchain_db"]["vectors"]
 
-        # ── 4. Use the OFFICIAL LangChain class -- no wrappers! ─
+        # ── 3. Use the OFFICIAL LangChain class ──────────────
         print("3. Using official MongoDBAtlasVectorSearch (zero custom code)...\n")
 
         vectorstore = MongoDBAtlasVectorSearch(
@@ -112,10 +134,9 @@ def main() -> None:
             index_name="default",
             text_key="text",
             embedding_key="embedding",
-            relevance_score_fn="cosine",
         )
 
-        # ── 5. similarity_search_with_score -- the real deal ───
+        # ── 4. similarity_search_with_score ──────────────────
         queries = [
             "How do AI agents work?",
             "What is RAG and how does it help?",
@@ -127,10 +148,11 @@ def main() -> None:
             results = vectorstore.similarity_search_with_score(query, k=2)
             for doc, score in results:
                 score_str = f"{score:.4f}" if score is not None else "n/a"
-                print(f"     [{score_str}] {doc.page_content[:70]}...")
+                snippet = doc.page_content[:70].replace("\n", " ")
+                print(f"     [{score_str}] {snippet}...")
             print()
 
-        # ── 6. Use as a LangChain retriever ────────────────────
+        # ── 5. Use as a LangChain retriever ──────────────────
         print("4. Using as a LangChain retriever (for RAG chains)...\n")
 
         retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
@@ -139,9 +161,12 @@ def main() -> None:
         for doc in docs:
             print(f"   -> {doc.page_content[:75]}...")
 
-        print(f"\n   Retrieved {len(docs)} context documents, ready to feed to any LLM.")
+        print(
+            f"\n   Retrieved {len(docs)} context documents, ready to feed "
+            "to any LLM."
+        )
 
-        # ── 7. Build a RAG prompt ──────────────────────────────
+        # ── 6. Build a RAG prompt ────────────────────────────
         print("\n5. Assembling RAG prompt...\n")
 
         from langchain_core.prompts import ChatPromptTemplate
@@ -151,18 +176,27 @@ def main() -> None:
 
         rag_prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", "Answer using ONLY this context:\n{context}"),
+                (
+                    "system",
+                    "Answer using ONLY this context:\n{context}",
+                ),
                 ("human", "{question}"),
             ]
         )
 
-        formatted = rag_prompt.format(context=context, question=user_question)
+        formatted = rag_prompt.format(
+            context=context, question=user_question
+        )
         for line in formatted.split("\n"):
             print(f"   {line}")
 
         print("\n   ────────────────────────────────────────────────")
-        print("   This used the OFFICIAL MongoDBAtlasVectorSearch class.")
-        print("   Zero custom code. Zero wrappers. Just a connection string.")
+        print(
+            "   This used the OFFICIAL MongoDBAtlasVectorSearch class."
+        )
+        print(
+            "   Zero custom code. Zero wrappers. Just a connection string."
+        )
         print("   LangChain had no idea smongo was the engine.\n")
 
         client.close()

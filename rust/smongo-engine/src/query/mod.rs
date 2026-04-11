@@ -19,6 +19,14 @@ use crate::geo::{
 use crate::paths;
 use bson::{Bson, Document};
 
+/// Cheap deterministic byte key for BSON values, used for set membership
+/// tests (e.g. `$all`, `$in`).  Wraps in `{"": val}` to get a stable
+/// canonical encoding from the bson crate.
+#[inline]
+fn canonical_bson_key(val: &Bson) -> Vec<u8> {
+    bson::to_vec(&bson::doc! { "": val.clone() }).unwrap_or_default()
+}
+
 /// Evaluate a MongoDB query predicate against a document.
 ///
 /// Returns `true` if the document matches the query, `false` otherwise.
@@ -539,6 +547,13 @@ fn bson_type_matches(value: &Bson, type_name: &str) -> bool {
 }
 
 fn eval_regex(value: Option<&Bson>, cond_val: &Bson) -> Result<bool, String> {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    thread_local! {
+        static CACHE: RefCell<HashMap<String, regex::Regex>> = RefCell::new(HashMap::new());
+    }
+
     let value_str = match value {
         Some(Bson::String(s)) => s,
         _ => return Ok(false),
@@ -550,10 +565,21 @@ fn eval_regex(value: Option<&Bson>, cond_val: &Bson) -> Result<bool, String> {
         _ => return Err("$regex requires string pattern".to_string()),
     };
 
-    match regex::Regex::new(pattern) {
-        Ok(re) => Ok(re.is_match(value_str)),
-        Err(e) => Err(format!("invalid regex pattern '{}': {}", pattern, e)),
-    }
+    CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let re = match cache.get(pattern) {
+            Some(re) => re,
+            None => {
+                let compiled = regex::Regex::new(pattern)
+                    .map_err(|e| format!("invalid regex pattern '{}': {}", pattern, e))?;
+                cache.insert(pattern.to_string(), compiled);
+                // SAFETY: we just inserted this key on the line above.
+                #[allow(clippy::unwrap_used)]
+                cache.get(pattern).unwrap()
+            }
+        };
+        Ok(re.is_match(value_str))
+    })
 }
 
 fn eval_not(
@@ -584,16 +610,15 @@ fn eval_all(value: Option<&Bson>, cond_val: &Bson) -> Result<bool, String> {
 
     let cond_arr = as_array(cond_val)?;
 
-    // All items in cond_arr must be in val_arr
+    // Build a set of canonical keys for O(1) membership tests instead
+    // of O(|val_arr|) per condition element.
+    let val_keys: std::collections::HashSet<Vec<u8>> = val_arr
+        .iter()
+        .map(canonical_bson_key)
+        .collect();
+
     for cond_item in cond_arr {
-        let mut found = false;
-        for val_item in val_arr {
-            if bson_eq(Some(val_item), Some(cond_item)) {
-                found = true;
-                break;
-            }
-        }
-        if !found {
+        if !val_keys.contains(&canonical_bson_key(cond_item)) {
             return Ok(false);
         }
     }

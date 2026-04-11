@@ -100,7 +100,7 @@ pub enum ExecutionPlan {
         limit: usize,
         reverse: bool,
     },
-    /// HNSW approximate nearest-neighbor search on a vector index.
+    /// Vector similarity search on a vector index (HNSW or flat).
     VectorIndexSearch {
         index_name: String,
         field: String,
@@ -108,6 +108,8 @@ pub enum ExecutionPlan {
         metric: String,
         ef_construction: Option<usize>,
         m: Option<usize>,
+        /// `"hnsw"` (default) or `"flat"`.
+        indexing_method: String,
     },
     /// Bitmap lookup for low-cardinality equality / `$in` queries.
     BitmapScan { index_name: String, field: String },
@@ -452,6 +454,10 @@ fn plan_simple_query_with_projection(
                             let ef_construction =
                                 vopts.as_ref().and_then(|v| v.ef_construction);
                             let m = vopts.as_ref().and_then(|v| v.m);
+                            let indexing_method = vopts
+                                .as_ref()
+                                .map(|v| v.indexing_method.clone())
+                                .unwrap_or_else(|| "hnsw".to_string());
                             let plan = QueryPlan {
                                 execution_plan: ExecutionPlan::VectorIndexSearch {
                                     index_name: index_spec.name.clone(),
@@ -460,6 +466,7 @@ fn plan_simple_query_with_projection(
                                     metric,
                                     ef_construction,
                                     m,
+                                    indexing_method,
                                 },
                                 estimated_cost: 30,
                                 reason: format!(

@@ -166,6 +166,64 @@ fn cmd_aggregate(
                 resp.set_item("ok", 1.0)?;
                 return Ok(resp.into_any().unbind());
             }
+            if d.get_item("$listSearchIndexes")?.is_some() {
+                let coll_typed = get_collection_typed(ctx, &db_name, &coll_name)?;
+                let indexes_py = coll_typed.bind(py).borrow().list_indexes(py)?;
+                let indexes = indexes_py.bind(py);
+                let results = PyList::empty(py);
+
+                for idx_any in indexes.try_iter()? {
+                    let idx_any = idx_any?;
+                    let idx_dict = idx_any.cast::<PyDict>()?;
+                    let idx_type: String = idx_dict
+                        .get_item("type")?
+                        .map(|v| v.extract::<String>().unwrap_or_default())
+                        .unwrap_or_default();
+                    if idx_type != "vectorSearch" {
+                        continue;
+                    }
+                    let entry = PyDict::new(py);
+                    if let Some(name) = idx_dict.get_item("name")? {
+                        entry.set_item("id", &name)?;
+                        entry.set_item("name", &name)?;
+                    }
+                    entry.set_item("type", "vectorSearch")?;
+                    entry.set_item("status", "READY")?;
+                    entry.set_item("queryable", true)?;
+                    if let Some(vs_opts) = idx_dict.get_item("vectorSearchOptions")? {
+                        let defn = PyDict::new(py);
+                        let fields = PyList::empty(py);
+                        let field = PyDict::new(py);
+                        field.set_item("type", "vector")?;
+                        if let Some(keys) = idx_dict.get_item("key")? {
+                            if let Ok(keys_dict) = keys.cast::<PyDict>() {
+                                if let Some((k, _)) = keys_dict.iter().next() {
+                                    field.set_item("path", k)?;
+                                }
+                            }
+                        }
+                        if let Ok(d) = vs_opts.get_item("dimensions") {
+                            field.set_item("numDimensions", d)?;
+                        }
+                        if let Ok(m) = vs_opts.get_item("metric") {
+                            field.set_item("similarity", m)?;
+                        }
+                        fields.append(field)?;
+                        defn.set_item("fields", fields)?;
+                        entry.set_item("latestDefinition", defn)?;
+                    }
+                    results.append(entry)?;
+                }
+
+                let cursor_dict = PyDict::new(py);
+                cursor_dict.set_item("firstBatch", results)?;
+                cursor_dict.set_item("id", bson_int64(py, 0)?)?;
+                cursor_dict.set_item("ns", &ns)?;
+                let resp = PyDict::new(py);
+                resp.set_item("cursor", cursor_dict)?;
+                resp.set_item("ok", 1.0)?;
+                return Ok(resp.into_any().unbind());
+            }
             if d.get_item("$changeStream")?.is_some() {
                 let change_pipeline = if pipeline.len() > 1 {
                     let rest = PyList::empty(py);

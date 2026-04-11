@@ -10,7 +10,7 @@
 //! - **Update operations**: `update_one`, `update_many`
 //! - **Delete operations**: `delete_one`, `delete_many`
 //! - **Index operations**: `create_index`, `drop_index`, `list_indexes`
-//! - **Vector search**: HNSW-based approximate nearest-neighbor via `$vectorSearch`
+//! - **Vector search**: HNSW (ANN) and flat (exact) via `$vectorSearch` with multi-tenant pre-filtering
 //! - **Aggregation pipeline**: 25+ stages including `$vectorSearch`, `$geoNear`, `$lookup`
 //! - **Transactions**: multi-document snapshot-isolated sessions
 //! - **Utility operations**: `count_documents`

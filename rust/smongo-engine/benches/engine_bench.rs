@@ -3,6 +3,8 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 use smongo_engine::aggregation::aggregate_stream;
 use smongo_engine::index::extract_index_key;
+use smongo_engine::index::hnsw::{DistanceMetric, HnswGraph};
+use smongo_engine::index::vector_index::VectorIndex;
 use smongo_engine::query::eval_query;
 use smongo_engine::update::apply_update;
 
@@ -219,11 +221,99 @@ fn bench_aggregate(c: &mut Criterion) {
     });
 }
 
+// ---------------------------------------------------------------------------
+// HNSW vector search benchmarks
+// ---------------------------------------------------------------------------
+
+fn make_random_vecs(n: usize, dim: usize, seed: u64) -> Vec<f32> {
+    let mut s = seed;
+    let mut next = || -> f32 {
+        s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
+        ((s >> 33) as f32) / (u32::MAX as f32 / 2.0) - 1.0
+    };
+    let mut flat = Vec::with_capacity(n * dim);
+    for _ in 0..n {
+        let raw: Vec<f32> = (0..dim).map(|_| next()).collect();
+        let norm: f32 = raw.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm == 0.0 {
+            flat.extend_from_slice(&raw);
+        } else {
+            flat.extend(raw.iter().map(|x| x / norm));
+        }
+    }
+    flat
+}
+
+fn bench_hnsw(c: &mut Criterion) {
+    let dim = 128;
+
+    // --- Build benchmarks ---
+    c.bench_function("hnsw/build_1k_128d", |b| {
+        let vecs = make_random_vecs(1000, dim, 42);
+        b.iter(|| {
+            let mut g = HnswGraph::new(dim, 16, 200, DistanceMetric::NegDotProduct);
+            for i in 0..1000 {
+                g.insert(i, black_box(&vecs));
+            }
+            g
+        })
+    });
+
+    c.bench_function("hnsw/build_10k_128d", |b| {
+        let vecs = make_random_vecs(10_000, dim, 42);
+        b.iter(|| {
+            let mut g = HnswGraph::new(dim, 16, 200, DistanceMetric::NegDotProduct);
+            for i in 0..10_000 {
+                g.insert(i, black_box(&vecs));
+            }
+            g
+        })
+    });
+
+    // --- Search benchmarks (pre-built graph) ---
+    let n = 10_000;
+    let vecs = make_random_vecs(n, dim, 42);
+    let query_vecs = make_random_vecs(1, dim, 999);
+    let query = &query_vecs[..dim];
+
+    let mut graph = HnswGraph::new(dim, 16, 200, DistanceMetric::NegDotProduct);
+    for i in 0..n {
+        graph.insert(i, &vecs);
+    }
+
+    c.bench_function("hnsw/search_10k_k10_ef64", |b| {
+        b.iter(|| graph.search(black_box(query), 10, 64, black_box(&vecs)))
+    });
+
+    c.bench_function("hnsw/search_10k_k10_ef200", |b| {
+        b.iter(|| graph.search(black_box(query), 10, 200, black_box(&vecs)))
+    });
+
+    // --- VectorIndex end-to-end (build + search) ---
+    c.bench_function("vector_index/build_search_1k_cosine", |b| {
+        let docs: Vec<Document> = (0..1000)
+            .map(|i| {
+                let offset = i * dim;
+                let emb: Vec<Bson> = vecs[offset..offset + dim]
+                    .iter()
+                    .map(|&f| Bson::Double(f as f64))
+                    .collect();
+                doc! { "_id": i as i32, "emb": emb }
+            })
+            .collect();
+        b.iter(|| {
+            let mut idx = VectorIndex::build(black_box(&docs), "emb", dim, "cosine");
+            idx.search(black_box(query), 10)
+        })
+    });
+}
+
 criterion_group!(
     benches,
     bench_eval_query,
     bench_apply_update,
     bench_extract_index_key,
     bench_aggregate,
+    bench_hnsw,
 );
 criterion_main!(benches);

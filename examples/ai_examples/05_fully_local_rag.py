@@ -28,15 +28,41 @@ from smongo import WireServer
 PORT = 27023
 
 KNOWLEDGE = [
-    "smongo is an embedded MongoDB engine that runs entirely in-process on redb. No server process, no Docker, no network -- just import and go.",
-    "The wire protocol server lets any standard MongoDB driver (PyMongo, mongosh, Compass) connect to smongo over TCP. Clients have no idea they're talking to an embedded engine.",
-    "smongo supports $vectorSearch as a native aggregation stage. It performs in-memory cosine or euclidean similarity search using NumPy or USearch, with optional MQL pre-filtering.",
-    "Full ACID transactions with snapshot isolation are supported across multiple collections via the embedded engine.",
-    "The aggregation pipeline supports 25+ stages including $lookup joins, $graphLookup, $facet for parallel sub-pipelines, $setWindowFields, and $merge for materialized views.",
-    "Atlas sync pushes local writes to MongoDB Atlas and pulls remote changes back, with per-document vector clocks for causal ordering and automatic conflict resolution.",
-    "The query planner uses heuristic prefix-scoring to automatically select B-tree indexes. It supports compound, unique, sparse, TTL, text, hashed, wildcard, and partial indexes.",
-    "The Rust core eliminates ~50 Python method dispatches per command by using typed PyO3 borrow() calls instead of call_method(). The GIL is still acquired but held for actual work only.",
+    "smongo is an embedded MongoDB engine that runs entirely in-process on redb. "
+    "No server process, no Docker, no network -- just import and go.",
+
+    "The wire protocol server lets any standard MongoDB driver (PyMongo, mongosh, "
+    "Compass) connect to smongo over TCP. Clients have no idea they're talking to "
+    "an embedded engine.",
+
+    "smongo supports $vectorSearch as a native aggregation stage with a vendored "
+    "HNSW index for approximate nearest-neighbor search and a flat index for "
+    "exact brute-force search, with Atlas-compatible cosine/euclidean/dotProduct "
+    "scoring and optional MQL pre-filtering.",
+
+    "Full ACID transactions with snapshot isolation are supported across multiple "
+    "collections via the embedded engine's MVCC storage layer.",
+
+    "The aggregation pipeline supports 25+ stages including $lookup joins, "
+    "$graphLookup, $facet for parallel sub-pipelines, $setWindowFields, and "
+    "$merge for materialized views.",
+
+    "Atlas sync pushes local writes to MongoDB Atlas and pulls remote changes "
+    "back, with per-document vector clocks for causal ordering and automatic "
+    "conflict resolution.",
+
+    "The query planner uses heuristic prefix-scoring to automatically select "
+    "B-tree indexes. It supports compound, unique, sparse, TTL, text, hashed, "
+    "wildcard, partial, and vector search indexes.",
+
+    "The Rust core eliminates ~50 Python method dispatches per command by using "
+    "typed PyO3 borrow() calls instead of call_method(). The GIL is still "
+    "acquired but held for actual work only.",
 ]
+
+
+def separator(char="─", width=60):
+    return char * width
 
 
 def main() -> None:
@@ -46,7 +72,10 @@ def main() -> None:
         from langchain_mongodb import MongoDBAtlasVectorSearch
         from langchain_ollama import ChatOllama, OllamaEmbeddings
     except ImportError:
-        print("Install deps:  pip install langchain-ollama langchain-mongodb pymongo smongo")
+        print(
+            "Install deps:  pip install langchain-ollama langchain-mongodb "
+            "pymongo smongo"
+        )
         return
 
     print("╔══════════════════════════════════════════════════════════╗")
@@ -58,8 +87,8 @@ def main() -> None:
     print("1. Loading local models from Ollama...")
     embeddings = OllamaEmbeddings(model="nomic-embed-text")
     llm = ChatOllama(model="llama3.2", temperature=0)
-    print("   Embedding model: nomic-embed-text (137M params)")
-    print("   LLM: llama3.2 (3B params)\n")
+    print("   Embedding model : nomic-embed-text (137M params)")
+    print("   LLM             : llama3.2 (3B params)\n")
 
     # ── 2. Seed knowledge base via native smongo ───────────────
     print("2. Building knowledge base with real embeddings...")
@@ -70,19 +99,36 @@ def main() -> None:
 
     t0 = time.time()
     embedded_docs = []
+    dims = None
     for i, text in enumerate(KNOWLEDGE):
         vec = embeddings.embed_documents([text])[0]
+        dims = len(vec)
         embedded_docs.append({"text": text, "embedding": vec, "chunk_id": i})
-        print(f"   [{i+1}/{len(KNOWLEDGE)}] Embedded ({len(vec)} dims)")
+        print(f"   [{i+1}/{len(KNOWLEDGE)}] Embedded ({dims} dims)")
 
     coll.insert_many(embedded_docs)
     embed_time = time.time() - t0
     print(f"   Stored {len(KNOWLEDGE)} chunks in {embed_time:.1f}s\n")
 
-    # ── 3. Start wire server ───────────────────────────────────
-    print(f"3. Starting wire protocol server on port {PORT}...")
+    # ── 3. Create Atlas-style vector search index ────────────
+    print("3. Creating vector search index (Atlas-compatible)...")
+    coll.create_index(
+        {"embedding": "vectorSearch"},
+        vectorSearchOptions={
+            "dimensions": dims,
+            "metric": "cosine",
+        },
+        name="default",
+        type="vectorSearch",
+    )
+    print(f"   Index 'default': {dims} dims, cosine similarity, HNSW\n")
 
-    with WireServer(db_path, port=PORT, local_client=native.get_local_client()) as _srv:
+    # ── 4. Start wire server ─────────────────────────────────
+    print(f"4. Starting wire protocol server on port {PORT}...")
+
+    with WireServer(
+        db_path, port=PORT, local_client=native.get_local_client()
+    ) as _srv:
         time.sleep(0.3)
 
         from pymongo import MongoClient as PyMongoClient
@@ -94,8 +140,8 @@ def main() -> None:
         )
         pymongo_coll = client["rag"]["knowledge"]
 
-        # ── 4. Official LangChain MongoDB VectorStore ──────────
-        print("4. Connecting official MongoDBAtlasVectorSearch...\n")
+        # ── 5. Official LangChain MongoDB VectorStore ────────
+        print("5. Connecting official MongoDBAtlasVectorSearch...\n")
 
         vectorstore = MongoDBAtlasVectorSearch(
             collection=pymongo_coll,
@@ -104,23 +150,11 @@ def main() -> None:
             text_key="text",
             embedding_key="embedding",
         )
-        retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 
-        # ── 5. RAG chain ──────────────────────────────────────
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    "You are a helpful assistant. Answer the user's question using "
-                    "ONLY the context below. Be concise (2-3 sentences). If the "
-                    "context doesn't contain the answer, say so.\n\n"
-                    "Context:\n{context}",
-                ),
-                ("human", "{question}"),
-            ]
-        )
-
-        chain = prompt | llm | StrOutputParser()
+        # ── 6. Show scored retrieval ─────────────────────────
+        print(f"   {separator()}")
+        print("   VECTOR SEARCH RESULTS (with Atlas-compatible scores)")
+        print(f"   {separator()}\n")
 
         questions = [
             "What is smongo and how is it different from MongoDB?",
@@ -132,25 +166,75 @@ def main() -> None:
             print(f"   Q: {q}")
 
             t0 = time.time()
+            scored = vectorstore.similarity_search_with_score(q, k=3)
+            search_ms = (time.time() - t0) * 1000
+
+            for rank, (doc, score) in enumerate(scored, 1):
+                snippet = doc.page_content[:80].replace("\n", " ")
+                bar = "█" * int(score * 20)
+                print(f"      {rank}. [{score:.4f}] {bar}")
+                print(f"         {snippet}...")
+
+            print(f"      ({search_ms:.0f}ms)\n")
+
+        # ── 7. RAG with LLM generation ──────────────────────
+        print(f"   {separator()}")
+        print("   RAG ANSWERS (retrieval + generation)")
+        print(f"   {separator()}\n")
+
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "You are a helpful assistant. Answer the user's question "
+                    "using ONLY the context below. Be concise (2-3 sentences). "
+                    "If the context doesn't contain the answer, say so.\n\n"
+                    "Context:\n{context}",
+                ),
+                ("human", "{question}"),
+            ]
+        )
+        chain = prompt | llm | StrOutputParser()
+        retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+
+        rag_questions = [
+            "What is smongo and what makes it different?",
+            "How does vector search work under the hood?",
+        ]
+
+        for q in rag_questions:
+            print(f"   Q: {q}")
+
+            t0 = time.time()
             docs = retriever.invoke(q)
-            retrieve_time = time.time() - t0
+            retrieve_ms = (time.time() - t0) * 1000
 
             context = "\n".join(f"- {d.page_content}" for d in docs)
 
             t0 = time.time()
             answer = chain.invoke({"context": context, "question": q})
-            llm_time = time.time() - t0
+            gen_ms = (time.time() - t0) * 1000
 
             print(f"   A: {answer}")
-            print(f"   (retrieval: {retrieve_time:.2f}s, generation: {llm_time:.2f}s)\n")
+            print(
+                f"      (retrieval: {retrieve_ms:.0f}ms, "
+                f"generation: {gen_ms:.0f}ms)\n"
+            )
 
-        print("   ────────────────────────────────────────────────────")
-        print("   Every component ran locally on your machine:")
-        print("     Embeddings:  Ollama nomic-embed-text")
-        print("     Vector DB:   smongo (via official MongoDBAtlasVectorSearch)")
-        print("     LLM:         Ollama llama3.2")
-        print("     Framework:   LangChain (official integrations, zero custom code)")
-        print("   ────────────────────────────────────────────────────\n")
+        # ── 8. Summary ──────────────────────────────────────
+        print(f"   {separator('═')}")
+        print("   Every component ran locally on your machine:\n")
+        print("     Embeddings : Ollama nomic-embed-text")
+        print(
+            "     Vector DB  : smongo "
+            "(via official MongoDBAtlasVectorSearch)"
+        )
+        print("     LLM        : Ollama llama3.2")
+        print(
+            "     Framework  : LangChain "
+            "(official integrations, zero custom code)"
+        )
+        print(f"   {separator('═')}\n")
 
         client.close()
 

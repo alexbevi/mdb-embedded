@@ -4,7 +4,11 @@
 //!
 //! - Full CRUD with MQL query operators and update expressions
 //! - Aggregation pipeline with 25+ stages and window functions
-//! - HNSW-based approximate nearest-neighbor vector search (via `hora`)
+//! - Atlas-compatible `$vectorSearch` with HNSW (ANN) **and** flat (exact)
+//!   index types, vendored zero-dependency implementation
+//! - Multi-tenant vector search: `tenant_id` pre-filter, `exact: true`,
+//!   `indexingMethod: "flat"` — matching
+//!   [Atlas multi-tenant guidance](https://www.mongodb.com/docs/atlas/atlas-vector-search/multi-tenant-architecture/)
 //! - B-tree, text, 2dsphere, bitmap, and prefix indexes
 //! - Pluggable storage: in-memory, redb (native), OPFS (WASM)
 //! - Collation-aware comparison and sorting

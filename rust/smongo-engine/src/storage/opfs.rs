@@ -173,13 +173,15 @@ impl StorageCursor for OpfsCursor {
             .as_ref()
             .ok_or_else(|| StorageError::Other("not materialized".into()))?;
 
-        match entries.iter().find(|(k, _)| k == &key) {
-            Some((k, v)) => {
+        match entries.binary_search_by(|(k, _)| k.as_slice().cmp(&key)) {
+            Ok(idx) => {
+                let (k, v) = &entries[idx];
                 self.current_key = Some(k.clone());
                 self.current_value = Some(v.clone());
+                self.position = Some(idx);
                 Ok(())
             }
-            None => Err(StorageError::NotFound("key not found".into())),
+            Err(_) => Err(StorageError::NotFound("key not found".into())),
         }
     }
 
@@ -397,7 +399,11 @@ fn parse_file(bytes: &[u8]) -> StorageResult<Vec<(Vec<u8>, Vec<u8>)>> {
 }
 
 fn serialize_file(entries: &[(Vec<u8>, Vec<u8>)]) -> Vec<u8> {
-    let mut buf = Vec::new();
+    let total: usize = entries
+        .iter()
+        .map(|(k, v)| 8 + k.len() + v.len())
+        .sum();
+    let mut buf = Vec::with_capacity(total);
 
     for (key, value) in entries {
         buf.extend_from_slice(&(key.len() as u32).to_le_bytes());

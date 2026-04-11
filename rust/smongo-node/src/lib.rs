@@ -278,9 +278,15 @@ fn parse_index_options(o: &serde_json::Value) -> EngineIndexOptions {
             .and_then(|n| n.as_u64())
             .map(|n| n as usize);
         let m = v.get("m").and_then(|n| n.as_u64()).map(|n| n as usize);
+        let indexing_method = v
+            .get("indexingMethod")
+            .and_then(|s| s.as_str())
+            .unwrap_or("hnsw")
+            .to_string();
         Some(EngineVectorIndexOptions {
             dimensions,
             metric,
+            indexing_method,
             ef_construction,
             m,
         })

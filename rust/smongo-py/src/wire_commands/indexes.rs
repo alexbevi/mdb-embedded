@@ -1,4 +1,5 @@
-//! Wire protocol index management commands: `createIndexes`, `dropIndexes`, `listIndexes`.
+//! Wire protocol index management commands: `createIndexes`, `dropIndexes`,
+//! `listIndexes`, `createSearchIndex`, `createSearchIndexes`, `listSearchIndexes`.
 use std::collections::HashMap;
 
 use pyo3::exceptions::PyValueError;
@@ -301,9 +302,246 @@ fn cmd_reindex(
     Ok(resp.into_any().unbind())
 }
 
+// ---------------------------------------------------------------------------
+// createSearchIndex / createSearchIndexes — Atlas-style vector search index
+// creation.  PyMongo's `Collection.create_search_index()` sends these.
+//
+// Atlas index definition:
+// {
+//   "name": "my_index",
+//   "type": "vectorSearch",
+//   "definition": {
+//     "fields": [
+//       {"type": "vector", "path": "embedding", "numDimensions": 768, "similarity": "cosine"},
+//       {"type": "filter", "path": "tenant_id"}
+//     ]
+//   }
+// }
+//
+// We translate this into our `createIndexes` format so the engine stores it
+// as a regular vector index.
+// ---------------------------------------------------------------------------
+
+fn atlas_search_index_to_create_indexes(
+    py: Python<'_>,
+    coll_py: &Py<crate::redb_client::RedbLocalCollection>,
+    index: &Bound<'_, PyDict>,
+) -> PyResult<String> {
+    let name: String = index
+        .get_item("name")?
+        .and_then(|v| v.extract::<String>().ok())
+        .unwrap_or_else(|| "default".to_string());
+
+    let definition = index
+        .get_item("definition")?
+        .ok_or_else(|| PyValueError::new_err("search index requires 'definition'"))?;
+    let definition = definition.cast::<PyDict>()?;
+
+    let fields = definition
+        .get_item("fields")?
+        .ok_or_else(|| PyValueError::new_err("search index definition requires 'fields'"))?;
+
+    let mut vector_path: Option<String> = None;
+    let mut num_dimensions: i64 = 0;
+    let mut similarity = "cosine".to_string();
+    let mut indexing_method = "hnsw".to_string();
+
+    for field_any in fields.try_iter()? {
+        let field_any = field_any?;
+        let field = field_any.cast::<PyDict>()?;
+        let field_type: String = field
+            .get_item("type")?
+            .and_then(|v| v.extract::<String>().ok())
+            .unwrap_or_default();
+
+        if field_type == "vector" {
+            vector_path = field
+                .get_item("path")?
+                .and_then(|v| v.extract::<String>().ok());
+            if let Some(nd) = field.get_item("numDimensions")? {
+                num_dimensions = nd.extract::<i64>()?;
+            }
+            if let Some(sim) = field.get_item("similarity")? {
+                similarity = sim.extract::<String>()?;
+            }
+            if let Some(im) = field.get_item("indexingMethod")? {
+                indexing_method = im.extract::<String>()?;
+            }
+        }
+    }
+
+    let path = vector_path
+        .ok_or_else(|| PyValueError::new_err("no vector field found in search index definition"))?;
+
+    if num_dimensions <= 0 {
+        return Err(PyValueError::new_err(
+            "numDimensions must be a positive integer",
+        ));
+    }
+
+    let key_dict = PyDict::new(py);
+    key_dict.set_item(&path, "vectorSearch")?;
+
+    let opts = PyDict::new(py);
+    opts.set_item("name", &name)?;
+    opts.set_item("unique", false)?;
+    opts.set_item("sparse", false)?;
+    opts.set_item("background", false)?;
+
+    let vs_opts = PyDict::new(py);
+    vs_opts.set_item("dimensions", num_dimensions)?;
+    vs_opts.set_item("metric", &similarity)?;
+    vs_opts.set_item("indexing_method", &indexing_method)?;
+    opts.set_item("vectorSearchOptions", vs_opts)?;
+
+    let type_str = "vectorSearch";
+    opts.set_item("type", type_str)?;
+
+    coll_py
+        .bind(py)
+        .borrow()
+        .create_index(py, &key_dict.as_borrowed(), Some(&opts.as_borrowed()))?;
+
+    Ok(name)
+}
+
+fn cmd_create_search_index(
+    py: Python<'_>,
+    ctx: &Bound<'_, ConnectionContext>,
+    cmd: &Bound<'_, PyDict>,
+    _seqs: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let db_name = dict_get_str(cmd, "$db", "test")?;
+    let coll_name: String = cmd
+        .get_item("createSearchIndex")?
+        .ok_or_else(|| PyValueError::new_err("missing 'createSearchIndex'"))?
+        .extract()?;
+    let coll_py = get_collection_typed(ctx, &db_name, &coll_name)?;
+
+    let index = cmd
+        .get_item("index")?
+        .ok_or_else(|| PyValueError::new_err("missing 'index'"))?;
+    let index = index.cast::<PyDict>()?;
+    let name = atlas_search_index_to_create_indexes(py, &coll_py, index)?;
+
+    let resp = PyDict::new(py);
+    resp.set_item("indexName", name)?;
+    resp.set_item("ok", 1.0)?;
+    Ok(resp.into_any().unbind())
+}
+
+fn cmd_create_search_indexes(
+    py: Python<'_>,
+    ctx: &Bound<'_, ConnectionContext>,
+    cmd: &Bound<'_, PyDict>,
+    _seqs: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let db_name = dict_get_str(cmd, "$db", "test")?;
+    let coll_name: String = cmd
+        .get_item("createSearchIndexes")?
+        .ok_or_else(|| PyValueError::new_err("missing 'createSearchIndexes'"))?
+        .extract()?;
+    let coll_py = get_collection_typed(ctx, &db_name, &coll_name)?;
+
+    let indexes = cmd
+        .get_item("indexes")?
+        .ok_or_else(|| PyValueError::new_err("missing 'indexes'"))?;
+
+    let names = PyList::empty(py);
+    for idx_any in indexes.try_iter()? {
+        let idx_any = idx_any?;
+        let idx = idx_any.cast::<PyDict>()?;
+        let name = atlas_search_index_to_create_indexes(py, &coll_py, idx)?;
+        let entry = PyDict::new(py);
+        entry.set_item("name", &name)?;
+        names.append(entry)?;
+    }
+
+    let resp = PyDict::new(py);
+    resp.set_item("indexesCreated", names)?;
+    resp.set_item("ok", 1.0)?;
+    Ok(resp.into_any().unbind())
+}
+
+fn cmd_list_search_indexes(
+    py: Python<'_>,
+    ctx: &Bound<'_, ConnectionContext>,
+    cmd: &Bound<'_, PyDict>,
+    _seqs: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let db_name = dict_get_str(cmd, "$db", "test")?;
+    let coll_name: String = cmd
+        .get_item("listSearchIndexes")?
+        .ok_or_else(|| PyValueError::new_err("missing 'listSearchIndexes'"))?
+        .extract()?;
+    let coll_py = get_collection_typed(ctx, &db_name, &coll_name)?;
+    let ns = format!("{db_name}.{coll_name}");
+
+    let indexes_py = coll_py.bind(py).borrow().list_indexes(py)?;
+    let indexes = indexes_py.bind(py);
+    let results = PyList::empty(py);
+
+    for idx_any in indexes.try_iter()? {
+        let idx_any = idx_any?;
+        let idx_dict = idx_any.cast::<PyDict>()?;
+
+        let idx_type: String = idx_dict
+            .get_item("type")?
+            .map(|v| v.extract::<String>().unwrap_or_default())
+            .unwrap_or_default();
+        if idx_type != "vectorSearch" {
+            continue;
+        }
+        let entry = PyDict::new(py);
+        if let Some(name) = idx_dict.get_item("name")? {
+            entry.set_item("id", &name)?;
+            entry.set_item("name", &name)?;
+        }
+        entry.set_item("type", "vectorSearch")?;
+        entry.set_item("status", "READY")?;
+        entry.set_item("queryable", true)?;
+        if let Some(vs_opts) = idx_dict.get_item("vectorSearchOptions")? {
+            let defn = PyDict::new(py);
+            let fields = PyList::empty(py);
+            let field = PyDict::new(py);
+            field.set_item("type", "vector")?;
+            if let Some(keys) = idx_dict.get_item("key")? {
+                if let Ok(keys_dict) = keys.cast::<PyDict>() {
+                    if let Some((k, _)) = keys_dict.iter().next() {
+                        field.set_item("path", k)?;
+                    }
+                }
+            }
+            if let Ok(d) = vs_opts.get_item("dimensions") {
+                field.set_item("numDimensions", d)?;
+            }
+            if let Ok(m) = vs_opts.get_item("metric") {
+                field.set_item("similarity", m)?;
+            }
+            fields.append(field)?;
+            defn.set_item("fields", fields)?;
+            entry.set_item("latestDefinition", defn)?;
+        }
+        results.append(entry)?;
+    }
+
+    let cursor_dict = PyDict::new(py);
+    cursor_dict.set_item("firstBatch", results)?;
+    cursor_dict.set_item("id", bson_int64(py, 0)?)?;
+    cursor_dict.set_item("ns", ns)?;
+
+    let resp = PyDict::new(py);
+    resp.set_item("cursor", cursor_dict)?;
+    resp.set_item("ok", 1.0)?;
+    Ok(resp.into_any().unbind())
+}
+
 pub(crate) fn register(m: &mut HashMap<&'static str, HandlerFn>) {
     m.insert("listIndexes", cmd_list_indexes);
     m.insert("createIndexes", cmd_create_indexes);
     m.insert("dropIndexes", cmd_drop_indexes);
     m.insert("reIndex", cmd_reindex);
+    m.insert("createSearchIndex", cmd_create_search_index);
+    m.insert("createSearchIndexes", cmd_create_search_indexes);
+    m.insert("listSearchIndexes", cmd_list_search_indexes);
 }

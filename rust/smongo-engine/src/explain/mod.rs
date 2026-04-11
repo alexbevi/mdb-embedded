@@ -196,7 +196,7 @@ impl ExplainResult {
                 format!("IXSCAN_SORTED (sorted index walk on '{index_name}')")
             }
             ExecutionPlanExplain::VectorIndexSearch { index_name } => {
-                format!("VECTOR_SEARCH (HNSW index '{index_name}')")
+                format!("VECTOR_SEARCH (vector index '{index_name}')")
             }
             ExecutionPlanExplain::BitmapScan { index_name } => {
                 format!("BITMAP_SCAN (bitmap index '{index_name}')")

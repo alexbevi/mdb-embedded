@@ -1,19 +1,37 @@
-//! HNSW-based approximate nearest-neighbor vector index.
+//! Vector similarity search index supporting both **HNSW** (approximate) and
+//! **flat** (exact brute-force) search modes.
 //!
-//! Wraps an hora `HNSWIndex` graph that is rebuilt lazily from raw vector
+//! Wraps a vendored [`HnswGraph`] that is rebuilt lazily from raw vector
 //! storage whenever mutations (`insert` / `remove`) invalidate the graph.
-//! Persistence uses the same compact binary format (doc-ids + row-major f32
-//! vectors) and rebuilds the HNSW graph on deserialization.
+//! Persistence uses a compact binary format (doc-ids + row-major f32 vectors)
+//! and rebuilds the HNSW graph on deserialization.
+//!
+//! ## Multi-Tenant Architecture
+//!
+//! Matches the [Atlas multi-tenant guidance][mt]: a single collection stores
+//! all tenants, distinguished by a `tenant_id` field.  Use `filter` in
+//! `$vectorSearch` to scope queries to one tenant.
+//!
+//! - **Many small tenants (<10K vectors each)**: use `exact: true` or a flat
+//!   index (`indexingMethod: "flat"`) — exhaustive scan after pre-filtering is
+//!   already the fastest path and avoids HNSW graph overhead.
+//! - **Larger tenants (>10K vectors)**: use HNSW (the default) for sub-linear
+//!   query latency.
+//!
+//! [mt]: https://www.mongodb.com/docs/atlas/atlas-vector-search/multi-tenant-architecture/
 
 use std::collections::HashMap;
 
 use bson::Document;
-use hora::core::ann_index::ANNIndex;
-use hora::core::metrics::Metric;
-use hora::index::hnsw_idx::HNSWIndex;
-use hora::index::hnsw_params::HNSWParams;
 
-/// In-memory HNSW vector index with doc_id mapping.
+use super::hnsw::{compute_distance, DistanceMetric, HnswGraph};
+
+/// In-memory vector index with doc_id mapping.
+///
+/// Supports both HNSW (approximate, default) and flat (exact brute-force)
+/// search modes, matching the [Atlas Vector Search][avs] index types.
+///
+/// [avs]: https://www.mongodb.com/docs/atlas/atlas-vector-search/vector-search-type/
 pub struct VectorIndex {
     /// doc_id -> internal node id
     id_map: HashMap<String, u32>,
@@ -26,12 +44,14 @@ pub struct VectorIndex {
     /// Similarity metric name (`"cosine"`, `"euclidean"`, `"dotProduct"`).
     pub metric: String,
     /// Built HNSW graph. `None` until the first build/search.
-    hnsw: Option<HNSWIndex<f32, usize>>,
+    hnsw: Option<HnswGraph>,
+    /// Prepared vectors fed to the HNSW graph (e.g. L2-normalized for cosine).
+    graph_vectors: Vec<f32>,
     /// Set after insert/remove to signal the graph needs a rebuild.
     dirty: bool,
-    /// HNSW ef_construction (maps to hora `ef_build`). `None` = hora default (500).
+    /// HNSW ef_construction. `None` = default (200).
     ef_construction: Option<usize>,
-    /// HNSW M parameter (maps to hora `n_neighbor`). `None` = hora default (32).
+    /// HNSW M parameter. `None` = default (16).
     m: Option<usize>,
 }
 
@@ -45,6 +65,7 @@ impl VectorIndex {
             dimensions,
             metric: metric.to_string(),
             hnsw: None,
+            graph_vectors: Vec::new(),
             dirty: false,
             ef_construction: None,
             m: None,
@@ -106,40 +127,28 @@ impl VectorIndex {
 
     /// HNSW-accelerated k-NN search. Rebuilds the graph if dirty.
     pub fn search(&mut self, query: &[f32], k: usize) -> Vec<(String, f32)> {
-        if query.len() != self.dimensions {
-            return Vec::new();
-        }
-        if self.id_map.is_empty() {
+        if query.len() != self.dimensions || self.id_map.is_empty() {
             return Vec::new();
         }
         self.ensure_built();
 
-        let hnsw = match self.hnsw.as_ref() {
+        let search_vec = self.prepare_query(query);
+        let ef_search = k.max(64);
+
+        let hnsw = match self.hnsw.as_mut() {
             Some(h) => h,
             None => return Vec::new(),
         };
-
-        let search_vec = self.prepare_query(query);
-        let results = hnsw.search_nodes(&search_vec, k);
+        let results = hnsw.search(&search_vec, k, ef_search, &self.graph_vectors);
 
         let is_euclidean = self.metric == "euclidean";
         let mut scored: Vec<(String, f32)> = Vec::with_capacity(results.len());
-        for (node, distance) in results {
-            if let Some(node_id) = node.idx() {
-                let idx = *node_id;
-                if idx < self.reverse_map.len() && !self.reverse_map[idx].is_empty() {
-                    let score = if is_euclidean {
-                        // Atlas: score = 1 / (1 + euclidean_distance)
-                        let dist = distance.max(0.0).sqrt();
-                        1.0 / (1.0 + dist)
-                    } else {
-                        // Atlas: score = (1 + similarity) / 2
-                        // negate trick: raw_similarity = -distance
-                        let raw = -distance;
-                        (1.0 + raw) / 2.0
-                    };
-                    scored.push((self.reverse_map[idx].clone(), score));
-                }
+        for (idx, distance) in results {
+            if idx < self.reverse_map.len() && !self.reverse_map[idx].is_empty() {
+                scored.push((
+                    self.reverse_map[idx].clone(),
+                    atlas_score(distance, is_euclidean),
+                ));
             }
         }
 
@@ -147,9 +156,63 @@ impl VectorIndex {
         scored
     }
 
+    /// **Exact** (flat / brute-force) k-NN search.
+    ///
+    /// Computes the distance from `query` to every active vector and returns
+    /// the top-k results with Atlas-normalized scores.  No HNSW graph is
+    /// built — this is the correct path for:
+    ///
+    /// - `exact: true` in `$vectorSearch`
+    /// - Flat indexes (`indexingMethod: "flat"`)
+    /// - Multi-tenant workloads where each tenant has <10K vectors and the
+    ///   query is pre-filtered to a single tenant
+    ///
+    /// Prepared vectors (e.g. L2-normalized for cosine) are built once and
+    /// cached in `graph_vectors`, so repeated queries avoid per-vector
+    /// allocation.
+    pub fn search_exact(&mut self, query: &[f32], k: usize) -> Vec<(String, f32)> {
+        if query.len() != self.dimensions || self.id_map.is_empty() {
+            return Vec::new();
+        }
+
+        self.ensure_prepared_vectors();
+        let prepared_query = self.prepare_query(query);
+        let is_euclidean = self.metric == "euclidean";
+        let metric = match self.metric.as_str() {
+            "euclidean" => DistanceMetric::Euclidean,
+            _ => DistanceMetric::NegDotProduct,
+        };
+
+        let dim = self.dimensions;
+        let n = self.reverse_map.len();
+        let mut scored: Vec<(String, f32)> = Vec::with_capacity(n.min(k));
+
+        for i in 0..n {
+            if self.reverse_map[i].is_empty() {
+                continue;
+            }
+            let offset = i * dim;
+            let end = offset + dim;
+            if end > self.graph_vectors.len() {
+                continue;
+            }
+            let dist = compute_distance(&prepared_query, &self.graph_vectors[offset..end], metric);
+            scored.push((
+                self.reverse_map[i].clone(),
+                atlas_score(dist, is_euclidean),
+            ));
+        }
+
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(k);
+        scored
+    }
+
     /// Serialize the index to bytes for persistence.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
+        let estimated = 12 + self.metric.len()
+            + self.reverse_map.len() * (4 + 24 + self.dimensions * 4);
+        let mut buf = Vec::with_capacity(estimated);
         buf.extend_from_slice(&(self.dimensions as u32).to_le_bytes());
         let metric_bytes = self.metric.as_bytes();
         buf.extend_from_slice(&(metric_bytes.len() as u32).to_le_bytes());
@@ -241,7 +304,6 @@ impl VectorIndex {
     // Private helpers
     // ------------------------------------------------------------------
 
-    /// Insert into raw storage without marking dirty (used during bulk build).
     fn raw_insert(&mut self, doc_id: &str, vector: &[f32]) {
         if vector.len() != self.dimensions {
             return;
@@ -255,37 +317,50 @@ impl VectorIndex {
         self.vectors.extend_from_slice(vector);
     }
 
-    /// Ensure the HNSW graph is built and up-to-date.
     fn ensure_built(&mut self) {
         if self.hnsw.is_none() || self.dirty {
             self.rebuild_hnsw();
         }
     }
 
-    /// Prepare a raw vector for insertion into the hora graph.
+    /// Prepare a raw vector for distance computation.
     ///
-    /// * For **cosine**: L2-normalize then negate.
-    /// * For **dotProduct**: negate (so hora's "smallest first" finds
-    ///   highest dot-product).
-    /// * For **euclidean**: pass through unchanged.
+    /// * **cosine**: L2-normalize so that NegDotProduct distance equals
+    ///   negated cosine similarity.
+    /// * **dotProduct** / **euclidean**: pass through unchanged.
     fn prepare_for_graph(&self, raw: &[f32]) -> Vec<f32> {
         match self.metric.as_str() {
-            "cosine" => {
-                let normed = l2_normalize(raw);
-                normed.iter().map(|x| -x).collect()
-            }
-            "dotProduct" => raw.iter().map(|x| -x).collect(),
+            "cosine" => l2_normalize(raw),
             _ => raw.to_vec(),
         }
     }
 
-    /// Prepare a query vector for search. Stored vectors are negated for
-    /// cosine/dotProduct so hora's "smallest first" finds highest similarity.
-    /// The query is NOT negated—only normalized for cosine.
+    /// Prepare a query vector for search (same transform as stored vectors).
     fn prepare_query(&self, raw: &[f32]) -> Vec<f32> {
-        match self.metric.as_str() {
-            "cosine" => l2_normalize(raw),
-            _ => raw.to_vec(),
+        self.prepare_for_graph(raw)
+    }
+
+    /// Build the prepared (e.g. L2-normalized) vector buffer from raw storage.
+    ///
+    /// Shared by both `rebuild_hnsw` and `search_exact` so that cosine vectors
+    /// are only normalized once regardless of how many queries follow.
+    fn ensure_prepared_vectors(&mut self) {
+        let n = self.reverse_map.len();
+        let expected_len = n * self.dimensions;
+        if self.graph_vectors.len() == expected_len && !self.dirty {
+            return;
+        }
+        self.graph_vectors = Vec::with_capacity(expected_len);
+        for i in 0..n {
+            let offset = i * self.dimensions;
+            let end = offset + self.dimensions;
+            if end > self.vectors.len() {
+                self.graph_vectors
+                    .extend(std::iter::repeat_n(0.0f32, self.dimensions));
+                continue;
+            }
+            let prepared = self.prepare_for_graph(&self.vectors[offset..end]);
+            self.graph_vectors.extend_from_slice(&prepared);
         }
     }
 
@@ -294,42 +369,49 @@ impl VectorIndex {
         let n = self.reverse_map.len();
         if n == 0 || self.dimensions == 0 {
             self.hnsw = None;
+            self.graph_vectors.clear();
             self.dirty = false;
             return;
         }
 
-        let mut params = HNSWParams::<f32>::default().max_item(n.max(128));
-        if let Some(ef) = self.ef_construction {
-            params = params.ef_build(ef);
-        }
-        if let Some(m) = self.m {
-            params = params.n_neighbor(m).n_neighbor0(m * 2);
-        }
-
-        let hora_metric = match self.metric.as_str() {
-            "euclidean" => Metric::Euclidean,
-            _ => Metric::DotProduct,
+        let hnsw_metric = match self.metric.as_str() {
+            "euclidean" => DistanceMetric::Euclidean,
+            _ => DistanceMetric::NegDotProduct,
         };
 
-        let mut hnsw = HNSWIndex::<f32, usize>::new(self.dimensions, &params);
+        let m = self.m.unwrap_or(16);
+        let ef = self.ef_construction.unwrap_or(200);
 
+        self.ensure_prepared_vectors();
+
+        let mut graph = HnswGraph::new(self.dimensions, m, ef, hnsw_metric);
         for i in 0..n {
             if self.reverse_map[i].is_empty() {
                 continue;
             }
-            let offset = i * self.dimensions;
-            let end = offset + self.dimensions;
-            if end > self.vectors.len() {
-                continue;
-            }
-            let prepared = self.prepare_for_graph(&self.vectors[offset..end]);
-            let _ = hnsw.add(&prepared, i);
+            graph.insert(i, &self.graph_vectors);
         }
 
-        let _ = hnsw.build(hora_metric);
-        self.hnsw = Some(hnsw);
+        self.hnsw = Some(graph);
         self.dirty = false;
     }
+}
+
+/// Atlas-compatible score normalization, clamped to `[0, 1]`.
+///
+/// - **Euclidean**: `1 / (1 + sqrt(distance))`
+/// - **Cosine / dotProduct** (stored as NegDotProduct): `(1 + similarity) / 2`
+///   where `similarity = -distance`.
+#[inline]
+fn atlas_score(distance: f32, is_euclidean: bool) -> f32 {
+    let score = if is_euclidean {
+        let d = distance.max(0.0).sqrt();
+        1.0 / (1.0 + d)
+    } else {
+        let raw = -distance;
+        (1.0 + raw) / 2.0
+    };
+    score.clamp(0.0, 1.0)
 }
 
 /// L2-normalize a vector. Returns the original if norm is zero.
@@ -451,7 +533,6 @@ mod tests {
         let dim = 64;
         let n = 8;
 
-        // Deterministic pseudo-random vectors using a simple LCG
         let mut seed: u64 = 42;
         let mut next = || -> f32 {
             seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
@@ -474,20 +555,18 @@ mod tests {
             .enumerate()
             .map(|(i, v)| {
                 let dot: f32 = v.iter().zip(query.iter()).map(|(a, b)| a * b).sum();
-                let score = (1.0 + dot) / 2.0; // Atlas: (1 + cosine) / 2
+                let score = (1.0 + dot) / 2.0;
                 (i, score)
             })
             .collect();
         brute.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
-        // HNSW ranking via VectorIndex
         let mut idx = VectorIndex::new(dim, "cosine");
         for (i, v) in vecs.iter().enumerate() {
             idx.insert(&i.to_string(), v);
         }
         let hnsw_results = idx.search(&query, n);
 
-        // All scores must be in [0, 1] (Atlas normalization)
         for (_, score) in &hnsw_results {
             assert!(
                 (0.0..=1.0).contains(score),
@@ -495,7 +574,6 @@ mod tests {
             );
         }
 
-        // The top-k ranking must match brute-force exactly
         for k in 0..n {
             let brute_id = brute[k].0.to_string();
             let hnsw_id = &hnsw_results[k].0;
@@ -510,40 +588,137 @@ mod tests {
     /// Verify Atlas-style score ranges for all three metrics.
     #[test]
     fn test_atlas_score_ranges() {
-        // cosine: identical vectors → score = 1.0
+        // cosine: identical vectors -> score = 1.0
         let mut cos_idx = VectorIndex::new(3, "cosine");
         cos_idx.insert("a", &[1.0, 0.0, 0.0]);
         let r = cos_idx.search(&[1.0, 0.0, 0.0], 1);
         assert!((r[0].1 - 1.0).abs() < 1e-5, "cosine self-sim should be 1.0, got {}", r[0].1);
 
-        // cosine: orthogonal vectors → score = 0.5
+        // cosine: orthogonal vectors -> score = 0.5
         cos_idx.insert("b", &[0.0, 1.0, 0.0]);
         let r = cos_idx.search(&[1.0, 0.0, 0.0], 2);
         let orth_score = r.iter().find(|(id, _)| id == "b").unwrap().1;
         assert!((orth_score - 0.5).abs() < 1e-5, "cosine orthogonal should be 0.5, got {orth_score}");
 
-        // euclidean: identical → score = 1.0
+        // euclidean: identical -> score = 1.0
         let mut euc_idx = VectorIndex::new(2, "euclidean");
         euc_idx.insert("a", &[0.0, 0.0]);
         let r = euc_idx.search(&[0.0, 0.0], 1);
         assert!((r[0].1 - 1.0).abs() < 1e-5, "euclidean self-dist should be 1.0, got {}", r[0].1);
 
-        // euclidean: distance=1 → score = 0.5
+        // euclidean: distance=1 -> score = 0.5
         euc_idx.insert("b", &[1.0, 0.0]);
         let r = euc_idx.search(&[0.0, 0.0], 2);
         let dist1_score = r.iter().find(|(id, _)| id == "b").unwrap().1;
         assert!((dist1_score - 0.5).abs() < 1e-5, "euclidean dist=1 should be 0.5, got {dist1_score}");
 
-        // dotProduct: unit vectors, dot=1 → score = 1.0
+        // dotProduct: unit vectors, dot=1 -> score = 1.0
         let mut dp_idx = VectorIndex::new(3, "dotProduct");
         dp_idx.insert("a", &[1.0, 0.0, 0.0]);
         let r = dp_idx.search(&[1.0, 0.0, 0.0], 1);
         assert!((r[0].1 - 1.0).abs() < 1e-5, "dotProduct self should be 1.0, got {}", r[0].1);
 
-        // dotProduct: orthogonal → score = 0.5
+        // dotProduct: orthogonal -> score = 0.5
         dp_idx.insert("b", &[0.0, 1.0, 0.0]);
         let r = dp_idx.search(&[1.0, 0.0, 0.0], 2);
         let orth_score = r.iter().find(|(id, _)| id == "b").unwrap().1;
         assert!((orth_score - 0.5).abs() < 1e-5, "dotProduct orthogonal should be 0.5, got {orth_score}");
+    }
+
+    // -----------------------------------------------------------------------
+    // search_exact (flat index) tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_search_exact_cosine() {
+        let mut idx = VectorIndex::new(3, "cosine");
+        idx.insert("a", &[1.0, 0.0, 0.0]);
+        idx.insert("b", &[0.0, 1.0, 0.0]);
+        idx.insert("c", &[0.9, 0.1, 0.0]);
+
+        let results = idx.search_exact(&[1.0, 0.0, 0.0], 2);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, "a");
+        assert!((results[0].1 - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_search_exact_euclidean() {
+        let mut idx = VectorIndex::new(2, "euclidean");
+        idx.insert("a", &[0.0, 0.0]);
+        idx.insert("b", &[1.0, 0.0]);
+        idx.insert("c", &[3.0, 4.0]);
+
+        let results = idx.search_exact(&[0.0, 0.0], 2);
+        assert_eq!(results[0].0, "a");
+        assert!((results[0].1 - 1.0).abs() < 1e-5);
+        assert_eq!(results[1].0, "b");
+        assert!((results[1].1 - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_search_exact_dot_product() {
+        let mut idx = VectorIndex::new(3, "dotProduct");
+        idx.insert("a", &[1.0, 0.0, 0.0]);
+        idx.insert("b", &[0.0, 1.0, 0.0]);
+
+        let results = idx.search_exact(&[1.0, 0.0, 0.0], 2);
+        assert_eq!(results[0].0, "a");
+        assert!((results[0].1 - 1.0).abs() < 1e-5);
+        assert!((results[1].1 - 0.5).abs() < 1e-5);
+    }
+
+    /// search_exact matches search (HNSW) for small datasets.
+    #[test]
+    fn test_search_exact_matches_hnsw() {
+        let dim = 32;
+        let n = 20;
+
+        let mut seed: u64 = 1337;
+        let mut next = || -> f32 {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            ((seed >> 33) as f32) / (u32::MAX as f32 / 2.0) - 1.0
+        };
+
+        let vecs: Vec<Vec<f32>> = (0..n).map(|_| (0..dim).map(|_| next()).collect()).collect();
+        let query: Vec<f32> = (0..dim).map(|_| next()).collect();
+
+        let mut idx = VectorIndex::new(dim, "cosine");
+        for (i, v) in vecs.iter().enumerate() {
+            idx.insert(&i.to_string(), v);
+        }
+
+        let exact_results = idx.search_exact(&query, 5);
+        let hnsw_results = idx.search(&query, 5);
+
+        assert_eq!(hnsw_results.len(), exact_results.len());
+        for (h, e) in hnsw_results.iter().zip(exact_results.iter()) {
+            assert_eq!(h.0, e.0, "ranking mismatch");
+            assert!((h.1 - e.1).abs() < 1e-4, "score mismatch: {} vs {}", h.1, e.1);
+        }
+    }
+
+    /// search_exact scores are in [0, 1] for all metrics.
+    #[test]
+    fn test_search_exact_atlas_score_ranges() {
+        for metric in &["cosine", "euclidean", "dotProduct"] {
+            let mut idx = VectorIndex::new(3, metric);
+            idx.insert("a", &[1.0, 0.0, 0.0]);
+            idx.insert("b", &[-1.0, 0.0, 0.0]);
+            idx.insert("c", &[0.0, 1.0, 0.0]);
+
+            let results = idx.search_exact(&[1.0, 0.0, 0.0], 3);
+            for (id, score) in &results {
+                assert!(
+                    (0.0..=1.0).contains(score),
+                    "{metric}: {id} score {score} outside [0, 1]"
+                );
+            }
+            assert!(
+                (results[0].1 - 1.0).abs() < 1e-4,
+                "{metric}: self-similarity should be ~1.0, got {}",
+                results[0].1
+            );
+        }
     }
 }

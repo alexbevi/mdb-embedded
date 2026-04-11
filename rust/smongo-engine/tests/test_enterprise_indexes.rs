@@ -522,6 +522,7 @@ fn test_explain_covers_all_plan_types() {
             metric: "cosine".into(),
             ef_construction: None,
             m: None,
+            indexing_method: "hnsw".into(),
         },
         ExecutionPlan::BitmapScan {
             index_name: "x".into(),

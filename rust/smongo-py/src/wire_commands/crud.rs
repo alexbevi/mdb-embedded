@@ -658,18 +658,28 @@ fn cmd_distinct(
     let docs =
         RedbLocalCollection::find_streaming_typed(coll_py.clone_ref(py), py, Some(&raw_query))?;
 
-    let seen = PyList::empty(py);
+    let seen_set = pyo3::types::PySet::empty(py)?;
+    let values = PyList::empty(py);
     let iter = docs.bind(py).try_iter()?;
     for item in iter {
         let doc = item?;
         let v = crate::paths::get_value(&doc, &key)?;
-        if !seen.contains(v.bind(py))? {
-            seen.append(v)?;
+        let v_bound = v.bind(py);
+        // Unhashable types (dicts, lists) fall back to linear contains
+        match seen_set.add(v_bound) {
+            Ok(()) => {
+                values.append(v_bound)?;
+            }
+            Err(_) => {
+                if !values.contains(v_bound)? {
+                    values.append(v_bound)?;
+                }
+            }
         }
     }
 
     let resp = PyDict::new(py);
-    resp.set_item("values", seen)?;
+    resp.set_item("values", values)?;
     resp.set_item("ok", 1.0)?;
     Ok(resp.into_any().unbind())
 }

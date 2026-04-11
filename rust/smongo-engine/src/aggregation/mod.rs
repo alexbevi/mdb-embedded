@@ -66,7 +66,7 @@ pub trait CollectionResolver {
 /// `$geoNear`, `$sort`+`$limit`, and `$text`-inside-`$match` can check
 /// for a matching index and use it instead of a full collection scan.  Each
 /// method returns `Ok(None)` when no suitable index exists, signalling the
-/// caller to fall back to the default path (HNSW for vectors, scan for others).
+/// caller to fall back to the default streaming path.
 #[allow(clippy::too_many_arguments)]
 pub trait IndexProvider {
     fn vector_search(
@@ -78,6 +78,7 @@ pub trait IndexProvider {
         num_candidates: usize,
         metric: &str,
         filter: Option<&Document>,
+        exact: bool,
     ) -> AggregationResult<Option<Vec<(Document, f32)>>>;
 
     fn geo_near_indexed(
@@ -215,9 +216,10 @@ impl<B: StorageBackend> IndexProvider for DatabaseContext<'_, B> {
         field: &str,
         query_vec: &[f32],
         limit: usize,
-        _num_candidates: usize,
+        num_candidates: usize,
         metric: &str,
         filter: Option<&Document>,
+        exact: bool,
     ) -> AggregationResult<Option<Vec<(Document, f32)>>> {
         let coll = self
             .db
@@ -227,17 +229,34 @@ impl<B: StorageBackend> IndexProvider for DatabaseContext<'_, B> {
         let indexes = coll
             .list_indexes()
             .map_err(|e| AggregationError::Other(e.to_string()))?;
-        let has_vector_index = indexes.iter().any(|idx| {
+
+        let vec_idx = indexes.iter().find(|idx| {
             matches!(
                 idx.options.index_type,
                 Some(crate::index::IndexType::VectorSearch)
             )
         });
-        if !has_vector_index {
-            return Ok(None);
-        }
+        let vec_idx = match vec_idx {
+            Some(idx) => idx,
+            None => return Ok(None),
+        };
 
-        // Fetch candidate documents (with optional MQL pre-filter)
+        let vopts = vec_idx.options.vector_options.as_ref();
+
+        // Determine whether to use flat scan: explicit `exact: true` in the
+        // query, or the index was created with `indexingMethod: "flat"`.
+        let use_flat = exact
+            || vopts
+                .map(|v| v.indexing_method == "flat")
+                .unwrap_or(false);
+
+        // Atlas resolves the similarity metric from the index definition, not
+        // the query.  If the query supplied a metric we honour it, but when
+        // the default ("cosine") was used we prefer the index's metric.
+        let resolved_metric = vopts
+            .map(|v| v.metric.as_str())
+            .unwrap_or(metric);
+
         let candidates = match filter {
             Some(f) => coll
                 .find(f.clone())
@@ -247,8 +266,15 @@ impl<B: StorageBackend> IndexProvider for DatabaseContext<'_, B> {
                 .map_err(|e| AggregationError::Other(e.to_string()))?,
         };
 
-        let scored = vector::score_documents(&candidates, field, query_vec, limit, metric)?;
-        Ok(Some(scored))
+        let effective_limit = num_candidates.max(limit);
+        let scored =
+            vector::score_documents(&candidates, field, query_vec, effective_limit, resolved_metric, use_flat)?;
+        let trimmed = if scored.len() > limit {
+            scored.into_iter().take(limit).collect()
+        } else {
+            scored
+        };
+        Ok(Some(trimmed))
     }
 
     fn geo_near_indexed(

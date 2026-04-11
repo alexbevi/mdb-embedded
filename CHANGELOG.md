@@ -7,6 +7,95 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [1.1.4] — 2026-04-10
+
+### Added
+
+- **`createSearchIndex` / `createSearchIndexes` wire commands**: LangChain and
+  PyMongo's `Collection.create_search_index()` now work out of the box.  Atlas-style
+  `definition.fields` array is translated to smongo's internal index format.
+- **`listSearchIndexes`** command and `$listSearchIndexes` aggregate stage, returning
+  `queryable: true` and `latestDefinition` so LangChain's index polling succeeds.
+- **Metric resolution from index definition**: `$vectorSearch` no longer requires
+  `metric`/`similarity` in the query — the metric is resolved from the vector index
+  definition, matching Atlas behavior exactly.
+- 2 new LangChain-exact pipeline tests (`test_langchain_exact_pipeline_no_metric`,
+  `test_langchain_dotproduct_pipeline`).
+
+### Changed — Performance Optimizations
+
+- **`$regex`**: thread-local compiled regex cache — each pattern compiles once per
+  thread instead of per document.
+- **OPFS `search()`**: O(log n) binary search on sorted entries instead of O(n) linear
+  scan.
+- **`$lookup` pipeline**: when no `let` variables, the sub-pipeline result is computed
+  once and reused instead of re-running per outer row.
+- **`$setWindowFields`**: `$sum`/`$avg`/`$min`/`$max`/`$count` computed inline over
+  partition indices — eliminates O(partition_size) full-document clones per output field.
+- **`$graphLookup`**: hash-indexed `connectToField` for O(1) BFS expansion instead of
+  O(|foreign|) linear scan; canonical BSON keys replace fragile `Debug` formatting for
+  visited set.
+- **`$all`**: `HashSet<Vec<u8>>` canonical key membership instead of O(p×q) nested loops.
+- **`$bucket`**: `partition_point()` binary search for O(log b) bucket placement.
+- **`$map` / `$filter`**: variable substitution (`replace_var_refs`) precomputed once
+  outside the per-element loop.
+- **`cmd_distinct`**: Python `set` for O(1) dedup instead of O(n²) `list.contains`.
+- **OPFS `serialize_file`**: pre-allocated output buffer.
+
+### Changed — Examples & Docs
+
+- All AI examples (`01`, `03`, `05`) updated to create vector search indexes before
+  querying, use Atlas-compatible `{$meta: "vectorSearchScore"}` pipeline, and display
+  real similarity scores.
+- Example 05 now shows scored retrieval results with visual bars alongside RAG answers.
+
+## [1.1.3] — 2026-04-10
+
+### Added
+
+- **Multi-tenant vector search architecture**, matching
+  [Atlas multi-tenant guidance](https://www.mongodb.com/docs/atlas/atlas-vector-search/multi-tenant-architecture/).
+  Single collection with `tenant_id` pre-filter, `exact: true`, and `indexingMethod: "flat"`.
+- **Flat (exact) index type** for `$vectorSearch`.  Set `indexingMethod: "flat"` in
+  the index definition or `"exact": true` in the query to use exhaustive brute-force
+  search — optimal for multi-tenant workloads where each tenant has < 10K vectors.
+- `VectorIndexOptions` accepts Atlas-native field names: `numDimensions`, `similarity`,
+  `indexingMethod`.
+- `VectorSearchSpec` parses the `exact` flag from `$vectorSearch` stage documents.
+- `IndexProvider::vector_search` reads the index's `indexingMethod` to auto-route
+  flat vs HNSW, even without `exact: true`.
+- 11 new tests for multi-tenant pre-filtering, flat scan, score normalization, and
+  HNSW-vs-exact equivalence.
+
+### Changed
+
+- `search_exact` reuses cached prepared vectors (`graph_vectors`) instead of
+  re-normalizing per query — eliminates O(n × d) allocation per call for cosine.
+- Extracted `atlas_score` helper to DRY up score normalization between HNSW and flat paths.
+- Extracted `ensure_prepared_vectors` to share vector preparation between `rebuild_hnsw`
+  and `search_exact`.
+- Updated README, CHANGELOG, and all engine-level doc comments to reflect HNSW + flat
+  dual-path architecture and multi-tenant support.
+
+## [1.1.2] — 2026-04-10
+
+### Added
+
+- **Vendored HNSW implementation** (`hnsw.rs`): replaces unmaintained `hora` crate
+  with a zero-dependency, in-tree Hierarchical Navigable Small Worlds graph.
+- Diversified neighbor selection (Algorithm 4 from the Malkov paper) for better recall.
+- Generation-counter `VisitedSet` for O(1) resets (no per-search allocation).
+- SIMD-friendly distance functions (`chunks_exact(4)`, four accumulators).
+- Pre-allocated `BinaryHeap`s in the HNSW search hot loop.
+- `numCandidates` parameter now actively used in `IndexProvider::vector_search`.
+- 5 HNSW-specific benchmarks in `engine_bench.rs`.
+
+### Changed
+
+- Atlas-compatible score normalization clamped to `[0, 1]` for all metrics.
+- Pre-sized serialization buffer in `VectorIndex::to_bytes`.
+- Removed `hora` dependency from `Cargo.toml`.
+
 ## [1.0.0] — 2026-04-09
 
 ### Added

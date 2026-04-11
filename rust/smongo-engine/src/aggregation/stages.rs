@@ -494,16 +494,13 @@ pub fn stage_bucket(docs: Vec<Document>, spec: &Bson) -> AggregationResult<Vec<D
         let val = evaluate_expression(&doc, group_by)?;
         match bson_to_f64(&val) {
             Some(n) => {
-                let mut placed = false;
-                for i in 0..boundary_vals.len() - 1 {
-                    if n >= boundary_vals[i] && n < boundary_vals[i + 1] {
-                        let key = format!("{}", boundary_vals[i]);
-                        buckets.entry(key).or_default().push(doc.clone());
-                        placed = true;
-                        break;
-                    }
-                }
-                if !placed && default_bucket.is_some() {
+                // Binary search for the bucket: find the rightmost boundary
+                // <= n, then check it falls before the next boundary.
+                let idx = boundary_vals.partition_point(|&b| b <= n);
+                if idx > 0 && idx < boundary_vals.len() {
+                    let key = format!("{}", boundary_vals[idx - 1]);
+                    buckets.entry(key).or_default().push(doc.clone());
+                } else if default_bucket.is_some() {
                     default_docs.push(doc.clone());
                 }
             }
@@ -704,15 +701,31 @@ fn stage_lookup_pipeline(
 
     let foreign_docs = resolver.resolve(from, None)?;
 
+    // When there are no `let` variables, every row runs the same sub-pipeline
+    // on the same foreign data — cache the result instead of re-running.
+    let static_result: Option<Vec<Bson>> = if let_vars.is_none() {
+        let matched =
+            super::aggregate_with_resolver(foreign_docs.clone(), &sub_pipeline, Some(resolver))?;
+        Some(matched.into_iter().map(Bson::Document).collect())
+    } else {
+        None
+    };
+
     let mut results = Vec::with_capacity(docs.len());
     for doc in docs {
-        let resolved_pipeline = if let Some(vars) = let_vars {
+        let matched_bson = if let Some(ref cached) = static_result {
+            cached.clone()
+        } else {
+            // `let_vars` is guaranteed `Some` here because `static_result`
+            // is only `Some` when `let_vars.is_none()`.
+            #[allow(clippy::unwrap_used)]
+            let vars = let_vars.unwrap();
             let mut bound = Vec::new();
             for (var_name, var_expr) in vars {
                 let val = evaluate_expression(&doc, var_expr)?;
                 bound.push((var_name.clone(), val));
             }
-            sub_pipeline
+            let resolved_pipeline: Vec<Document> = sub_pipeline
                 .iter()
                 .map(|stage| {
                     let mut s = Bson::Document(stage.clone());
@@ -721,14 +734,15 @@ fn stage_lookup_pipeline(
                     }
                     s.as_document().cloned().unwrap_or_default()
                 })
-                .collect()
-        } else {
-            sub_pipeline.clone()
-        };
+                .collect();
 
-        let matched =
-            super::aggregate_with_resolver(foreign_docs.clone(), &resolved_pipeline, Some(resolver))?;
-        let matched_bson: Vec<Bson> = matched.into_iter().map(Bson::Document).collect();
+            let matched = super::aggregate_with_resolver(
+                foreign_docs.clone(),
+                &resolved_pipeline,
+                Some(resolver),
+            )?;
+            matched.into_iter().map(Bson::Document).collect()
+        };
 
         let mut new_doc = doc;
         new_doc.insert(as_field.to_string(), Bson::Array(matched_bson));
@@ -812,14 +826,37 @@ pub fn stage_graph_lookup(
             other => vec![other],
         };
 
-        let mut visited = std::collections::HashSet::new();
+        let mut visited: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
         let mut queue: std::collections::VecDeque<(Bson, i64)> = std::collections::VecDeque::new();
         let mut found = Vec::new();
 
         for sv in start_vals {
-            let key = format!("{:?}", sv);
+            let key = canonical_bson_key(Some(&sv));
             if visited.insert(key) {
                 queue.push_back((sv, 0));
+            }
+        }
+
+        // Index foreign docs by connectToField for O(1) lookup per BFS step
+        // instead of O(|foreign_docs|) linear scan.
+        let mut connect_to_index: HashMap<Vec<u8>, Vec<usize>> = HashMap::new();
+        for (i, fdoc) in foreign_docs.iter().enumerate() {
+            match get_value(fdoc, connect_to) {
+                Some(Bson::Array(arr)) => {
+                    for item in arr {
+                        connect_to_index
+                            .entry(canonical_bson_key(Some(item)))
+                            .or_default()
+                            .push(i);
+                    }
+                }
+                Some(v) => {
+                    connect_to_index
+                        .entry(canonical_bson_key(Some(v)))
+                        .or_default()
+                        .push(i);
+                }
+                None => {}
             }
         }
 
@@ -830,17 +867,14 @@ pub fn stage_graph_lookup(
                 }
             }
 
-            for fdoc in &foreign_docs {
-                let to_val = get_value(fdoc, connect_to);
-                let matches = match to_val {
-                    Some(Bson::Array(arr)) => arr.contains(&current_val),
-                    Some(v) => v == &current_val,
-                    None => false,
-                };
+            let key = canonical_bson_key(Some(&current_val));
+            let candidates = match connect_to_index.get(&key) {
+                Some(idxs) => idxs.as_slice(),
+                None => continue,
+            };
 
-                if !matches {
-                    continue;
-                }
+            for &fi in candidates {
+                let fdoc = &foreign_docs[fi];
 
                 if let Some(restrict_filter) = restrict {
                     if !eval_query(fdoc, restrict_filter).unwrap_or(false) {
@@ -848,7 +882,8 @@ pub fn stage_graph_lookup(
                     }
                 }
 
-                let fdoc_key = format!("{:?}", fdoc);
+                // Use canonical BSON key for visited set instead of Debug
+                let fdoc_key = canonical_bson_key(Some(&Bson::Document(fdoc.clone())));
                 if !visited.insert(fdoc_key) {
                     continue;
                 }
@@ -857,13 +892,13 @@ pub fn stage_graph_lookup(
                 if let Some(df) = depth_field {
                     found_doc.insert(df.to_string(), Bson::Int64(depth));
                 }
-                found.push(found_doc.clone());
+                found.push(found_doc);
 
                 let next_vals = get_value(fdoc, connect_from).cloned();
                 match next_vals {
                     Some(Bson::Array(arr)) => {
                         for nv in arr {
-                            let nk = format!("{:?}", nv);
+                            let nk = canonical_bson_key(Some(&nv));
                             if visited.contains(&nk) {
                                 continue;
                             }
@@ -871,7 +906,7 @@ pub fn stage_graph_lookup(
                         }
                     }
                     Some(v) => {
-                        let nk = format!("{:?}", v);
+                        let nk = canonical_bson_key(Some(&v));
                         if !visited.contains(&nk) {
                             queue.push_back((v, depth + 1));
                         }
@@ -1015,11 +1050,46 @@ pub fn stage_set_window_fields(
                         sorted_docs[idx].insert(field.clone(), Bson::Int32(current_rank));
                     }
                 }
-                "$sum" | "$avg" | "$min" | "$max" | "$count" => {
-                    let partition_docs: Vec<Document> =
-                        partition.iter().map(|&i| sorted_docs[i].clone()).collect();
-                    let acc = bson::doc! { op.clone(): op_expr.clone() };
-                    let val = evaluate_accumulator(&partition_docs, &Bson::Document(acc))?;
+                "$count" => {
+                    let val = Bson::Int32(partition.len() as i32);
+                    for &idx in partition {
+                        sorted_docs[idx].insert(field.clone(), val.clone());
+                    }
+                }
+                "$sum" | "$avg" | "$min" | "$max" => {
+                    // Compute directly over partition indices, avoiding the
+                    // previous O(partition_size) full-document clone.
+                    let mut sum = 0.0f64;
+                    let mut count = 0usize;
+                    let mut min_val: Option<Bson> = None;
+                    let mut max_val: Option<Bson> = None;
+                    for &idx in partition {
+                        let v = evaluate_expression(&sorted_docs[idx], op_expr)?;
+                        if let Some(n) = bson_to_f64(&v) {
+                            sum += n;
+                            count += 1;
+                            min_val = Some(match min_val {
+                                Some(prev) => {
+                                    if n < bson_to_f64(&prev).unwrap_or(f64::INFINITY) { v.clone() } else { prev }
+                                }
+                                None => v.clone(),
+                            });
+                            max_val = Some(match max_val {
+                                Some(prev) => {
+                                    if n > bson_to_f64(&prev).unwrap_or(f64::NEG_INFINITY) { v.clone() } else { prev }
+                                }
+                                None => v.clone(),
+                            });
+                        }
+                    }
+                    let val = match op.as_str() {
+                        "$sum" => Bson::Double(sum),
+                        "$avg" if count > 0 => Bson::Double(sum / count as f64),
+                        "$avg" => Bson::Null,
+                        "$min" => min_val.unwrap_or(Bson::Null),
+                        "$max" => max_val.unwrap_or(Bson::Null),
+                        _ => unreachable!(),
+                    };
                     for &idx in partition {
                         sorted_docs[idx].insert(field.clone(), val.clone());
                     }
@@ -1599,11 +1669,15 @@ pub fn execute_merge(
 // ---------------------------------------------------------------------------
 
 /// Streaming `$vectorSearch`: materializes candidates from the input stream,
-/// builds an HNSW index via [`super::vector::score_documents`], and returns
-/// the top-k results ranked by similarity.
+/// scores them via [`super::vector::score_documents`] (HNSW or flat scan),
+/// and returns the top-k results ranked by similarity.
 ///
 /// Accepts all Atlas `$vectorSearch` fields (`index`, `exact`,
 /// `numCandidates`, `filter`, `path`, `queryVector`, `limit`).
+///
+/// When `exact: true`, performs exhaustive brute-force search — optimal for
+/// multi-tenant workloads where each tenant has < 10K vectors after
+/// pre-filtering by `tenant_id`.
 pub fn stage_vector_search_stream(input: DocStream, spec: &Bson) -> AggregationResult<DocStream> {
     let vs_doc = spec
         .as_document()
@@ -1624,7 +1698,7 @@ pub fn stage_vector_search_stream(input: DocStream, spec: &Bson) -> AggregationR
     }
 
     let scored =
-        super::vector::score_documents(&candidates, s.path, &s.query_vec, s.limit, s.metric)?;
+        super::vector::score_documents(&candidates, s.path, &s.query_vec, s.limit, s.metric, s.exact)?;
 
     let results: Vec<Document> = scored
         .into_iter()
@@ -1637,8 +1711,9 @@ pub fn stage_vector_search_stream(input: DocStream, spec: &Bson) -> AggregationR
     Ok(Box::new(results.into_iter().map(Ok)))
 }
 
-/// Index-aware `$vectorSearch`: tries the `IndexProvider` first (which uses
-/// hora HNSW), then falls back to the streaming HNSW path.
+/// Index-aware `$vectorSearch`: tries the `IndexProvider` first (vendored
+/// HNSW or flat scan depending on index type / `exact` flag), then falls
+/// back to the streaming path.
 pub fn stage_vector_search_stream_indexed(
     input: DocStream,
     spec: &Bson,
@@ -1655,6 +1730,7 @@ pub fn stage_vector_search_stream_indexed(
                     s.num_candidates,
                     s.metric,
                     s.mql_filter,
+                    s.exact,
                 ) {
                     let results: Vec<Document> = scored
                         .into_iter()
