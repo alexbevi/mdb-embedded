@@ -7,6 +7,24 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [1.1.5] — 2026-04-10
+
+### Changed — Examples
+
+- **Example 02 (chat memory)**: Complete rewrite with multi-session conversations,
+  token tracking, cross-session regex search, aggregation analytics (messages per
+  role/session, average tokens per message), context-window assembly, and LLM prompt
+  construction.  Indexes for session lookup, TTL expiry, and unique sessions.
+- **Example 03 (LangChain RAG)**: Complete rewrite showing scored similarity search
+  with visual bars, metadata-filtered search (`pre_filter`), `add_documents` via
+  LangChain (manages inserts + embeddings), retriever integration, and full RAG prompt
+  assembly — all using the official `MongoDBAtlasVectorSearch` class.
+- **Example 06 (Compass demo)**: Added vector search index creation on the knowledge
+  base, updated descriptions to mention vendored HNSW instead of NumPy, and added
+  self-demo queries (find+sort, aggregation, `$lookup`, `$vectorSearch` with
+  `{$meta: "vectorSearchScore"}`, and `$facet`) that run automatically before the
+  server enters interactive mode.
+
 ## [1.1.4] — 2026-04-10
 
 ### Added
