@@ -6,7 +6,7 @@
 //! (storage layer, tests) that still need them.
 use bson::oid::ObjectId as BsonOid;
 use bson::spec::BinarySubtype;
-use bson::{doc, Bson, Document};
+use bson::{Bson, Document};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString};
 
@@ -58,7 +58,73 @@ pub(crate) fn py_to_bson(val: &Bound<'_, PyAny>) -> PyResult<Bson> {
     }
 
     if let Ok(s) = val.cast::<PyString>() {
-        return Ok(Bson::String(s.to_str()?.to_owned()));
+        let s_str = s.to_str()?;
+        // MinKey/MaxKey sentinel strings
+        if s_str == "$MinKey" {
+            return Ok(Bson::MinKey);
+        }
+        if s_str == "$MaxKey" {
+            return Ok(Bson::MaxKey);
+        }
+        return Ok(Bson::String(s_str.to_owned()));
+    }
+
+    // smongo.ObjectId (our Rust-backed ObjectId)
+    if let Ok(oid) = val.extract::<PyRef<'_, RustObjectId>>() {
+        let raw = oid.raw_bytes();
+        return Ok(Bson::ObjectId(BsonOid::from_bytes(raw)));
+    }
+
+    // bson.Decimal128 → lossless via .bid raw bytes
+    if let Ok(d128_cls) = crate::cached_modules::bson_decimal128_cls(py) {
+        if val.is_instance(&d128_cls)? {
+            let bid = val.getattr("bid")?;
+            let raw: Vec<u8> = bid.extract()?;
+            if raw.len() == 16 {
+                let mut bytes = [0u8; 16];
+                bytes.copy_from_slice(&raw);
+                return Ok(Bson::Decimal128(bson::Decimal128::from_bytes(bytes)));
+            }
+        }
+    }
+
+    // bson.Regex → BSON RegularExpression
+    if let Ok(regex_cls) = crate::cached_modules::bson_regex_cls(py) {
+        if val.is_instance(&regex_cls)? {
+            let pattern: String = val.getattr("pattern")?.extract()?;
+            let flags: String = val
+                .getattr("flags")?
+                .extract::<String>()
+                .unwrap_or_default();
+            return Ok(Bson::RegularExpression(bson::Regex {
+                pattern,
+                options: flags,
+            }));
+        }
+    }
+
+    // uuid.UUID → BSON Binary subtype 4
+    if let Ok(uuid_cls) = crate::cached_modules::uuid_uuid_cls(py) {
+        if val.is_instance(&uuid_cls)? {
+            let uuid_bytes: Vec<u8> = val.getattr("bytes")?.extract()?;
+            return Ok(Bson::Binary(bson::Binary {
+                subtype: BinarySubtype::Uuid,
+                bytes: uuid_bytes,
+            }));
+        }
+    }
+
+    // bson.Binary before plain bytes (Binary subclasses bytes, needs subtype preserved)
+    if let Ok(bin_cls) = crate::cached_modules::bson_binary_cls(py) {
+        if val.is_instance(&bin_cls)? {
+            let bytes: Vec<u8> = val.extract()?;
+            let subtype_int: u8 = val.getattr("subtype")?.extract()?;
+            let subtype = BinarySubtype::from(subtype_int);
+            return Ok(Bson::Binary(bson::Binary {
+                subtype,
+                bytes,
+            }));
+        }
     }
 
     if let Ok(b) = val.cast::<PyBytes>() {
@@ -68,10 +134,28 @@ pub(crate) fn py_to_bson(val: &Bound<'_, PyAny>) -> PyResult<Bson> {
         }));
     }
 
-    // smongo.ObjectId (our Rust-backed ObjectId)
-    if let Ok(oid) = val.extract::<PyRef<'_, RustObjectId>>() {
-        let raw = oid.raw_bytes();
-        return Ok(Bson::ObjectId(BsonOid::from_bytes(raw)));
+    // re.Pattern (compiled regex) → BSON RegularExpression
+    let type_name = val.get_type().qualname()?.to_string();
+    if type_name == "Pattern" {
+        let pattern: String = val.getattr("pattern")?.extract()?;
+        let flags_int: u32 = val.getattr("flags")?.extract()?;
+        let mut opts = String::new();
+        if flags_int & 2 != 0 {
+            opts.push('i');
+        }
+        if flags_int & 8 != 0 {
+            opts.push('m');
+        }
+        if flags_int & 16 != 0 {
+            opts.push('s');
+        }
+        if flags_int & 64 != 0 {
+            opts.push('x');
+        }
+        return Ok(Bson::RegularExpression(bson::Regex {
+            pattern,
+            options: opts,
+        }));
     }
 
     if let Ok(d) = val.cast::<PyDict>() {
@@ -100,7 +184,6 @@ pub(crate) fn py_to_bson(val: &Bound<'_, PyAny>) -> PyResult<Bson> {
     }
 
     // PyMongo bson.ObjectId — extract via str() -> hex -> BsonOid
-    let type_name = val.get_type().qualname()?.to_string();
     if type_name == "ObjectId" {
         let hex_str: String = val.str()?.extract()?;
         if hex_str.len() == 24 {
@@ -110,7 +193,14 @@ pub(crate) fn py_to_bson(val: &Bound<'_, PyAny>) -> PyResult<Bson> {
         }
     }
 
-    // Fallback: str(v)
+    // Fallback: str(v) with warning
+    let warnings = py.import("warnings")?;
+    let msg = format!(
+        "smongo BSON encoder (storage): unknown type '{}', encoding as string",
+        type_name
+    );
+    warnings.call_method1("warn", (msg,))?;
+
     let s: String = val.str()?.extract()?;
     Ok(Bson::String(s))
 }

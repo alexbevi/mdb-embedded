@@ -47,7 +47,7 @@ from .storage import DeleteResult, InsertResult, StreamingCursor, UpdateResult
 from .sync import SyncManager
 from .wire import WireServer
 
-__version__ = "1.1.5"
+__version__ = "1.1.6"
 
 try:
     from ._smongo_core import __build_version__ as _native_version

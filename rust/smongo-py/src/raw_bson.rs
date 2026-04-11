@@ -2,8 +2,8 @@
 //!
 //! Converts directly between raw BSON bytes and engine-ready Python dicts
 //! without intermediate `bson::Document` allocation.  The decoder produces
-//! engine types inline (smongo `ObjectId`, Python `datetime`, `float` for
-//! Decimal128, regex dict, etc.) so the wire path no longer needs a second
+//! engine types inline (smongo `ObjectId`, Python `datetime`, `bson.Binary`
+//! with subtype, regex dict, etc.) so the wire path no longer needs a second
 //! `normalize_inbound` walk.
 
 use pyo3::exceptions::PyValueError;
@@ -36,6 +36,23 @@ const BSON_INT64: u8 = 0x12;
 const BSON_DECIMAL128: u8 = 0x13;
 const BSON_MAX_KEY: u8 = 0x7F;
 const BSON_MIN_KEY: u8 = 0xFF;
+
+// ---------------------------------------------------------------------------
+// Array index string cache: avoid allocating "0", "1", ... per element.
+// ---------------------------------------------------------------------------
+
+const IDX_CACHE_SIZE: usize = 1000;
+
+/// Pre-computed string representations of 0..999.
+fn cached_idx_str(i: usize) -> String {
+    static CACHE: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| (0..IDX_CACHE_SIZE).map(|n| n.to_string()).collect());
+    if i < IDX_CACHE_SIZE {
+        cache[i].clone()
+    } else {
+        i.to_string()
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Little-endian read helpers
@@ -132,7 +149,8 @@ fn read_cstring<'a>(data: &'a [u8], offset: &mut usize) -> PyResult<&'a str> {
 /// `*offset` past the entire document (including the trailing `0x00`).
 /// All BSON types are converted to engine types inline:
 ///   ObjectId → `smongo.ObjectId`, DateTime → Python datetime,
-///   Decimal128 → float, Regex → `{$regex, $options}` dict, etc.
+///   Decimal128 → `bson.Decimal128`, Binary → `bson.Binary` (with subtype),
+///   Regex → `{$regex, $options}` dict, etc.
 pub(crate) fn raw_decode_document<'py>(
     py: Python<'py>,
     data: &[u8],
@@ -263,11 +281,28 @@ fn decode_value<'py>(
             ensure(data, *offset, 5)?;
             let bin_len = read_i32_le(data, *offset) as usize;
             *offset += 4;
-            let _subtype = data[*offset];
+            let subtype = data[*offset];
             *offset += 1;
             ensure(data, *offset, bin_len)?;
             let bytes = &data[*offset..*offset + bin_len];
             *offset += bin_len;
+
+            if subtype == 0x00 {
+                return Ok(PyBytes::new(py, bytes).into_any());
+            }
+            // subtype 4 = UUID — construct via keyword arg (first positional is hex, not bytes)
+            if subtype == 0x04 && bin_len == 16 {
+                let uuid_cls = crate::cached_modules::uuid_uuid_cls(py)?;
+                let py_bytes = PyBytes::new(py, bytes);
+                let kwargs = PyDict::new(py);
+                kwargs.set_item("bytes", py_bytes)?;
+                return Ok(uuid_cls.call((), Some(&kwargs))?.into_any());
+            }
+            // Non-zero subtype: return bson.Binary to preserve the subtype
+            if let Ok(bin_cls) = crate::cached_modules::bson_binary_cls(py) {
+                let py_bytes = PyBytes::new(py, bytes);
+                return Ok(bin_cls.call1((py_bytes, subtype as i32))?.into_any());
+            }
             Ok(PyBytes::new(py, bytes).into_any())
         }
 
@@ -333,7 +368,6 @@ fn decode_value<'py>(
             ensure(data, *offset, total)?;
             let scope_end = *offset + total;
             *offset += 4;
-            // Read the code string
             ensure(data, *offset, 4)?;
             let str_len = read_i32_le(data, *offset) as usize;
             *offset += 4;
@@ -373,8 +407,18 @@ fn decode_value<'py>(
 
         BSON_DECIMAL128 => {
             ensure(data, *offset, 16)?;
-            let v = decimal128_to_f64(data, *offset);
+            let raw_bytes = &data[*offset..*offset + 16];
             *offset += 16;
+            // Return lossless bson.Decimal128 from raw BID bytes
+            if let Ok(d128_cls) = crate::cached_modules::bson_decimal128_cls(py) {
+                let py_bytes = PyBytes::new(py, raw_bytes);
+                // bson.Decimal128 can be constructed from raw BID bytes via
+                // Decimal128.from_bid(bytes).  If not available, fall back to f64.
+                if let Ok(obj) = d128_cls.call_method1("from_bid", (py_bytes,)) {
+                    return Ok(obj);
+                }
+            }
+            let v = decimal128_to_f64(raw_bytes, 0);
             Ok(v.into_pyobject(py)?.to_owned().into_any())
         }
 
@@ -388,6 +432,7 @@ fn decode_value<'py>(
 }
 
 /// Convert IEEE 754 decimal128 (BID encoding, little-endian) to f64.
+/// Kept as fallback when the `bson` Python package is not available.
 fn decimal128_to_f64(data: &[u8], off: usize) -> f64 {
     let low = read_u64_le(data, off);
     let high = read_u64_le(data, off + 8);
@@ -430,17 +475,42 @@ fn decimal128_to_f64(data: &[u8], off: usize) -> f64 {
 }
 
 // ---------------------------------------------------------------------------
+// EncodeContext: all Python class references resolved once per encode call
+// ---------------------------------------------------------------------------
+
+struct EncodeContext<'py> {
+    int64_cls: Option<Bound<'py, PyAny>>,
+    binary_cls: Option<Bound<'py, PyAny>>,
+    timestamp_cls: Option<Bound<'py, PyAny>>,
+    datetime_cls: Bound<'py, PyAny>,
+    decimal128_cls: Option<Bound<'py, PyAny>>,
+    regex_cls: Option<Bound<'py, PyAny>>,
+    uuid_cls: Option<Bound<'py, PyAny>>,
+}
+
+impl<'py> EncodeContext<'py> {
+    fn new(py: Python<'py>) -> PyResult<Self> {
+        Ok(Self {
+            int64_cls: crate::cached_modules::bson_int64_cls(py).ok(),
+            binary_cls: crate::cached_modules::bson_binary_cls(py).ok(),
+            timestamp_cls: crate::cached_modules::bson_timestamp_cls(py).ok(),
+            datetime_cls: crate::cached_modules::datetime_datetime_cls(py)?,
+            decimal128_cls: crate::cached_modules::bson_decimal128_cls(py).ok(),
+            regex_cls: crate::cached_modules::bson_regex_cls(py).ok(),
+            uuid_cls: crate::cached_modules::uuid_uuid_cls(py).ok(),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Encoder: Python dict  →  raw BSON bytes
 // ---------------------------------------------------------------------------
 
 /// Encode a Python dict as a raw BSON document byte vector.
-///
-/// Handles engine types directly: `smongo.ObjectId` → 12-byte OID,
-/// `_id` 24-char hex string → ObjectId, `datetime` → BSON DateTime, etc.
-/// No intermediate `bson::Document` is allocated.
 pub(crate) fn raw_encode_document(py: Python<'_>, dict: &Bound<'_, PyDict>) -> PyResult<Vec<u8>> {
+    let ctx = EncodeContext::new(py)?;
     let mut buf = Vec::with_capacity(256);
-    encode_doc_into(py, &mut buf, dict, 0)?;
+    encode_doc_into(py, &mut buf, dict, 0, &ctx)?;
     Ok(buf)
 }
 
@@ -449,6 +519,7 @@ fn encode_doc_into(
     buf: &mut Vec<u8>,
     dict: &Bound<'_, PyDict>,
     depth: usize,
+    ctx: &EncodeContext<'_>,
 ) -> PyResult<()> {
     if depth > MAX_DEPTH {
         return Err(PyValueError::new_err(format!(
@@ -461,7 +532,7 @@ fn encode_doc_into(
 
     for (k, v) in dict.iter() {
         let key: String = k.extract()?;
-        encode_element(py, buf, &key, &v, depth)?;
+        encode_element(py, buf, &key, &v, depth, ctx)?;
     }
 
     buf.push(0x00); // document terminator
@@ -475,6 +546,7 @@ fn encode_array_into(
     buf: &mut Vec<u8>,
     list: &Bound<'_, PyList>,
     depth: usize,
+    ctx: &EncodeContext<'_>,
 ) -> PyResult<()> {
     if depth > MAX_DEPTH {
         return Err(PyValueError::new_err(format!(
@@ -486,9 +558,8 @@ fn encode_array_into(
     buf.extend_from_slice(&[0u8; 4]); // length placeholder
 
     for (i, v) in list.iter().enumerate() {
-        // BSON arrays use string indices as keys
-        let idx_str = i.to_string();
-        encode_element(py, buf, &idx_str, &v, depth)?;
+        let idx_str = cached_idx_str(i);
+        encode_element(py, buf, &idx_str, &v, depth, ctx)?;
     }
 
     buf.push(0x00);
@@ -503,6 +574,7 @@ fn encode_element(
     key: &str,
     value: &Bound<'_, PyAny>,
     depth: usize,
+    ctx: &EncodeContext<'_>,
 ) -> PyResult<()> {
     if value.is_none() {
         buf.push(BSON_NULL);
@@ -519,8 +591,8 @@ fn encode_element(
     }
 
     // bson.Int64 before generic int (Int64 subclasses int, must stay BSON int64)
-    if let Ok(int64_cls) = crate::cached_modules::bson_int64_cls(py) {
-        if value.is_instance(&int64_cls)? {
+    if let Some(ref int64_cls) = ctx.int64_cls {
+        if value.is_instance(int64_cls)? {
             buf.push(BSON_INT64);
             write_cstring(buf, key);
             let v: i64 = value.extract()?;
@@ -562,6 +634,18 @@ fn encode_element(
     if let Ok(s) = value.cast::<PyString>() {
         let s_str = s.to_str()?;
 
+        // MinKey/MaxKey sentinel strings → proper BSON type tags
+        if s_str == "$MinKey" {
+            buf.push(BSON_MIN_KEY);
+            write_cstring(buf, key);
+            return Ok(());
+        }
+        if s_str == "$MaxKey" {
+            buf.push(BSON_MAX_KEY);
+            write_cstring(buf, key);
+            return Ok(());
+        }
+
         // Outbound normalization inline: _id 24-char hex → BSON ObjectId
         if key == "_id" && is_objectid_hex(s_str) {
             if let Ok(bytes) = hex::decode(s_str) {
@@ -578,9 +662,55 @@ fn encode_element(
         return Ok(());
     }
 
+    // bson.Decimal128 → BSON Decimal128 (0x13), lossless via .bid raw bytes
+    if let Some(ref d128_cls) = ctx.decimal128_cls {
+        if value.is_instance(d128_cls)? {
+            buf.push(BSON_DECIMAL128);
+            write_cstring(buf, key);
+            let bid = value.getattr("bid")?;
+            let raw: &[u8] = bid.extract()?;
+            if raw.len() == 16 {
+                buf.extend_from_slice(raw);
+            } else {
+                buf.extend_from_slice(&[0u8; 16]);
+            }
+            return Ok(());
+        }
+    }
+
+    // bson.Regex → BSON Regex (0x0B)
+    if let Some(ref regex_cls) = ctx.regex_cls {
+        if value.is_instance(regex_cls)? {
+            buf.push(BSON_REGEX);
+            write_cstring(buf, key);
+            let pattern: String = value.getattr("pattern")?.extract()?;
+            let flags: String = value
+                .getattr("flags")?
+                .extract::<String>()
+                .unwrap_or_default();
+            write_cstring(buf, &pattern);
+            write_cstring(buf, &flags);
+            return Ok(());
+        }
+    }
+
+    // uuid.UUID → BSON Binary subtype 4
+    if let Some(ref uuid_cls) = ctx.uuid_cls {
+        if value.is_instance(uuid_cls)? {
+            buf.push(BSON_BINARY);
+            write_cstring(buf, key);
+            let bytes_attr = value.getattr("bytes")?;
+            let uuid_bytes: &[u8] = bytes_attr.extract()?;
+            buf.extend_from_slice(&(uuid_bytes.len() as i32).to_le_bytes());
+            buf.push(0x04); // UUID subtype
+            buf.extend_from_slice(uuid_bytes);
+            return Ok(());
+        }
+    }
+
     // bson.Binary before plain bytes (Binary subclasses bytes, needs subtype preserved)
-    if let Ok(bin_cls) = crate::cached_modules::bson_binary_cls(py) {
-        if value.is_instance(&bin_cls)? {
+    if let Some(ref bin_cls) = ctx.binary_cls {
+        if value.is_instance(bin_cls)? {
             buf.push(BSON_BINARY);
             write_cstring(buf, key);
             let bytes: &[u8] = value.extract()?;
@@ -602,17 +732,54 @@ fn encode_element(
         return Ok(());
     }
 
+    // re.Pattern (compiled regex) → BSON Regex (0x0B)
+    let type_name = value.get_type().qualname()?.to_string();
+    if type_name == "Pattern" {
+        buf.push(BSON_REGEX);
+        write_cstring(buf, key);
+        let pattern: String = value.getattr("pattern")?.extract()?;
+        let flags_int: u32 = value.getattr("flags")?.extract()?;
+        let mut opts = String::new();
+        if flags_int & 2 != 0 {
+            opts.push('i');
+        } // re.IGNORECASE
+        if flags_int & 8 != 0 {
+            opts.push('m');
+        } // re.MULTILINE
+        if flags_int & 16 != 0 {
+            opts.push('s');
+        } // re.DOTALL
+        if flags_int & 64 != 0 {
+            opts.push('x');
+        } // re.VERBOSE
+        write_cstring(buf, &pattern);
+        write_cstring(buf, &opts);
+        return Ok(());
+    }
+
     if let Ok(d) = value.cast::<PyDict>() {
+        // Check for regex dict {$regex: ..., $options: ...}
+        if let Ok(Some(regex_val)) = d.get_item("$regex") {
+            if let Ok(Some(opts_val)) = d.get_item("$options") {
+                let pattern: String = regex_val.extract()?;
+                let opts: String = opts_val.extract().unwrap_or_default();
+                buf.push(BSON_REGEX);
+                write_cstring(buf, key);
+                write_cstring(buf, &pattern);
+                write_cstring(buf, &opts);
+                return Ok(());
+            }
+        }
         buf.push(BSON_DOCUMENT);
         write_cstring(buf, key);
-        encode_doc_into(py, buf, d, depth + 1)?;
+        encode_doc_into(py, buf, d, depth + 1, ctx)?;
         return Ok(());
     }
 
     if let Ok(l) = value.cast::<PyList>() {
         buf.push(BSON_ARRAY);
         write_cstring(buf, key);
-        encode_array_into(py, buf, l, depth + 1)?;
+        encode_array_into(py, buf, l, depth + 1, ctx)?;
         return Ok(());
     }
 
@@ -623,8 +790,8 @@ fn encode_element(
         let start = buf.len();
         buf.extend_from_slice(&[0u8; 4]);
         for (i, v) in t.iter().enumerate() {
-            let idx_str = i.to_string();
-            encode_element(py, buf, &idx_str, &v, depth + 1)?;
+            let idx_str = cached_idx_str(i);
+            encode_element(py, buf, &idx_str, &v, depth + 1, ctx)?;
         }
         buf.push(0x00);
         let len = (buf.len() - start) as i32;
@@ -633,8 +800,8 @@ fn encode_element(
     }
 
     // bson.Timestamp → BSON Timestamp (0x11)
-    if let Ok(ts_cls) = crate::cached_modules::bson_timestamp_cls(py) {
-        if value.is_instance(&ts_cls)? {
+    if let Some(ref ts_cls) = ctx.timestamp_cls {
+        if value.is_instance(ts_cls)? {
             buf.push(BSON_TIMESTAMP);
             write_cstring(buf, key);
             let time_val: u32 = value.getattr("time")?.extract()?;
@@ -646,8 +813,7 @@ fn encode_element(
     }
 
     // datetime.datetime → BSON DateTime
-    let datetime_cls = crate::cached_modules::datetime_datetime_cls(py)?;
-    if value.is_instance(&datetime_cls)? {
+    if value.is_instance(&ctx.datetime_cls)? {
         buf.push(BSON_DATETIME);
         write_cstring(buf, key);
         let ts: f64 = value.call_method0("timestamp")?.extract()?;
@@ -657,7 +823,6 @@ fn encode_element(
     }
 
     // PyMongo bson.ObjectId (not our engine type) — check by qualname
-    let type_name = value.get_type().qualname()?.to_string();
     if type_name == "ObjectId" {
         let hex_str: String = value.str()?.extract()?;
         if hex_str.len() == 24 {
@@ -670,7 +835,14 @@ fn encode_element(
         }
     }
 
-    // Fallback: str(value) as BSON string
+    // Fallback: str(value) as BSON string, with a warning so surprises are visible
+    let warnings = py.import("warnings")?;
+    let msg = format!(
+        "smongo BSON encoder: unknown type '{}' for key '{}', encoding as string",
+        type_name, key
+    );
+    warnings.call_method1("warn", (msg,))?;
+
     let s: String = value.str()?.extract()?;
     buf.push(BSON_STRING);
     write_cstring(buf, key);
@@ -856,9 +1028,6 @@ mod tests {
             dict.set_item("_id", hex).unwrap();
 
             let encoded = raw_encode_document(py, &dict).unwrap();
-            // The _id should be encoded as BSON ObjectId (0x07), not string
-            // After the 4-byte length prefix and terminator overhead:
-            // offset 4 = type tag
             assert_eq!(encoded[4], BSON_OBJECTID);
 
             let decoded = raw_decode_slice(py, &encoded).unwrap();
@@ -887,18 +1056,12 @@ mod tests {
         with_py(|py| {
             assert!(raw_decode_slice(py, &[]).is_err());
             assert!(raw_decode_slice(py, &[5, 0, 0]).is_err());
-            // Length says 10 but only 5 bytes available
             assert!(raw_decode_slice(py, &[10, 0, 0, 0, 0]).is_err());
         });
     }
 
     #[test]
     fn test_decimal128_conversion() {
-        // Decimal128 encoding for 1.0:
-        // coefficient = 10, exponent = -1  (1.0 = 10 * 10^-1)
-        // biased exponent = -1 + 6176 = 6175 = 0x181F
-        // Standard form: high = sign(0) | exponent(14 bits) << 49 | coeff_high(49 bits)
-        // coeff = 10, fits in low word
         let low: u64 = 10;
         let high: u64 = (6175u64) << 49;
         let mut bytes = [0u8; 16];
@@ -919,7 +1082,7 @@ mod tests {
     #[test]
     fn test_decimal128_negative() {
         let low: u64 = 10;
-        let high: u64 = (1u64 << 63) | ((6175u64) << 49); // sign bit set
+        let high: u64 = (1u64 << 63) | ((6175u64) << 49);
         let mut bytes = [0u8; 16];
         bytes[0..8].copy_from_slice(&low.to_le_bytes());
         bytes[8..16].copy_from_slice(&high.to_le_bytes());
@@ -930,14 +1093,12 @@ mod tests {
 
     #[test]
     fn test_decimal128_infinity() {
-        // combo = 0x1E → Infinity
         let high: u64 = 0x1Eu64 << 58;
         let mut bytes = [0u8; 16];
         bytes[8..16].copy_from_slice(&high.to_le_bytes());
         assert!(decimal128_to_f64(&bytes, 0).is_infinite());
         assert!(decimal128_to_f64(&bytes, 0) > 0.0);
 
-        // Negative infinity
         let high_neg: u64 = (1u64 << 63) | (0x1Eu64 << 58);
         bytes[8..16].copy_from_slice(&high_neg.to_le_bytes());
         assert!(decimal128_to_f64(&bytes, 0).is_infinite());
@@ -961,14 +1122,12 @@ mod tests {
             dict.set_item("b", "hello").unwrap();
             dict.set_item("c", 3.14).unwrap();
 
-            // Encode with raw, decode with bson crate
             let raw_bytes = raw_encode_document(py, &dict).unwrap();
             let bson_doc: bson::Document = bson::from_slice(&raw_bytes).unwrap();
             assert_eq!(bson_doc.get_i32("a").unwrap(), 42);
             assert_eq!(bson_doc.get_str("b").unwrap(), "hello");
             assert!((bson_doc.get_f64("c").unwrap() - 3.14).abs() < 1e-10);
 
-            // Encode with bson crate, decode with raw
             let mut doc = bson::Document::new();
             doc.insert("x", bson::Bson::Int32(99));
             doc.insert("y", bson::Bson::String("world".to_string()));
@@ -992,6 +1151,117 @@ mod tests {
                     .unwrap(),
                 "world"
             );
+        });
+    }
+
+    #[test]
+    fn test_binary_subtype_preserved_on_decode() {
+        with_py(|py| {
+            // Encode a BSON document with Binary subtype 5 (MD5) using the bson crate
+            let mut doc = bson::Document::new();
+            doc.insert(
+                "hash",
+                bson::Bson::Binary(bson::Binary {
+                    subtype: bson::spec::BinarySubtype::Md5,
+                    bytes: vec![0xDE, 0xAD, 0xBE, 0xEF],
+                }),
+            );
+            let bson_bytes = bson::to_vec(&doc).unwrap();
+            let decoded = raw_decode_slice(py, &bson_bytes).unwrap();
+
+            let val = decoded.get_item("hash").unwrap().unwrap();
+            // Should NOT be plain bytes -- should be bson.Binary with subtype
+            let subtype: i32 = val.getattr("subtype").unwrap().extract().unwrap();
+            assert_eq!(subtype, 5); // MD5
+        });
+    }
+
+    #[test]
+    fn test_binary_subtype_zero_stays_pybytes() {
+        with_py(|py| {
+            let mut doc = bson::Document::new();
+            doc.insert(
+                "data",
+                bson::Bson::Binary(bson::Binary {
+                    subtype: bson::spec::BinarySubtype::Generic,
+                    bytes: vec![1, 2, 3],
+                }),
+            );
+            let bson_bytes = bson::to_vec(&doc).unwrap();
+            let decoded = raw_decode_slice(py, &bson_bytes).unwrap();
+
+            let val = decoded.get_item("data").unwrap().unwrap();
+            assert!(val.cast::<PyBytes>().is_ok());
+        });
+    }
+
+    #[test]
+    fn test_minkey_maxkey_roundtrip() {
+        with_py(|py| {
+            let dict = PyDict::new(py);
+            dict.set_item("lo", "$MinKey").unwrap();
+            dict.set_item("hi", "$MaxKey").unwrap();
+
+            let encoded = raw_encode_document(py, &dict).unwrap();
+            let bson_doc: bson::Document = bson::from_slice(&encoded).unwrap();
+            assert!(matches!(bson_doc.get("lo").unwrap(), bson::Bson::MinKey));
+            assert!(matches!(bson_doc.get("hi").unwrap(), bson::Bson::MaxKey));
+
+            let decoded = raw_decode_slice(py, &encoded).unwrap();
+            assert_eq!(
+                decoded
+                    .get_item("lo")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "$MinKey"
+            );
+            assert_eq!(
+                decoded
+                    .get_item("hi")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "$MaxKey"
+            );
+        });
+    }
+
+    #[test]
+    fn test_regex_dict_encoded_as_bson_regex() {
+        with_py(|py| {
+            let regex_dict = PyDict::new(py);
+            regex_dict.set_item("$regex", "^hello").unwrap();
+            regex_dict.set_item("$options", "i").unwrap();
+
+            let dict = PyDict::new(py);
+            dict.set_item("pat", regex_dict).unwrap();
+
+            let encoded = raw_encode_document(py, &dict).unwrap();
+            let bson_doc: bson::Document = bson::from_slice(&encoded).unwrap();
+            match bson_doc.get("pat").unwrap() {
+                bson::Bson::RegularExpression(r) => {
+                    assert_eq!(r.pattern, "^hello");
+                    assert_eq!(r.options, "i");
+                }
+                other => panic!("expected Regex, got {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn test_tuple_encoded_as_array() {
+        with_py(|py| {
+            let dict = PyDict::new(py);
+            let tup = pyo3::types::PyTuple::new(py, [1, 2, 3]).unwrap();
+            dict.set_item("arr", tup).unwrap();
+
+            let encoded = raw_encode_document(py, &dict).unwrap();
+            let bson_doc: bson::Document = bson::from_slice(&encoded).unwrap();
+            let arr = bson_doc.get_array("arr").unwrap();
+            assert_eq!(arr.len(), 3);
         });
     }
 }

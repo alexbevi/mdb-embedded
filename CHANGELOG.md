@@ -7,6 +7,47 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [1.1.6] — 2026-04-10
+
+### Fixed — BSON Codec Hardening
+
+- **Binary subtype preserved on decode**: The raw BSON decoder now preserves
+  non-zero binary subtypes.  Subtype 0 (generic) still returns plain `bytes`;
+  subtype 4 (UUID) returns `uuid.UUID`; all others return `bson.Binary` with
+  the correct `.subtype`.  Previously the subtype byte was silently discarded.
+- **Lossless Decimal128 decode**: BSON Decimal128 values are now decoded as
+  `bson.Decimal128` (via `Decimal128.from_bid()`) instead of being lossy-cast
+  to `float`.  Falls back to `float` only if the `bson` package is unavailable.
+- **Decimal128 encode**: `bson.Decimal128` objects are now encoded as BSON type
+  `0x13` with their raw 16-byte BID representation, enabling lossless roundtrip.
+- **Regex encode**: `bson.Regex` and `re.Pattern` objects are now encoded as
+  BSON Regex (type `0x0B`).  `{$regex, $options}` dicts are also encoded as
+  native BSON Regex instead of embedded documents.
+- **UUID encode**: `uuid.UUID` objects are now encoded as BSON Binary subtype 4,
+  matching PyMongo's standard wire representation.
+- **MinKey/MaxKey roundtrip**: The sentinel strings `"$MinKey"` and `"$MaxKey"`
+  are now encoded as proper BSON type tags (`0xFF` / `0x7F`) instead of strings,
+  ensuring correct roundtrip with the decoder.
+- **`bson_helpers.rs` storage path mirrored**: All of the above type fixes are
+  also applied to the storage-path encoder (`py_to_bson`), keeping both codecs
+  in sync.
+
+### Changed — Performance
+
+- **Hoisted class lookups**: Python class references (`bson.Int64`, `bson.Binary`,
+  `datetime.datetime`, `bson.Decimal128`, `bson.Regex`, `uuid.UUID`, etc.) are
+  now resolved once per `raw_encode_document` call via an `EncodeContext` struct,
+  eliminating repeated atomic loads and `isinstance` checks per field.
+- **Array index string cache**: A static lookup table of `"0"` through `"999"` is
+  used for BSON array index keys, avoiding one heap allocation per array element
+  for arrays up to 1000 elements.
+
+### Changed — Defensive
+
+- **`str()` fallback now warns**: When the BSON encoder falls back to `str(value)`
+  for an unrecognized type, it now emits a `warnings.warn(...)` with the type name
+  and field key, making silent data-loss bugs visible during development.
+
 ## [1.1.5] — 2026-04-10
 
 ### Fixed

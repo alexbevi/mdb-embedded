@@ -89,6 +89,7 @@ cached_attr!(
 );
 cached_attr!(BSON_BINARY_CLS, bson_binary_cls, bson_mod, "Binary");
 cached_attr!(BSON_INT64_CLS, bson_int64_cls, bson_mod, "Int64");
+cached_attr!(UUID_UUID_CLS, uuid_uuid_cls, uuid_mod, "UUID");
 cached_attr!(BUILTINS_INT, builtins_int, builtins, "int");
 cached_attr!(BUILTINS_FLOAT, builtins_float, builtins, "float");
 cached_attr!(BUILTINS_ROUND, builtins_round, builtins, "round");
