@@ -436,18 +436,12 @@ def _apply_sort(
 
 
 def _apply_projection_single(doc: dict[str, Any], fields: dict[str, Any]) -> dict[str, Any]:
-    """Apply a simple field projection to a document."""
+    """Apply a field projection — delegates to the single Rust implementation."""
     if not fields or not isinstance(fields, dict):
         return doc
+    from smongo._smongo_core import apply_projection
 
-    include = {k for k, v in fields.items() if v}
-    exclude = {k for k, v in fields.items() if not v}
-
-    if include:
-        include.add("_id")
-        return {k: v for k, v in doc.items() if k in include}
-
-    return {k: v for k, v in doc.items() if k not in exclude}
+    return apply_projection(doc, fields)
 
 
 @_register("bulkWrite")

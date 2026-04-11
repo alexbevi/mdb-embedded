@@ -1,4 +1,5 @@
-//! Aggregation expression evaluator (`$add`, `$concat`, `$cond`, etc.).
+//! Aggregation expression evaluator (`$add`, `$concat`, `$cond`, etc.)
+//! and expression-aware projection engine used by both `find` and `$project`.
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString};
@@ -11,6 +12,116 @@ pub fn resolve_expr<'py>(
     expr: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
     resolve_inner(doc, expr)
+}
+
+// ---------------------------------------------------------------------------
+// Projection engine (single source of truth for find + $project)
+// ---------------------------------------------------------------------------
+
+/// Test whether a projection value is an aggregation expression rather than
+/// a simple 0/1 inclusion/exclusion flag.
+fn is_expression(v: &Bound<'_, PyAny>) -> PyResult<bool> {
+    if let Ok(s) = v.extract::<String>() {
+        return Ok(s.starts_with("$$"));
+    }
+    if let Ok(d) = v.cast::<PyDict>() {
+        for (k, _) in d.iter() {
+            if let Ok(key) = k.extract::<String>() {
+                if key.starts_with('$') {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// Apply a field projection to a single document, with full expression
+/// support (`$$ROOT`, `$bsonSize`, `$concat`, etc.).
+///
+/// This is the **single implementation** used by both the Rust wire-command
+/// handlers and the Python `find` / `findAndModify` code paths.
+pub(crate) fn apply_projection_single<'py>(
+    py: Python<'py>,
+    doc: &Bound<'py, PyAny>,
+    fields: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let fields_dict = match fields.cast::<PyDict>() {
+        Ok(d) => d,
+        Err(_) => return Ok(doc.clone()),
+    };
+    if fields_dict.is_empty() {
+        return Ok(doc.clone());
+    }
+
+    let doc_dict = doc.cast::<PyDict>()
+        .map_err(|_| PyValueError::new_err("apply_projection: doc must be a dict"))?;
+
+    let id_excluded = fields_dict
+        .get_item("_id")?
+        .is_some_and(|v| !v.is_truthy().unwrap_or(true));
+
+    let mut has_inclusion = false;
+    let mut include_fields: Vec<String> = Vec::new();
+    let mut exclude_fields: Vec<String> = Vec::new();
+    let mut expressions: Vec<(String, Bound<'py, PyAny>)> = Vec::new();
+
+    for (k, v) in fields_dict.iter() {
+        let key: String = k.extract()?;
+        if key == "_id" {
+            continue;
+        }
+        if is_expression(&v)? {
+            expressions.push((key, v));
+            has_inclusion = true;
+        } else if v.is_truthy()? {
+            include_fields.push(key);
+            has_inclusion = true;
+        } else {
+            exclude_fields.push(key);
+        }
+    }
+
+    let result = PyDict::new(py);
+
+    if has_inclusion {
+        if !id_excluded {
+            if let Some(id_val) = doc_dict.get_item("_id")? {
+                result.set_item("_id", id_val)?;
+            }
+        }
+        for field in &include_fields {
+            if let Some(val) = doc_dict.get_item(field.as_str())? {
+                result.set_item(field.as_str(), val)?;
+            }
+        }
+        for (field, expr) in &expressions {
+            let val = resolve_inner(doc, expr)?;
+            result.set_item(field.as_str(), val)?;
+        }
+    } else {
+        for (k, v) in doc_dict.iter() {
+            let key: String = k.extract()?;
+            if key == "_id" && id_excluded {
+                continue;
+            }
+            if exclude_fields.contains(&key) {
+                continue;
+            }
+            result.set_item(k, v)?;
+        }
+    }
+
+    Ok(result.into_any())
+}
+
+/// Python-callable entry point for the projection engine.
+#[pyfunction]
+pub fn apply_projection<'py>(
+    doc: &Bound<'py, PyAny>,
+    fields: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    apply_projection_single(doc.py(), doc, fields)
 }
 
 // ---------------------------------------------------------------------------
@@ -1239,6 +1350,20 @@ fn eval_expr_op<'py>(
                 return Ok(paths::get_value(doc, field)?.into_bound(py));
             }
             Err(PyValueError::new_err("$meta requires a string argument"))
+        }
+
+        "$bsonSize" => {
+            let resolved = resolve_inner(doc, arg)?;
+            if resolved.is_none() {
+                return Ok(py_none(py));
+            }
+            let d = resolved
+                .cast::<PyDict>()
+                .map_err(|_| PyValueError::new_err("$bsonSize requires a document or null"))?;
+            let bson_doc = crate::bson_helpers::pydict_to_doc(d)?;
+            let raw = bson::to_vec(&bson_doc)
+                .map_err(|e| PyValueError::new_err(format!("$bsonSize encode error: {e}")))?;
+            Ok((raw.len() as i64).into_pyobject(py)?.into_any())
         }
 
         _ => Err(PyValueError::new_err(format!(

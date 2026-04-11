@@ -1,5 +1,4 @@
-use bson::{doc, Document};
-use smongo_engine::collection::Collection;
+use bson::doc;
 use smongo_engine::database::Database;
 use smongo_engine::planner::{plan_query_with_projection, ExecutionPlan};
 

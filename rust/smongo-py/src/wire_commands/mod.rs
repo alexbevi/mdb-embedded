@@ -243,48 +243,4 @@ pub(crate) fn apply_sort_py<'py>(
     Ok(result.into_any())
 }
 
-pub(crate) fn apply_projection_single<'py>(
-    py: Python<'py>,
-    doc: &Bound<'py, PyAny>,
-    fields: &Bound<'py, PyAny>,
-) -> PyResult<Bound<'py, PyAny>> {
-    let fields_dict = match fields.cast::<PyDict>() {
-        Ok(d) => d,
-        Err(_) => return Ok(doc.clone()),
-    };
-    if fields_dict.is_empty() {
-        return Ok(doc.clone());
-    }
-
-    let doc_dict = doc.cast::<PyDict>()?;
-    let mut include: Vec<String> = Vec::new();
-    let mut exclude: Vec<String> = Vec::new();
-
-    for (k, v) in fields_dict.iter() {
-        let key: String = k.extract()?;
-        if v.is_truthy()? {
-            include.push(key);
-        } else {
-            exclude.push(key);
-        }
-    }
-
-    let result = PyDict::new(py);
-    if !include.is_empty() {
-        include.push("_id".to_string());
-        for (k, v) in doc_dict.iter() {
-            let key: String = k.extract()?;
-            if include.contains(&key) {
-                result.set_item(k, v)?;
-            }
-        }
-    } else {
-        for (k, v) in doc_dict.iter() {
-            let key: String = k.extract()?;
-            if !exclude.contains(&key) {
-                result.set_item(k, v)?;
-            }
-        }
-    }
-    Ok(result.into_any())
-}
+pub(crate) use crate::query_expressions::apply_projection_single;

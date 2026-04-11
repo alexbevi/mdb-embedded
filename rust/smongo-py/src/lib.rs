@@ -53,6 +53,7 @@ fn register_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<query_compiler::CompiledQuery>()?;
     m.add_function(wrap_pyfunction!(query_compiler::compile_query, m)?)?;
     m.add_function(wrap_pyfunction!(query_expressions::resolve_expr, m)?)?;
+    m.add_function(wrap_pyfunction!(query_expressions::apply_projection, m)?)?;
     m.add_function(wrap_pyfunction!(query_update::apply_update, m)?)?;
     m.add_function(wrap_pyfunction!(index_encoding::sortable_encode, m)?)?;
     m.add_function(wrap_pyfunction!(index_encoding::invert_encoded, m)?)?;

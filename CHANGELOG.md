@@ -7,6 +7,24 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [1.1.8] — 2026-04-11
+
+### Fixed — Compass document display
+
+- **MongoDB Compass now displays all document fields.** Compass sends `find`
+  projections with `$$ROOT` and `$bsonSize` expressions; the old projection
+  engine treated these as literal field names and returned empty documents.
+- **Consolidated projection engine into a single Rust implementation**
+  (`apply_projection` in `query_expressions.rs`). Both the Python wire handler
+  and the Rust wire handler now call the same code — no more diverging
+  include/exclude logic that could drift.
+- **Added `$bsonSize` expression operator** — evaluates to the BSON byte length
+  of a document. Used by Compass to show document sizes in the UI.
+- **Fixed `_id: 0` handling** — the old projection forced `_id` into the
+  inclusion set even when explicitly excluded.
+- **Removed unused imports** (`Document`, `Collection`) in test files.
+- **Cleaned up deprecated `downcast` calls** — replaced with `cast` per pyo3 API.
+
 ## [1.1.7] — 2026-04-11
 
 ### Changed — Cleanup & docs

@@ -16,7 +16,7 @@ Guardrails:
 
 import itertools
 from collections.abc import Iterable, Iterator
-from copy import deepcopy
+
 from typing import Any, cast
 
 from .._types import CollectionGetter, Document, Filter, Pipeline, Projection
@@ -358,7 +358,12 @@ def _optimize_pipeline(pipeline: Pipeline) -> Pipeline:
 
 
 def _apply_projection(docs: list[Document], spec: Projection) -> list[Document]:
-    """Apply a projection spec to a list of docs."""
+    """Apply a projection spec to a list of docs.
+
+    List specs (field-name lists) are handled inline; dict specs delegate to
+    the single Rust projection engine which supports expressions like
+    ``$$ROOT`` and ``$bsonSize``.
+    """
     if isinstance(spec, list):
         include_fields = set(spec)
         out: list[Document] = []
@@ -372,30 +377,6 @@ def _apply_projection(docs: list[Document], spec: Projection) -> list[Document]:
             out.append(new_doc)
         return out
 
-    projected: list[Document] = []
-    has_inclusion = any(v == 1 or v is True for v in spec.values() if not isinstance(v, dict))
-    has_exclusion = any(v == 0 or v is False for v in spec.values())
+    from smongo._smongo_core import apply_projection
 
-    for doc in docs:
-        if has_inclusion:
-            new_doc = {}
-            for field, val in spec.items():
-                if val == 1 or val is True:
-                    if field_exists(doc, field):
-                        set_value(new_doc, field, get_value(doc, field))
-            if "_id" not in spec and "_id" in doc:
-                new_doc["_id"] = doc["_id"]
-        elif has_exclusion:
-            new_doc = deepcopy(doc)
-            for field, val in spec.items():
-                if val == 0 or val is False:
-                    parts = field.split(".")
-                    d: Any = new_doc
-                    for p in parts[:-1]:
-                        d = d.get(p, {})
-                    if isinstance(d, dict) and parts[-1] in d:
-                        del d[parts[-1]]
-        else:
-            new_doc = deepcopy(doc)
-        projected.append(new_doc)
-    return projected
+    return [apply_projection(doc, spec) for doc in docs]
