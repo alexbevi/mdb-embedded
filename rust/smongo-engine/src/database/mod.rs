@@ -23,7 +23,9 @@ use std::path::Path;
 use crate::collection::{Collection, CollectionError, CollectionView};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::storage::RedbBackend;
-use crate::storage::{DefaultSession, StorageBackend, StorageCursor, StorageError, StorageSession};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::storage::StorageCursor;
+use crate::storage::{DefaultSession, StorageBackend, StorageError, StorageSession};
 
 pub type DatabaseResult<T> = Result<T, DatabaseError>;
 

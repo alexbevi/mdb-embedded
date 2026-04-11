@@ -444,21 +444,23 @@ impl<S: StorageSession> Collection<S> {
                     index_cursor.insert()?;
                 }
                 IndexType::Text => {
-                    let table = format!("{}.ftx_{}", self.collection_name, index_spec.name);
-                    let fields = crate::index::text_fields(&index_spec.keys);
-                    if let Ok(mut cursor) = self.session.open_cursor(&table) {
-                        for field in &fields {
-                            if let Some(bson::Bson::String(text)) =
-                                crate::paths::get_value(doc, field)
-                            {
-                                #[cfg(not(target_arch = "wasm32"))]
-                                for token in crate::index::text_index::tokenize(text) {
-                                    let mut key = token.as_bytes().to_vec();
-                                    key.push(0xFE);
-                                    key.extend_from_slice(id_str.as_bytes());
-                                    cursor.set_key_raw(&key);
-                                    cursor.set_value_str(&id_str);
-                                    let _ = cursor.insert();
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        let table = format!("{}.ftx_{}", self.collection_name, index_spec.name);
+                        let fields = crate::index::text_fields(&index_spec.keys);
+                        if let Ok(mut cursor) = self.session.open_cursor(&table) {
+                            for field in &fields {
+                                if let Some(bson::Bson::String(text)) =
+                                    crate::paths::get_value(doc, field)
+                                {
+                                    for token in crate::index::text_index::tokenize(text) {
+                                        let mut key = token.as_bytes().to_vec();
+                                        key.push(0xFE);
+                                        key.extend_from_slice(id_str.as_bytes());
+                                        cursor.set_key_raw(&key);
+                                        cursor.set_value_str(&id_str);
+                                        let _ = cursor.insert();
+                                    }
                                 }
                             }
                         }
@@ -539,21 +541,23 @@ impl<S: StorageSession> Collection<S> {
                     }
                 }
                 IndexType::Text => {
-                    let table = format!("{}.ftx_{}", self.collection_name, index_spec.name);
-                    let fields = crate::index::text_fields(&index_spec.keys);
-                    if let Ok(mut cursor) = self.session.open_cursor(&table) {
-                        for field in &fields {
-                            if let Some(bson::Bson::String(text)) =
-                                crate::paths::get_value(doc, field)
-                            {
-                                #[cfg(not(target_arch = "wasm32"))]
-                                for token in crate::index::text_index::tokenize(text) {
-                                    let mut key = token.as_bytes().to_vec();
-                                    key.push(0xFE);
-                                    key.extend_from_slice(id_str.as_bytes());
-                                    cursor.set_key_raw(&key);
-                                    if cursor.search().is_ok() {
-                                        let _ = cursor.remove();
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        let table = format!("{}.ftx_{}", self.collection_name, index_spec.name);
+                        let fields = crate::index::text_fields(&index_spec.keys);
+                        if let Ok(mut cursor) = self.session.open_cursor(&table) {
+                            for field in &fields {
+                                if let Some(bson::Bson::String(text)) =
+                                    crate::paths::get_value(doc, field)
+                                {
+                                    for token in crate::index::text_index::tokenize(text) {
+                                        let mut key = token.as_bytes().to_vec();
+                                        key.push(0xFE);
+                                        key.extend_from_slice(id_str.as_bytes());
+                                        cursor.set_key_raw(&key);
+                                        if cursor.search().is_ok() {
+                                            let _ = cursor.remove();
+                                        }
                                     }
                                 }
                             }
