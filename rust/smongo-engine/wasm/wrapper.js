@@ -10,6 +10,15 @@
 import init, { WasmDatabase } from '../pkg/smongo_engine.js';
 import { BSON } from '../node_modules/bson/lib/bson.mjs';
 
+/** Normalize BSON serialization and WASM errors into a consistent Error shape. */
+function wrapErr(fn) {
+  try { return fn(); }
+  catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`[smongo] ${msg}`);
+  }
+}
+
 /**
  * Initialize the WASM module. Must be called once before using Database/Collection.
  * @returns {Promise<void>}
@@ -50,8 +59,10 @@ export class Database {
 
   /** @returns {Object} */
   stats() {
-    const resultBytes = this._db.stats();
-    return BSON.deserialize(new Uint8Array(resultBytes));
+    return wrapErr(() => {
+      const resultBytes = this._db.stats();
+      return BSON.deserialize(new Uint8Array(resultBytes));
+    });
   }
 }
 
@@ -68,9 +79,11 @@ export class Collection {
    * @returns {Object} Result with insertedId field
    */
   insertOne(doc) {
-    const bytes = BSON.serialize(doc);
-    const resultBytes = this._coll.insert_one(bytes);
-    return BSON.deserialize(new Uint8Array(resultBytes));
+    return wrapErr(() => {
+      const bytes = BSON.serialize(doc);
+      const resultBytes = this._coll.insert_one(bytes);
+      return BSON.deserialize(new Uint8Array(resultBytes));
+    });
   }
 
   /**
@@ -78,9 +91,11 @@ export class Collection {
    * @returns {Object} Result with insertedIds array
    */
   insertMany(docs) {
-    const bytes = BSON.serialize({ documents: docs });
-    const resultBytes = this._coll.insert_many(bytes);
-    return BSON.deserialize(new Uint8Array(resultBytes));
+    return wrapErr(() => {
+      const bytes = BSON.serialize({ documents: docs });
+      const resultBytes = this._coll.insert_many(bytes);
+      return BSON.deserialize(new Uint8Array(resultBytes));
+    });
   }
 
   /**
@@ -88,11 +103,13 @@ export class Collection {
    * @returns {Object|null}
    */
   findOne(filter = {}) {
-    const bytes = BSON.serialize(filter);
-    const resultBytes = this._coll.find_one(bytes);
-    const result = BSON.deserialize(new Uint8Array(resultBytes));
-    if (result.__null) return null;
-    return result;
+    return wrapErr(() => {
+      const bytes = BSON.serialize(filter);
+      const resultBytes = this._coll.find_one(bytes);
+      const result = BSON.deserialize(new Uint8Array(resultBytes));
+      if (result.__null) return null;
+      return result;
+    });
   }
 
   /**
@@ -100,10 +117,12 @@ export class Collection {
    * @returns {Object[]}
    */
   find(filter = {}) {
-    const bytes = BSON.serialize(filter);
-    const resultBytes = this._coll.find(bytes);
-    const result = BSON.deserialize(new Uint8Array(resultBytes));
-    return result.results;
+    return wrapErr(() => {
+      const bytes = BSON.serialize(filter);
+      const resultBytes = this._coll.find(bytes);
+      const result = BSON.deserialize(new Uint8Array(resultBytes));
+      return result.results;
+    });
   }
 
   /**
@@ -112,11 +131,13 @@ export class Collection {
    * @returns {Object[]}
    */
   findWithOptions(filter, options) {
-    const filterBytes = BSON.serialize(filter);
-    const optionsBytes = BSON.serialize(options);
-    const resultBytes = this._coll.find_with_options(filterBytes, optionsBytes);
-    const result = BSON.deserialize(new Uint8Array(resultBytes));
-    return result.results;
+    return wrapErr(() => {
+      const filterBytes = BSON.serialize(filter);
+      const optionsBytes = BSON.serialize(options);
+      const resultBytes = this._coll.find_with_options(filterBytes, optionsBytes);
+      const result = BSON.deserialize(new Uint8Array(resultBytes));
+      return result.results;
+    });
   }
 
   /**
@@ -124,8 +145,10 @@ export class Collection {
    * @returns {number}
    */
   countDocuments(filter = {}) {
-    const bytes = BSON.serialize(filter);
-    return this._coll.count_documents(bytes);
+    return wrapErr(() => {
+      const bytes = BSON.serialize(filter);
+      return this._coll.count_documents(bytes);
+    });
   }
 
   /**
@@ -134,10 +157,12 @@ export class Collection {
    * @returns {Object} Result with matchedCount and modifiedCount
    */
   updateOne(filter, update) {
-    const filterBytes = BSON.serialize(filter);
-    const updateBytes = BSON.serialize(update);
-    const resultBytes = this._coll.update_one(filterBytes, updateBytes);
-    return BSON.deserialize(new Uint8Array(resultBytes));
+    return wrapErr(() => {
+      const filterBytes = BSON.serialize(filter);
+      const updateBytes = BSON.serialize(update);
+      const resultBytes = this._coll.update_one(filterBytes, updateBytes);
+      return BSON.deserialize(new Uint8Array(resultBytes));
+    });
   }
 
   /**
@@ -146,10 +171,12 @@ export class Collection {
    * @returns {Object} Result with matchedCount and modifiedCount
    */
   updateMany(filter, update) {
-    const filterBytes = BSON.serialize(filter);
-    const updateBytes = BSON.serialize(update);
-    const resultBytes = this._coll.update_many(filterBytes, updateBytes);
-    return BSON.deserialize(new Uint8Array(resultBytes));
+    return wrapErr(() => {
+      const filterBytes = BSON.serialize(filter);
+      const updateBytes = BSON.serialize(update);
+      const resultBytes = this._coll.update_many(filterBytes, updateBytes);
+      return BSON.deserialize(new Uint8Array(resultBytes));
+    });
   }
 
   /**
@@ -157,9 +184,11 @@ export class Collection {
    * @returns {Object} Result with deletedCount
    */
   deleteOne(filter) {
-    const bytes = BSON.serialize(filter);
-    const resultBytes = this._coll.delete_one(bytes);
-    return BSON.deserialize(new Uint8Array(resultBytes));
+    return wrapErr(() => {
+      const bytes = BSON.serialize(filter);
+      const resultBytes = this._coll.delete_one(bytes);
+      return BSON.deserialize(new Uint8Array(resultBytes));
+    });
   }
 
   /**
@@ -167,9 +196,11 @@ export class Collection {
    * @returns {Object} Result with deletedCount
    */
   deleteMany(filter) {
-    const bytes = BSON.serialize(filter);
-    const resultBytes = this._coll.delete_many(bytes);
-    return BSON.deserialize(new Uint8Array(resultBytes));
+    return wrapErr(() => {
+      const bytes = BSON.serialize(filter);
+      const resultBytes = this._coll.delete_many(bytes);
+      return BSON.deserialize(new Uint8Array(resultBytes));
+    });
   }
 
   /**
@@ -177,10 +208,12 @@ export class Collection {
    * @returns {Object[]}
    */
   aggregate(pipeline) {
-    const bytes = BSON.serialize({ pipeline });
-    const resultBytes = this._coll.aggregate(bytes);
-    const result = BSON.deserialize(new Uint8Array(resultBytes));
-    return result.results;
+    return wrapErr(() => {
+      const bytes = BSON.serialize({ pipeline });
+      const resultBytes = this._coll.aggregate(bytes);
+      const result = BSON.deserialize(new Uint8Array(resultBytes));
+      return result.results;
+    });
   }
 
   /**
@@ -189,20 +222,26 @@ export class Collection {
    * @returns {string} Index name
    */
   createIndex(keys, options = {}) {
-    const keysBytes = BSON.serialize(keys);
-    const optionsBytes = BSON.serialize(options);
-    return this._coll.create_index(keysBytes, optionsBytes);
+    return wrapErr(() => {
+      const keysBytes = BSON.serialize(keys);
+      const optionsBytes = BSON.serialize(options);
+      return this._coll.create_index(keysBytes, optionsBytes);
+    });
   }
 
   /** @param {string} indexName */
   dropIndex(indexName) {
-    this._coll.drop_index(indexName);
+    wrapErr(() => {
+      this._coll.drop_index(indexName);
+    });
   }
 
   /** @returns {Object[]} */
   listIndexes() {
-    const resultBytes = this._coll.list_indexes();
-    const result = BSON.deserialize(new Uint8Array(resultBytes));
-    return result.indexes;
+    return wrapErr(() => {
+      const resultBytes = this._coll.list_indexes();
+      const result = BSON.deserialize(new Uint8Array(resultBytes));
+      return result.indexes;
+    });
   }
 }

@@ -57,6 +57,20 @@ CONNECTION_TIMEOUT_SEC = 300
 MAX_CONNECTIONS = 1024
 
 
+class _SyncClientWrapper:
+    """Lightweight adapter so SyncManager can reuse an existing RedbLocalClient.
+
+    SyncManager expects ``local_client.client._rust_client`` to reach the native
+    engine.  This wrapper satisfies that contract without opening a second database
+    handle on the same path.
+    """
+
+    def __init__(self, rust_local_client: RedbLocalClient) -> None:
+        self.client = self
+        self._rust_client = rust_local_client
+        self.mode = "hybrid"
+
+
 class WireServer:
     """MongoDB-compatible wire protocol server backed by the embedded engine.
 
@@ -116,9 +130,7 @@ class WireServer:
         if isinstance(sync, SyncManager):
             self._sync_mgr: SyncManager | None = sync
         elif isinstance(sync, str):
-            from ..client import MongoClient
-
-            local_mc = MongoClient(f"local://{db_path}")
+            local_mc = _SyncClientWrapper(self._local_client)
             self._sync_mgr = SyncManager(local_mc, sync)
             self._owns_sync_mgr = True
         else:
@@ -320,15 +332,7 @@ class WireServer:
 
         except (ConnectionResetError, BrokenPipeError, TimeoutError, OSError) as exc:
             log.debug("Conn #%d closed: %s", conn_id, exc)
-        except (
-            struct.error,
-            UnicodeDecodeError,
-            KeyError,
-            TypeError,
-            ValueError,
-            IndexError,
-            RuntimeError,
-        ):
+        except Exception:
             log.exception("Error in connection #%d", conn_id)
         finally:
             self._conn_counter.disconnect()

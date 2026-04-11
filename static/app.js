@@ -12,8 +12,16 @@ function toast(msg,ok=true){
 }
 
 async function api(path,opts){
-  try{const r=await fetch(API+path,opts);return r.json();}
-  catch(e){return {error:e.message};}
+  try{
+    const r=await fetch(API+path,opts);
+    if(!r.ok){
+      const body=await r.text();
+      let parsed;
+      try{parsed=JSON.parse(body);}catch{parsed=null;}
+      return {error:parsed?.error||`HTTP ${r.status}: ${r.statusText}`};
+    }
+    return r.json();
+  }catch(e){return {error:e.message};}
 }
 
 function syntaxHL(obj){
@@ -31,6 +39,9 @@ function syntaxHL(obj){
 function timerHTML(ms){
   return '<span class="timer"><svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/><path d="M8 5v3.5l2.5 1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>'+ms+'ms</span>';
 }
+
+function escHTML(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function escAttr(s){return escHTML(s).replace(/'/g,'&#39;').replace(/"/g,'&quot;');}
 
 // ═══ Tab Navigation ══════════════════════════════════════
 
@@ -87,8 +98,6 @@ async function runShellCmd(cmd){
   refreshHeaderStats();
 }
 
-function escHTML(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
-
 // ═══ Documents ═══════════════════════════════════════════
 
 async function refreshDocs(){
@@ -101,14 +110,14 @@ async function refreshDocs(){
   docs.forEach(d=>{
     h+='<tr>'+activeFields.map(f=>{
       let v=d[f]; if(v===undefined)v='';
-      else if(Array.isArray(v))v='<span style="color:var(--purple)">'+v.map(x=>'<span class="chip" style="margin:0;padding:2px 6px;font-size:10px;cursor:default">'+x+'</span>').join(' ')+'</span>';
-      else if(typeof v==='object'&&v!==null)v='<span style="color:var(--text2)">'+JSON.stringify(v)+'</span>';
+      else if(Array.isArray(v))v='<span style="color:var(--purple)">'+v.map(x=>'<span class="chip" style="margin:0;padding:2px 6px;font-size:10px;cursor:default">'+escHTML(String(x))+'</span>').join(' ')+'</span>';
+      else if(typeof v==='object'&&v!==null)v='<span style="color:var(--text2)">'+escHTML(JSON.stringify(v))+'</span>';
       else if(f==='_id')v='<span style="color:var(--text3);font-family:var(--mono);font-size:10px" title="'+v+'">'+v.slice(0,8)+'...</span>';
       else if(f==='salary')v='<span style="color:var(--green);font-family:var(--mono)">$'+Number(v).toLocaleString()+'</span>';
       else v=escHTML(String(v));
       return '<td>'+v+'</td>';
     }).join('')+
-    '<td><button class="btn xs danger" onclick="deleteDoc(\''+d._id+'\')">Del</button></td></tr>';
+    '<td><button class="btn xs danger" data-action="deleteDoc" data-id="'+escAttr(String(d._id))+'">Del</button></td></tr>';
   });
   h+='</tbody></table>';
   el.innerHTML=h;
@@ -171,7 +180,7 @@ function renderQueryResult(res){
 
 function renderPlanBadge(plan,count){
   let badge='';
-  if(plan.plan==='index_scan') badge='<span class="badge idx">INDEX SCAN</span> <span style="color:var(--text2);font-size:11px">using <strong>'+plan.index+'</strong></span>';
+  if(plan.plan==='index_scan') badge='<span class="badge idx">INDEX SCAN</span> <span style="color:var(--text2);font-size:11px">using <strong>'+escHTML(plan.index)+'</strong></span>';
   else if(plan.plan==='pk_lookup') badge='<span class="badge pk">PK LOOKUP</span>';
   else badge='<span class="badge scan">COLL SCAN</span>';
   document.getElementById('queryPlan').innerHTML=badge+' <span style="color:var(--text3);font-size:11px;margin-left:8px">'+count+' result'+(count!==1?'s':'')+'</span>';
@@ -235,7 +244,7 @@ function addStage(type,value){
 
 function removeStage(i){stages.splice(i,1);renderStages();}
 
-function clearStages(){stages=[];renderStages();document.getElementById('aggResults').innerHTML='<span style="color:var(--text3)">Build a pipeline and click Run</span>';}
+function clearStages(){stages=[];renderStages();document.getElementById('aggResults').innerHTML='<span class="agg-hint">Build a pipeline and click Run</span>';}
 
 function loadPipeline(name){
   stages=examplePipelines[name].map(s=>({...s}));
@@ -250,9 +259,9 @@ function renderStages(){
       '<span class="stage-num">'+(i+1)+'</span>'+
       '<div class="stage-body">'+
         '<div class="stage-type">'+s.type+'</div>'+
-        '<textarea rows="2" onchange="stages['+i+'].value=this.value">'+s.value+'</textarea>'+
+        '<textarea rows="2" data-stage-idx="'+i+'">'+escHTML(s.value)+'</textarea>'+
       '</div>'+
-      '<span class="remove-stage" onclick="removeStage('+i+')">&times;</span>'+
+      '<span class="remove-stage" data-action="removeStage" data-idx="'+i+'">&times;</span>'+
     '</div>').join('');
 }
 
@@ -279,11 +288,11 @@ async function refreshIndexes(){
   const el=document.getElementById('idxBody');
   if(!idxs||idxs.error||!idxs.length){el.innerHTML='<tr><td colspan="5" style="color:var(--text3)">No indexes</td></tr>';return;}
   el.innerHTML=idxs.map(i=>'<tr>'+
-    '<td style="font-family:var(--mono);font-size:11px">'+i.name+'</td>'+
-    '<td style="font-family:var(--mono);font-size:11px;color:var(--text2)">'+JSON.stringify(i.keys)+'</td>'+
+    '<td style="font-family:var(--mono);font-size:11px">'+escHTML(i.name)+'</td>'+
+    '<td style="font-family:var(--mono);font-size:11px;color:var(--text2)">'+escHTML(JSON.stringify(i.keys))+'</td>'+
     '<td>'+(i.unique?'<span style="color:var(--green);font-weight:700">Yes</span>':'<span style="color:var(--text3)">No</span>')+'</td>'+
     '<td>'+(i.sparse?'<span style="color:var(--orange)">Yes</span>':'<span style="color:var(--text3)">No</span>')+'</td>'+
-    '<td><button class="btn xs danger" onclick="dropIdx(\''+i.name+'\')">Drop</button></td>'+
+    '<td><button class="btn xs danger" data-action="dropIdx" data-name="'+escAttr(i.name)+'">Drop</button></td>'+
   '</tr>').join('');
   document.getElementById('idxCountBadge').textContent=idxs.length;
   document.getElementById('hdrIdxCount').textContent=idxs.length;
@@ -310,7 +319,8 @@ async function createIdx(){
 
 async function dropIdx(name){
   if(!confirm('Drop index '+name+'?'))return;
-  await api('/api/indexes/'+encodeURIComponent(name)+'?coll=users',{method:'DELETE'});
+  const res=await api('/api/indexes/'+encodeURIComponent(name)+'?coll=users',{method:'DELETE'});
+  if(res.error){toast(res.error,false);return;}
   toast('Dropped '+name);
   refreshIndexes();
 }
@@ -342,10 +352,12 @@ async function syncPull(){
 
 async function toggleSync(){
   if(syncRunning){
-    await api('/api/sync/stop',{method:'POST'});
+    const res=await api('/api/sync/stop',{method:'POST'});
+    if(res.error){toast(res.error,false);return;}
     syncRunning=false;
   }else{
-    await api('/api/sync/start',{method:'POST'});
+    const res=await api('/api/sync/start',{method:'POST'});
+    if(res.error){toast(res.error,false);return;}
     syncRunning=true;
   }
   updateSyncUI();
@@ -382,8 +394,11 @@ async function refreshSyncStatus(){
 }
 
 async function updateCounts(){
-  try{const rd=await api('/api/remote/docs?coll=users');document.getElementById('remoteCount').textContent=Array.isArray(rd)?rd.length:'?';}
-  catch(e){document.getElementById('remoteCount').textContent='?';}
+  try{
+    const rd=await api('/api/remote/docs?coll=users');
+    if(rd.error){console.warn('updateCounts:',rd.error);document.getElementById('remoteCount').textContent='?';return;}
+    document.getElementById('remoteCount').textContent=Array.isArray(rd)?rd.length:'?';
+  }catch(e){console.warn('updateCounts failed:',e);document.getElementById('remoteCount').textContent='?';}
 }
 
 async function remoteInsert(){
@@ -435,8 +450,58 @@ async function refreshHeaderStats(){
     const s=await api('/api/stats?coll=users');
     document.getElementById('hdrDocCount').textContent=s.doc_count||0;
     document.getElementById('hdrIdxCount').textContent=s.index_count||0;
-  }catch(e){}
+  }catch(e){console.warn('refreshHeaderStats failed:',e);}
 }
+
+// ═══ Event Delegation ════════════════════════════════════
+
+document.addEventListener('click',function(e){
+  const el=e.target.closest('[data-action]');
+  if(!el)return;
+  const action=el.dataset.action;
+
+  switch(action){
+    case 'seedData': seedData(); break;
+    case 'toggleSync': toggleSync(); break;
+    case 'refreshDocs': refreshDocs(); break;
+    case 'showInsertModal': showInsertModal(); break;
+    case 'hideInsertModal': hideInsertModal(); break;
+    case 'insertFromModal': insertFromModal(); break;
+    case 'setQuery': setQuery(el.dataset.query); break;
+    case 'runQuery': runQuery(); break;
+    case 'showAll': setQuery('{}');runQuery(); break;
+    case 'explainQuery': explainQuery(); break;
+    case 'addStage': addStage(el.dataset.stage); break;
+    case 'loadPipeline': loadPipeline(el.dataset.pipeline); break;
+    case 'runAggregate': runAggregate(); break;
+    case 'clearStages': clearStages(); break;
+    case 'removeStage': removeStage(Number(el.dataset.idx)); break;
+    case 'refreshIndexes': refreshIndexes(); break;
+    case 'setIdxKeys': setIdxKeys(el.dataset.keys,el.dataset.unique==='true'); break;
+    case 'createIdx': createIdx(); break;
+    case 'testPlan': testPlan(); break;
+    case 'syncPush': syncPush(); break;
+    case 'syncPull': syncPull(); break;
+    case 'remoteInsert': remoteInsert(); break;
+    case 'viewRemoteDocs': viewRemoteDocs(); break;
+    case 'refreshOplog': refreshOplog(); break;
+    case 'deleteDoc': deleteDoc(el.dataset.id); break;
+    case 'dropIdx': dropIdx(el.dataset.name); break;
+  }
+});
+
+// Tab clicks
+document.querySelector('.tab-bar').addEventListener('click',function(e){
+  const tab=e.target.closest('.tab');
+  if(tab&&tab.dataset.tab) switchTab(tab.dataset.tab);
+});
+
+// Stage textarea changes (event delegation)
+document.addEventListener('change',function(e){
+  if(e.target.dataset.stageIdx!==undefined){
+    stages[Number(e.target.dataset.stageIdx)].value=e.target.value;
+  }
+});
 
 // ═══ Init ════════════════════════════════════════════════
 

@@ -85,6 +85,15 @@ impl StorageSession for OpfsSession {
         Ok(())
     }
 
+    fn rename_table(&self, from: &str, to: &str) -> StorageResult<()> {
+        let mut h = self.handles.lock().unwrap_or_else(|e| e.into_inner());
+        let handle = h
+            .remove(from)
+            .ok_or_else(|| StorageError::NotFound(format!("table {from} does not exist")))?;
+        h.insert(to.to_string(), handle);
+        Ok(())
+    }
+
     fn open_sibling_session(&self) -> StorageResult<Self> {
         Ok(OpfsSession {
             handles: self.handles.clone(),

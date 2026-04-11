@@ -279,8 +279,9 @@ class SyncManager(_PushMixin, _PullMixin, _MetricsMixin, _DLQMixin):
             return True
         try:
             return bool(self._active_sync_filter(doc))
-        except (KeyError, TypeError):
-            return True
+        except (KeyError, TypeError) as exc:
+            log.warning("Sync filter raised %s for doc %s; excluding document", exc, doc.get("_id"))
+            return False
 
     # -- background loop -----------------------------------------------
 
@@ -465,8 +466,8 @@ class SyncManager(_PushMixin, _PullMixin, _MetricsMixin, _DLQMixin):
             with self._ck_lock:
                 try:
                     self._rust.sync_kv_remove(self._ck_uri, suffix)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug("Failed to remove checkpoint %s: %s", suffix, exc)
 
         docs_synced = 0
         if winner == "server":

@@ -103,6 +103,15 @@ impl StorageSession for MemSession {
         Ok(())
     }
 
+    fn rename_table(&self, from: &str, to: &str) -> StorageResult<()> {
+        let mut tables = lock_map(&self.tables)?;
+        let data = tables
+            .remove(from)
+            .ok_or_else(|| StorageError::NotFound(format!("table {from} does not exist")))?;
+        tables.insert(to.to_string(), data);
+        Ok(())
+    }
+
     fn open_sibling_session(&self) -> StorageResult<Self> {
         Ok(MemSession {
             tables: self.tables.clone(),

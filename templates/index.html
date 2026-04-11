@@ -6,183 +6,7 @@
 <title>smongo | Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-:root{
-  --bg:#0a0c10;--surface:#12151c;--surface2:#1a1e28;--surface3:#222736;
-  --border:#2a3040;--border2:#343b50;
-  --text:#e8ecf4;--text2:#8892a8;--text3:#5c6580;
-  --green:#00ed64;--green2:#00c853;--green-bg:rgba(0,237,100,.08);
-  --red:#ff4d6a;--red-bg:rgba(255,77,106,.08);
-  --orange:#ffaa2c;--orange-bg:rgba(255,170,44,.08);
-  --blue:#3b82f6;--blue-bg:rgba(59,130,246,.08);
-  --purple:#a78bfa;--purple-bg:rgba(167,139,250,.08);
-  --cyan:#22d3ee;--cyan-bg:rgba(34,211,238,.08);
-  --mono:'JetBrains Mono',monospace;--sans:'Inter',system-ui,sans-serif;
-  --radius:10px;--radius-sm:6px;
-}
-body{font-family:var(--sans);background:var(--bg);color:var(--text);overflow-x:hidden;min-height:100vh}
-a{color:var(--green);text-decoration:none}
-::selection{background:rgba(0,237,100,.2)}
-::-webkit-scrollbar{width:6px;height:6px}
-::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
-
-/* ─── Header ──────────────────────────────────────────── */
-.hdr{display:flex;align-items:center;gap:14px;padding:0 24px;height:56px;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100}
-.logo{display:flex;align-items:center;gap:10px;font-size:16px;font-weight:800;letter-spacing:-.5px}
-.logo svg{width:28px;height:28px}
-.logo span{color:var(--green)}
-.pills{display:flex;gap:6px;margin-left:8px}
-.pill{font-size:10px;padding:3px 10px;border-radius:20px;background:var(--surface2);color:var(--text2);border:1px solid var(--border);font-weight:600;letter-spacing:.3px;text-transform:uppercase}
-.pill.on{background:var(--green-bg);color:var(--green);border-color:rgba(0,237,100,.25);animation:pulse 2s infinite}
-@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(0,237,100,.15)}50%{box-shadow:0 0 0 6px rgba(0,237,100,0)}}
-.hdr-right{margin-left:auto;display:flex;gap:8px;align-items:center}
-.hdr-stat{font-family:var(--mono);font-size:11px;color:var(--text2);display:flex;align-items:center;gap:6px;padding:0 12px;border-left:1px solid var(--border);height:32px}
-.hdr-stat .num{color:var(--green);font-weight:700;font-size:13px}
-
-/* ─── Tabs ────────────────────────────────────────────── */
-.tab-bar{display:flex;gap:0;padding:0 24px;background:var(--surface);border-bottom:1px solid var(--border)}
-.tab{padding:12px 20px;font-size:13px;font-weight:600;color:var(--text2);cursor:pointer;border-bottom:2px solid transparent;transition:all .15s;display:flex;align-items:center;gap:8px}
-.tab:hover{color:var(--text)}
-.tab.active{color:var(--green);border-bottom-color:var(--green)}
-.tab .tab-icon{width:14px;height:14px;opacity:.6}
-.tab.active .tab-icon{opacity:1}
-.tab-panel{display:none;padding:20px 24px}
-.tab-panel.active{display:block}
-
-/* ─── Layout helpers ──────────────────────────────────── */
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
-@media(max-width:1100px){.grid2,.grid3{grid-template-columns:1fr}}
-
-/* ─── Card ────────────────────────────────────────────── */
-.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;display:flex;flex-direction:column}
-.card.full{grid-column:1/-1}
-.card-hdr{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border);font-weight:600;font-size:13px}
-.card-hdr .dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
-.card-hdr .actions{margin-left:auto;display:flex;gap:6px}
-.card-hdr .badge-count{font-family:var(--mono);font-size:10px;background:var(--surface3);color:var(--text2);padding:2px 8px;border-radius:10px;font-weight:700}
-.card-body{padding:14px 16px;flex:1;overflow:auto;max-height:500px}
-
-/* ─── Buttons ─────────────────────────────────────────── */
-.btn{font-family:var(--sans);font-size:12px;font-weight:600;padding:7px 14px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--surface2);color:var(--text);cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:6px}
-.btn:hover{border-color:var(--green);color:var(--green)}
-.btn.primary{background:var(--green);color:#0a0c10;border-color:var(--green);font-weight:700}
-.btn.primary:hover{background:var(--green2);box-shadow:0 0 20px rgba(0,237,100,.15)}
-.btn.danger{border-color:var(--red);color:var(--red)}
-.btn.danger:hover{background:var(--red-bg)}
-.btn.ghost{border:none;background:none;color:var(--text2);padding:6px 10px}
-.btn.ghost:hover{color:var(--green);background:var(--green-bg)}
-.btn.sm{padding:4px 10px;font-size:11px}
-.btn.xs{padding:3px 8px;font-size:10px}
-
-/* ─── Tables ──────────────────────────────────────────── */
-table{width:100%;border-collapse:collapse;font-size:12px}
-th{text-align:left;padding:8px 10px;color:var(--text3);font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.6px;border-bottom:1px solid var(--border)}
-td{padding:7px 10px;border-bottom:1px solid rgba(42,48,64,.4);vertical-align:top;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-tr:hover td{background:rgba(0,237,100,.02)}
-
-/* ─── Code / Inputs ───────────────────────────────────── */
-.code{font-family:var(--mono);font-size:12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 14px;color:var(--text);resize:vertical;width:100%;min-height:38px;outline:none;line-height:1.6}
-.code:focus{border-color:var(--green);box-shadow:0 0 0 3px rgba(0,237,100,.08)}
-select.code{cursor:pointer}
-pre.json{font-family:var(--mono);font-size:11px;line-height:1.7;white-space:pre-wrap;word-break:break-word;color:var(--text2)}
-pre.json .k{color:var(--blue)}
-pre.json .s{color:var(--green)}
-pre.json .n{color:var(--orange)}
-pre.json .bool{color:var(--purple)}
-pre.json .null{color:var(--text3)}
-
-/* ─── Badges ──────────────────────────────────────────── */
-.badge{display:inline-flex;align-items:center;gap:4px;font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:4px;font-weight:700;text-transform:uppercase;letter-spacing:.3px}
-.badge.scan{background:var(--orange-bg);color:var(--orange)}
-.badge.idx{background:var(--green-bg);color:var(--green)}
-.badge.pk{background:var(--purple-bg);color:var(--purple)}
-
-/* ─── Chips (clickable query examples) ────────────────── */
-.chip{display:inline-block;font-family:var(--mono);font-size:11px;padding:5px 12px;border-radius:20px;border:1px solid var(--border);color:var(--text2);cursor:pointer;transition:all .15s;margin:0 4px 6px 0}
-.chip:hover{border-color:var(--green);color:var(--green);background:var(--green-bg)}
-
-/* ─── Shell ───────────────────────────────────────────── */
-.shell{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;display:flex;flex-direction:column;height:620px}
-.shell-toolbar{display:flex;align-items:center;gap:8px;padding:8px 14px;background:var(--surface);border-bottom:1px solid var(--border);font-size:12px;color:var(--text2)}
-.shell-toolbar .circles{display:flex;gap:6px}
-.shell-toolbar .circles span{width:10px;height:10px;border-radius:50%}
-.shell-output{flex:1;overflow-y:auto;padding:14px;font-family:var(--mono);font-size:12px;line-height:1.7}
-.shell-output .line{margin-bottom:2px}
-.shell-output .prompt{color:var(--green)}
-.shell-output .cmd{color:var(--text)}
-.shell-output .result{color:var(--text2);white-space:pre-wrap}
-.shell-output .err{color:var(--red)}
-.shell-output .info{color:var(--cyan);font-style:italic}
-.shell-output .timing{color:var(--text3);font-size:10px}
-.shell-input-row{display:flex;align-items:center;gap:0;padding:0 14px 12px;background:var(--bg)}
-.shell-input-row .prompt-char{color:var(--green);font-family:var(--mono);font-size:13px;font-weight:700;padding-right:8px}
-.shell-input{flex:1;background:transparent;border:none;color:var(--text);font-family:var(--mono);font-size:13px;outline:none;caret-color:var(--green)}
-
-/* ─── Oplog entry ─────────────────────────────────────── */
-.op-entry{display:flex;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid rgba(42,48,64,.3);font-size:11px}
-.op-entry:last-child{border:none}
-.op-tag{font-family:var(--mono);font-size:10px;padding:2px 8px;border-radius:4px;font-weight:700;min-width:80px;text-align:center;text-transform:uppercase}
-.op-tag.insert{background:var(--green-bg);color:var(--green)}
-.op-tag.update{background:var(--blue-bg);color:var(--blue)}
-.op-tag.delete{background:var(--red-bg);color:var(--red)}
-.op-tag.index_create{background:var(--purple-bg);color:var(--purple)}
-.op-tag.index_drop{background:var(--purple-bg);color:var(--purple)}
-
-/* ─── Sync visualization ─────────────────────────────── */
-.sync-viz{display:flex;align-items:center;justify-content:center;gap:0;padding:30px 0}
-.sync-node{text-align:center;flex:0 0 200px}
-.sync-node .icon{width:64px;height:64px;border-radius:16px;display:flex;align-items:center;justify-content:center;margin:0 auto 12px;font-size:28px;border:2px solid var(--border)}
-.sync-node.local .icon{background:var(--green-bg);border-color:rgba(0,237,100,.2)}
-.sync-node.remote .icon{background:var(--blue-bg);border-color:rgba(59,130,246,.2)}
-.sync-node .label{font-weight:700;font-size:14px;margin-bottom:4px}
-.sync-node .sub{color:var(--text2);font-size:11px}
-.sync-node .count{font-family:var(--mono);font-size:32px;font-weight:800;margin-top:8px}
-.sync-node.local .count{color:var(--green)}
-.sync-node.remote .count{color:var(--blue)}
-
-.sync-arrows{flex:0 0 160px;display:flex;flex-direction:column;align-items:center;gap:12px;position:relative}
-.sync-arrow{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:600;padding:6px 14px;border-radius:20px;cursor:pointer;transition:all .2s}
-.sync-arrow.push{background:var(--green-bg);color:var(--green);border:1px solid rgba(0,237,100,.2)}
-.sync-arrow.push:hover{background:rgba(0,237,100,.15);box-shadow:0 0 15px rgba(0,237,100,.1)}
-.sync-arrow.pull{background:var(--blue-bg);color:var(--blue);border:1px solid rgba(59,130,246,.2)}
-.sync-arrow.pull:hover{background:rgba(59,130,246,.15);box-shadow:0 0 15px rgba(59,130,246,.1)}
-.sync-arrow svg{width:16px;height:16px}
-
-/* ─── Aggregation stage cards ─────────────────────────── */
-.stage-card{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 14px;margin-bottom:8px;display:flex;align-items:flex-start;gap:10px}
-.stage-card .stage-num{font-family:var(--mono);font-size:10px;font-weight:700;color:var(--text3);background:var(--bg);padding:3px 8px;border-radius:4px;flex-shrink:0;margin-top:2px}
-.stage-card .stage-body{flex:1;overflow:hidden}
-.stage-card .stage-type{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--purple);margin-bottom:4px}
-.stage-card textarea{width:100%;min-height:32px;font-family:var(--mono);font-size:11px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:6px 10px;resize:vertical;outline:none}
-.stage-card textarea:focus{border-color:var(--green)}
-.stage-card .remove-stage{cursor:pointer;color:var(--text3);font-size:16px;line-height:1;padding:2px}
-.stage-card .remove-stage:hover{color:var(--red)}
-
-/* ─── Metric cards ────────────────────────────────────── */
-.metric{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;text-align:center}
-.metric .metric-val{font-family:var(--mono);font-size:28px;font-weight:800;margin-bottom:4px}
-.metric .metric-label{font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;font-weight:600}
-
-/* ─── Toast ───────────────────────────────────────────── */
-.toast-container{position:fixed;bottom:24px;right:24px;z-index:200;display:flex;flex-direction:column-reverse;gap:8px}
-.toast{padding:10px 18px;border-radius:var(--radius-sm);font-size:12px;font-weight:600;transition:all .3s;opacity:0;transform:translateY(10px);display:flex;align-items:center;gap:8px}
-.toast.show{opacity:1;transform:translateY(0)}
-.toast.ok{background:var(--green-bg);color:var(--green);border:1px solid rgba(0,237,100,.25)}
-.toast.err{background:var(--red-bg);color:var(--red);border:1px solid rgba(255,77,106,.25)}
-
-/* ─── Misc ────────────────────────────────────────────── */
-.empty{text-align:center;color:var(--text3);padding:40px 20px;font-size:12px}
-.row{display:flex;gap:8px;align-items:flex-end}
-.field{flex:1;display:flex;flex-direction:column;gap:4px}
-.label{font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.6px;font-weight:600}
-.mt{margin-top:14px}
-.divider{border-top:1px solid var(--border);margin:14px 0}
-.timer{font-family:var(--mono);font-size:10px;color:var(--text3);display:inline-flex;align-items:center;gap:4px}
-.timer svg{width:12px;height:12px}
-</style>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
 
@@ -200,38 +24,38 @@ pre.json .null{color:var(--text3)}
   <div class="hdr-right">
     <div class="hdr-stat">Docs <span class="num" id="hdrDocCount">-</span></div>
     <div class="hdr-stat">Indexes <span class="num" id="hdrIdxCount">-</span></div>
-    <button class="btn sm" onclick="seedData()">Reset &amp; Seed</button>
-    <button class="btn sm primary" onclick="toggleSync()" id="syncBtn">Start Sync</button>
+    <button class="btn sm" data-action="seedData">Reset &amp; Seed</button>
+    <button class="btn sm primary" data-action="toggleSync" id="syncBtn">Start Sync</button>
   </div>
 </header>
 
 <!-- ─── Tabs ─────────────────────────────────────────────── -->
 <nav class="tab-bar">
-  <div class="tab active" data-tab="shell" onclick="switchTab('shell')">
+  <div class="tab active" data-tab="shell">
     <svg class="tab-icon" viewBox="0 0 16 16" fill="none"><path d="M2 12l5-4-5-4M9 12h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
     Shell
   </div>
-  <div class="tab" data-tab="documents" onclick="switchTab('documents')">
+  <div class="tab" data-tab="documents">
     <svg class="tab-icon" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M5 6h6M5 8.5h4M5 11h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
     Documents
   </div>
-  <div class="tab" data-tab="query" onclick="switchTab('query')">
+  <div class="tab" data-tab="query">
     <svg class="tab-icon" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.3"/><path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
     Find &amp; Query
   </div>
-  <div class="tab" data-tab="aggregation" onclick="switchTab('aggregation')">
+  <div class="tab" data-tab="aggregation">
     <svg class="tab-icon" viewBox="0 0 16 16" fill="none"><path d="M2 3h12M4 6.5h8M6 10h4M7 13.5h2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
     Aggregation
   </div>
-  <div class="tab" data-tab="indexes" onclick="switchTab('indexes')">
+  <div class="tab" data-tab="indexes">
     <svg class="tab-icon" viewBox="0 0 16 16" fill="none"><path d="M8 2v12M4 5l4-3 4 3M4 11l4 3 4-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
     Indexes
   </div>
-  <div class="tab" data-tab="sync" onclick="switchTab('sync')">
+  <div class="tab" data-tab="sync">
     <svg class="tab-icon" viewBox="0 0 16 16" fill="none"><path d="M2 10c0-3.3 2.7-6 6-6h3M8 14c3.3 0 6-2.7 6-6V5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M9 1.5L11.5 4 9 6.5M7 9.5L4.5 12 7 14.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
     Sync
   </div>
-  <div class="tab" data-tab="oplog" onclick="switchTab('oplog')">
+  <div class="tab" data-tab="oplog">
     <svg class="tab-icon" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M5 5.5h6M5 8h4M5 10.5h5" stroke="currentColor" stroke-width="1" stroke-linecap="round" opacity=".6"/></svg>
     Oplog
   </div>
@@ -242,16 +66,16 @@ pre.json .null{color:var(--text3)}
      ═══════════════════════════════════════════════════════ -->
 <div class="tab-panel active" id="panel-shell">
   <div class="grid2">
-    <div style="grid-column:1/-1">
+    <div class="full-span">
       <div class="shell">
         <div class="shell-toolbar">
           <div class="circles">
-            <span style="background:var(--red)"></span>
-            <span style="background:var(--orange)"></span>
-            <span style="background:var(--green)"></span>
+            <span class="circle-red"></span>
+            <span class="circle-orange"></span>
+            <span class="circle-green"></span>
           </div>
           mongosh&nbsp;&mdash;&nbsp;smongo
-          <span style="margin-left:auto;font-size:10px;color:var(--text3)">Type commands like db.users.find({}) &bull; Arrow &uarr;&darr; for history</span>
+          <span class="toolbar-hint">Type commands like db.users.find({}) &bull; Arrow &uarr;&darr; for history</span>
         </div>
         <div class="shell-output" id="shellOutput">
           <div class="line info">Welcome to smongo shell (mongosh-compatible)</div>
@@ -281,36 +105,35 @@ pre.json .null{color:var(--text3)}
      ═══════════════════════════════════════════════════════ -->
 <div class="tab-panel" id="panel-documents">
   <div class="grid2">
-    <!-- Document list -->
-    <div class="card" style="grid-column:1/-1">
+    <div class="card full-span">
       <div class="card-hdr">
-        <div class="dot" style="background:var(--green)"></div>
+        <div class="dot dot-green"></div>
         Local Documents
         <span class="badge-count" id="docCountBadge">0</span>
         <div class="actions">
-          <button class="btn sm" onclick="refreshDocs()">Refresh</button>
-          <button class="btn sm primary" onclick="showInsertModal()">+ Insert</button>
+          <button class="btn sm" data-action="refreshDocs">Refresh</button>
+          <button class="btn sm primary" data-action="showInsertModal">+ Insert</button>
         </div>
       </div>
-      <div class="card-body" id="docsBody" style="max-height:600px">
+      <div class="card-body max-h-600" id="docsBody">
         <div class="empty">Loading...</div>
       </div>
     </div>
   </div>
 
   <!-- Insert modal -->
-  <div id="insertModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;display:none;align-items:center;justify-content:center">
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:500px;max-width:90vw">
+  <div id="insertModal" class="modal-overlay">
+    <div class="modal-box">
       <div class="card-hdr">
-        <div class="dot" style="background:var(--green)"></div>
+        <div class="dot dot-green"></div>
         Insert Document
-        <div class="actions"><button class="btn xs ghost" onclick="hideInsertModal()">&times;</button></div>
+        <div class="actions"><button class="btn xs ghost" data-action="hideInsertModal">&times;</button></div>
       </div>
-      <div style="padding:16px">
-        <textarea class="code" id="insertDocInput" rows="8" style="min-height:120px">{"name": "", "age": 0, "city": "", "dept": "", "tags": [], "salary": 0}</textarea>
-        <div class="mt" style="display:flex;gap:8px;justify-content:flex-end">
-          <button class="btn" onclick="hideInsertModal()">Cancel</button>
-          <button class="btn primary" onclick="insertFromModal()">Insert</button>
+      <div class="modal-body">
+        <textarea class="code insert-area" id="insertDocInput" rows="8">{"name": "", "age": 0, "city": "", "dept": "", "tags": [], "salary": 0}</textarea>
+        <div class="mt flex-end">
+          <button class="btn" data-action="hideInsertModal">Cancel</button>
+          <button class="btn primary" data-action="insertFromModal">Insert</button>
         </div>
       </div>
     </div>
@@ -322,23 +145,23 @@ pre.json .null{color:var(--text3)}
      ═══════════════════════════════════════════════════════ -->
 <div class="tab-panel" id="panel-query">
   <div class="grid2">
-    <div class="card" style="grid-column:1/-1">
+    <div class="card full-span">
       <div class="card-hdr">
-        <div class="dot" style="background:var(--blue)"></div>
+        <div class="dot dot-blue"></div>
         Find Query
         <div class="actions" id="queryTimer"></div>
       </div>
-      <div class="card-body" style="max-height:none">
-        <div class="label" style="margin-bottom:8px">Quick Examples</div>
-        <div id="queryChips" style="margin-bottom:14px">
-          <span class="chip" onclick="setQuery('{}')">All docs</span>
-          <span class="chip" onclick="setQuery('{&quot;age&quot;:{&quot;$gt&quot;:30}}')">age &gt; 30</span>
-          <span class="chip" onclick="setQuery('{&quot;city&quot;:&quot;NYC&quot;}')">city = NYC</span>
-          <span class="chip" onclick="setQuery('{&quot;dept&quot;:&quot;engineering&quot;}')">engineering</span>
-          <span class="chip" onclick="setQuery('{&quot;salary&quot;:{&quot;$gte&quot;:140000}}')">salary &ge; 140k</span>
-          <span class="chip" onclick="setQuery('{&quot;$or&quot;:[{&quot;city&quot;:&quot;SF&quot;},{&quot;city&quot;:&quot;LA&quot;}]}')">SF or LA</span>
-          <span class="chip" onclick="setQuery('{&quot;tags&quot;:{&quot;$in&quot;:[&quot;python&quot;]}}')">has python</span>
-          <span class="chip" onclick="setQuery('{&quot;name&quot;:{&quot;$ne&quot;:&quot;Alice&quot;}}')">not Alice</span>
+      <div class="card-body max-h-none">
+        <div class="label mb-8">Quick Examples</div>
+        <div id="queryChips" class="mb-14">
+          <span class="chip" data-action="setQuery" data-query="{}">All docs</span>
+          <span class="chip" data-action="setQuery" data-query="{&quot;age&quot;:{&quot;$gt&quot;:30}}">age &gt; 30</span>
+          <span class="chip" data-action="setQuery" data-query="{&quot;city&quot;:&quot;NYC&quot;}">city = NYC</span>
+          <span class="chip" data-action="setQuery" data-query="{&quot;dept&quot;:&quot;engineering&quot;}">engineering</span>
+          <span class="chip" data-action="setQuery" data-query="{&quot;salary&quot;:{&quot;$gte&quot;:140000}}">salary &ge; 140k</span>
+          <span class="chip" data-action="setQuery" data-query="{&quot;$or&quot;:[{&quot;city&quot;:&quot;SF&quot;},{&quot;city&quot;:&quot;LA&quot;}]}">SF or LA</span>
+          <span class="chip" data-action="setQuery" data-query="{&quot;tags&quot;:{&quot;$in&quot;:[&quot;python&quot;]}}">has python</span>
+          <span class="chip" data-action="setQuery" data-query="{&quot;name&quot;:{&quot;$ne&quot;:&quot;Alice&quot;}}">not Alice</span>
         </div>
         <div class="row">
           <div class="field">
@@ -346,14 +169,14 @@ pre.json .null{color:var(--text3)}
             <textarea class="code" id="queryInput" rows="3">{"age": {"$gt": 30}}</textarea>
           </div>
         </div>
-        <div class="mt" style="display:flex;gap:8px;align-items:center">
-          <button class="btn primary" onclick="runQuery()">Execute</button>
-          <button class="btn" onclick="setQuery('{}');runQuery()">Show All</button>
-          <button class="btn" onclick="explainQuery()">Explain</button>
+        <div class="mt flex-actions">
+          <button class="btn primary" data-action="runQuery">Execute</button>
+          <button class="btn" data-action="showAll">Show All</button>
+          <button class="btn" data-action="explainQuery">Explain</button>
         </div>
         <div class="divider"></div>
-        <div id="queryPlan" style="margin-bottom:10px"></div>
-        <pre class="json" id="queryResults" style="max-height:400px;overflow:auto"></pre>
+        <div id="queryPlan" class="mb-10"></div>
+        <pre class="json max-h-600" id="queryResults"></pre>
       </div>
     </div>
   </div>
@@ -367,37 +190,37 @@ pre.json .null{color:var(--text3)}
     <!-- Pipeline builder -->
     <div class="card">
       <div class="card-hdr">
-        <div class="dot" style="background:var(--purple)"></div>
+        <div class="dot dot-purple"></div>
         Pipeline Builder
         <div class="actions">
-          <button class="btn xs" onclick="addStage('$match')">+ $match</button>
-          <button class="btn xs" onclick="addStage('$group')">+ $group</button>
-          <button class="btn xs" onclick="addStage('$sort')">+ $sort</button>
-          <button class="btn xs" onclick="addStage('$project')">+ $project</button>
-          <button class="btn xs" onclick="addStage('$unwind')">+ $unwind</button>
-          <button class="btn xs" onclick="addStage('$lookup')">+ $lookup</button>
-          <button class="btn xs" onclick="addStage('$addFields')">+ $addFields</button>
-          <button class="btn xs" onclick="addStage('$replaceRoot')">+ $replaceRoot</button>
-          <button class="btn xs" onclick="addStage('$count')">+ $count</button>
-          <button class="btn xs" onclick="addStage('$limit')">+ $limit</button>
-          <button class="btn xs" onclick="addStage('$skip')">+ $skip</button>
+          <button class="btn xs" data-action="addStage" data-stage="$match">+ $match</button>
+          <button class="btn xs" data-action="addStage" data-stage="$group">+ $group</button>
+          <button class="btn xs" data-action="addStage" data-stage="$sort">+ $sort</button>
+          <button class="btn xs" data-action="addStage" data-stage="$project">+ $project</button>
+          <button class="btn xs" data-action="addStage" data-stage="$unwind">+ $unwind</button>
+          <button class="btn xs" data-action="addStage" data-stage="$lookup">+ $lookup</button>
+          <button class="btn xs" data-action="addStage" data-stage="$addFields">+ $addFields</button>
+          <button class="btn xs" data-action="addStage" data-stage="$replaceRoot">+ $replaceRoot</button>
+          <button class="btn xs" data-action="addStage" data-stage="$count">+ $count</button>
+          <button class="btn xs" data-action="addStage" data-stage="$limit">+ $limit</button>
+          <button class="btn xs" data-action="addStage" data-stage="$skip">+ $skip</button>
         </div>
       </div>
-      <div class="card-body" style="max-height:none">
-        <div class="label" style="margin-bottom:10px">Example Pipelines</div>
-        <div style="margin-bottom:14px">
-          <span class="chip" onclick="loadPipeline('countByCity')">Count by city</span>
-          <span class="chip" onclick="loadPipeline('avgSalaryByDept')">Avg salary/dept</span>
-          <span class="chip" onclick="loadPipeline('topEarners')">Top 3 earners</span>
-          <span class="chip" onclick="loadPipeline('tagBreakdown')">Tag breakdown</span>
-          <span class="chip" onclick="loadPipeline('nycEngineers')">NYC engineers</span>
-          <span class="chip" onclick="loadPipeline('deptCount')">$count stage</span>
-          <span class="chip" onclick="loadPipeline('withLookup')">$lookup join</span>
+      <div class="card-body max-h-none">
+        <div class="label mb-10">Example Pipelines</div>
+        <div class="mb-14">
+          <span class="chip" data-action="loadPipeline" data-pipeline="countByCity">Count by city</span>
+          <span class="chip" data-action="loadPipeline" data-pipeline="avgSalaryByDept">Avg salary/dept</span>
+          <span class="chip" data-action="loadPipeline" data-pipeline="topEarners">Top 3 earners</span>
+          <span class="chip" data-action="loadPipeline" data-pipeline="tagBreakdown">Tag breakdown</span>
+          <span class="chip" data-action="loadPipeline" data-pipeline="nycEngineers">NYC engineers</span>
+          <span class="chip" data-action="loadPipeline" data-pipeline="deptCount">$count stage</span>
+          <span class="chip" data-action="loadPipeline" data-pipeline="withLookup">$lookup join</span>
         </div>
         <div id="stagesContainer"></div>
         <div class="mt">
-          <button class="btn primary" onclick="runAggregate()">Run Pipeline</button>
-          <button class="btn" onclick="clearStages()">Clear All</button>
+          <button class="btn primary" data-action="runAggregate">Run Pipeline</button>
+          <button class="btn" data-action="clearStages">Clear All</button>
         </div>
       </div>
     </div>
@@ -405,12 +228,12 @@ pre.json .null{color:var(--text3)}
     <!-- Results -->
     <div class="card">
       <div class="card-hdr">
-        <div class="dot" style="background:var(--orange)"></div>
+        <div class="dot dot-orange"></div>
         Pipeline Results
         <div class="actions" id="aggTimer"></div>
       </div>
-      <div class="card-body" style="max-height:none">
-        <pre class="json" id="aggResults" style="max-height:500px;overflow:auto"><span style="color:var(--text3)">Build a pipeline and click Run</span></pre>
+      <div class="card-body max-h-none">
+        <pre class="json agg-hint" id="aggResults">Build a pipeline and click Run</pre>
       </div>
     </div>
   </div>
@@ -423,12 +246,12 @@ pre.json .null{color:var(--text3)}
   <div class="grid2">
     <div class="card">
       <div class="card-hdr">
-        <div class="dot" style="background:var(--purple)"></div>
+        <div class="dot dot-purple"></div>
         B-Tree Indexes
         <span class="badge-count" id="idxCountBadge">0</span>
-        <div class="actions"><button class="btn sm" onclick="refreshIndexes()">Refresh</button></div>
+        <div class="actions"><button class="btn sm" data-action="refreshIndexes">Refresh</button></div>
       </div>
-      <div class="card-body" style="max-height:none">
+      <div class="card-body max-h-none">
         <table>
           <thead><tr><th>Name</th><th>Keys</th><th>Unique</th><th>Sparse</th><th></th></tr></thead>
           <tbody id="idxBody"></tbody>
@@ -438,43 +261,43 @@ pre.json .null{color:var(--text3)}
 
     <div class="card">
       <div class="card-hdr">
-        <div class="dot" style="background:var(--green)"></div>
+        <div class="dot dot-green"></div>
         Create Index
       </div>
-      <div class="card-body" style="max-height:none">
-        <div class="label" style="margin-bottom:8px">Quick Index Templates</div>
-        <div style="margin-bottom:14px">
-          <span class="chip" onclick="setIdxKeys('[&quot;name&quot;]', true)">Unique name</span>
-          <span class="chip" onclick="setIdxKeys('[[&quot;age&quot;, 1]]')">age ASC</span>
-          <span class="chip" onclick="setIdxKeys('[[&quot;salary&quot;, -1]]')">salary DESC</span>
-          <span class="chip" onclick="setIdxKeys('[[&quot;city&quot;, 1], [&quot;salary&quot;, -1]]')">city + salary</span>
-          <span class="chip" onclick="setIdxKeys('[[&quot;dept&quot;, 1], [&quot;age&quot;, 1]]')">dept + age</span>
+      <div class="card-body max-h-none">
+        <div class="label mb-8">Quick Index Templates</div>
+        <div class="mb-14">
+          <span class="chip" data-action="setIdxKeys" data-keys='["name"]' data-unique="true">Unique name</span>
+          <span class="chip" data-action="setIdxKeys" data-keys='[["age", 1]]'>age ASC</span>
+          <span class="chip" data-action="setIdxKeys" data-keys='[["salary", -1]]'>salary DESC</span>
+          <span class="chip" data-action="setIdxKeys" data-keys='[["city", 1], ["salary", -1]]'>city + salary</span>
+          <span class="chip" data-action="setIdxKeys" data-keys='[["dept", 1], ["age", 1]]'>dept + age</span>
         </div>
         <div class="row">
           <div class="field">
             <div class="label">Key Specification (JSON)</div>
-            <input class="code" id="newIdxKeys" value='[["age", 1]]' style="min-height:auto;padding:8px 12px">
+            <input class="code min-h-auto" id="newIdxKeys" value='[["age", 1]]'>
           </div>
           <div class="field" style="flex:0 0 80px">
             <div class="label">Unique</div>
-            <select class="code" id="newIdxUnique" style="min-height:auto;padding:7px 8px"><option value="false">No</option><option value="true">Yes</option></select>
+            <select class="code select-min" id="newIdxUnique"><option value="false">No</option><option value="true">Yes</option></select>
           </div>
           <div class="field" style="flex:0 0 130px">
             <div class="label">TTL seconds</div>
-            <input class="code" id="newIdxTtl" value="" placeholder="optional" style="min-height:auto;padding:8px 12px">
+            <input class="code min-h-auto" id="newIdxTtl" value="" placeholder="optional">
           </div>
-          <button class="btn primary" style="align-self:flex-end" onclick="createIdx()">Create</button>
+          <button class="btn primary align-end" data-action="createIdx">Create</button>
         </div>
         <div class="divider"></div>
-        <div class="label" style="margin-bottom:8px">Query Plan Tester</div>
+        <div class="label mb-8">Query Plan Tester</div>
         <div class="row">
           <div class="field">
             <div class="label">Query</div>
-            <input class="code" id="planQuery" value='{"age": {"$gt": 30}}' style="min-height:auto;padding:8px 12px">
+            <input class="code min-h-auto" id="planQuery" value='{"age": {"$gt": 30}}'>
           </div>
-          <button class="btn" style="align-self:flex-end" onclick="testPlan()">Explain</button>
+          <button class="btn align-end" data-action="testPlan">Explain</button>
         </div>
-        <pre class="json" id="planResult" style="margin-top:10px"></pre>
+        <pre class="json mt-10" id="planResult"></pre>
       </div>
     </div>
   </div>
@@ -493,15 +316,15 @@ pre.json .null{color:var(--text3)}
       <div class="label">Local Engine</div>
       <div class="sub">Embedded B-tree (redb)</div>
       <div class="count" id="localCount">-</div>
-      <div style="color:var(--text3);font-size:11px">documents</div>
+      <div class="color-text3" style="font-size:11px">documents</div>
     </div>
 
     <div class="sync-arrows">
-      <div class="sync-arrow push" onclick="syncPush()" title="Push local changes to remote">
+      <div class="sync-arrow push" data-action="syncPush" title="Push local changes to remote">
         Push &rarr;
       </div>
-      <div style="font-size:10px;color:var(--text3);font-weight:600" id="syncLabel">DISCONNECTED</div>
-      <div class="sync-arrow pull" onclick="syncPull()" title="Pull remote changes to local">
+      <div class="color-text3" style="font-size:10px;font-weight:600" id="syncLabel">DISCONNECTED</div>
+      <div class="sync-arrow pull" data-action="syncPull" title="Pull remote changes to local">
         &larr; Pull
       </div>
     </div>
@@ -513,7 +336,7 @@ pre.json .null{color:var(--text3)}
       <div class="label">Remote MongoDB</div>
       <div class="sub">Atlas-compatible</div>
       <div class="count" id="remoteCount">-</div>
-      <div style="color:var(--text3);font-size:11px">documents</div>
+      <div class="color-text3" style="font-size:11px">documents</div>
     </div>
   </div>
 
@@ -521,28 +344,28 @@ pre.json .null{color:var(--text3)}
     <!-- Sync controls -->
     <div class="card">
       <div class="card-hdr">
-        <div class="dot" style="background:var(--orange)"></div>
+        <div class="dot dot-orange"></div>
         Sync Controls
       </div>
       <div class="card-body">
-        <div class="grid3" style="margin-bottom:16px">
+        <div class="grid3 sync-metric-grid">
           <div class="metric">
-            <div class="metric-val" style="color:var(--green)" id="syncPushCount">0</div>
+            <div class="metric-val color-green" id="syncPushCount">0</div>
             <div class="metric-label">Pushed</div>
           </div>
           <div class="metric">
-            <div class="metric-val" style="color:var(--blue)" id="syncPullCount">0</div>
+            <div class="metric-val color-blue" id="syncPullCount">0</div>
             <div class="metric-label">Pulled</div>
           </div>
           <div class="metric">
-            <div class="metric-val" style="color:var(--orange)" id="syncConflicts">0</div>
+            <div class="metric-val color-orange" id="syncConflicts">0</div>
             <div class="metric-label">Conflicts</div>
           </div>
         </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn primary" onclick="syncPush()">Push Now</button>
-          <button class="btn" onclick="syncPull()">Pull Now</button>
-          <button class="btn" onclick="toggleSync()" id="syncBtn2">Start Auto-Sync</button>
+        <div class="flex-wrap">
+          <button class="btn primary" data-action="syncPush">Push Now</button>
+          <button class="btn" data-action="syncPull">Pull Now</button>
+          <button class="btn" data-action="toggleSync" id="syncBtn2">Start Auto-Sync</button>
         </div>
         <div class="divider"></div>
         <pre class="json" id="syncStatusPre" style="font-size:10px"></pre>
@@ -552,20 +375,20 @@ pre.json .null{color:var(--text3)}
     <!-- Remote insert simulator -->
     <div class="card">
       <div class="card-hdr">
-        <div class="dot" style="background:var(--blue)"></div>
+        <div class="dot dot-blue"></div>
         Remote Client Simulator
       </div>
       <div class="card-body">
-        <p style="font-size:12px;color:var(--text2);margin-bottom:12px">Simulate another client inserting directly into MongoDB Atlas. Then pull to sync locally.</p>
+        <p class="sync-info">Simulate another client inserting directly into MongoDB Atlas. Then pull to sync locally.</p>
         <div class="field">
           <div class="label">Document to insert into remote</div>
           <textarea class="code" id="remoteDoc" rows="3">{"name": "Zara", "age": 26, "city": "BOS", "dept": "data", "tags": ["python"], "salary": 115000}</textarea>
         </div>
-        <div class="mt" style="display:flex;gap:8px">
-          <button class="btn" onclick="remoteInsert()">Insert into Remote</button>
-          <button class="btn" onclick="viewRemoteDocs()">View Remote Docs</button>
+        <div class="mt flex-actions">
+          <button class="btn" data-action="remoteInsert">Insert into Remote</button>
+          <button class="btn" data-action="viewRemoteDocs">View Remote Docs</button>
         </div>
-        <pre class="json" id="remoteDocs" style="margin-top:12px;max-height:200px;overflow:auto"></pre>
+        <pre class="json mt-12" id="remoteDocs" style="max-height:200px;overflow:auto"></pre>
       </div>
     </div>
   </div>
@@ -577,12 +400,12 @@ pre.json .null{color:var(--text3)}
 <div class="tab-panel" id="panel-oplog">
   <div class="card full">
     <div class="card-hdr">
-      <div class="dot" style="background:var(--red)"></div>
+      <div class="dot dot-red"></div>
       Operations Log (Oplog)
       <span class="badge-count" id="oplogCountBadge">0</span>
-      <div class="actions"><button class="btn sm" onclick="refreshOplog()">Refresh</button></div>
+      <div class="actions"><button class="btn sm" data-action="refreshOplog">Refresh</button></div>
     </div>
-    <div class="card-body" id="oplogBody" style="max-height:600px">
+    <div class="card-body max-h-600" id="oplogBody">
       <div class="empty">Loading...</div>
     </div>
   </div>

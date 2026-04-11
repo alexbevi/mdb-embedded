@@ -7,7 +7,7 @@
 #
 services:
   wasm-demos:
-    image: nginx:alpine
+    image: nginx:1.27-alpine
     ports:
       - "8080:80"
     volumes:

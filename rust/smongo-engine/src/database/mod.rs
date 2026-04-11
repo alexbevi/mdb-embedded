@@ -270,6 +270,38 @@ impl<B: StorageBackend> Database<B> {
         Ok(())
     }
 
+    /// Atomically rename a collection (and its satellite tables: indexes, metadata).
+    ///
+    /// On redb this executes inside a single write transaction -- a crash at any
+    /// point either completes the full rename or leaves the original intact.
+    pub fn rename_collection(&self, from: &str, to: &str) -> DatabaseResult<()> {
+        let prefix = self.table_prefix.as_deref().unwrap_or("");
+        let src_table = format!("{prefix}{from}");
+        let dst_table = format!("{prefix}{to}");
+
+        let all_tables = self.backend.list_tables()?;
+        if !all_tables.iter().any(|t| t == &src_table) {
+            return Err(DatabaseError::CollectionNotFound(from.to_string()));
+        }
+
+        let child_prefix = format!("{src_table}.");
+        let session = self.backend.open_session()?;
+
+        // Rename the primary document table.
+        session.rename_table(&src_table, &dst_table)?;
+
+        // Rename satellite tables (indexes, metadata) by swapping the prefix.
+        let dst_child_prefix = format!("{dst_table}.");
+        for table in &all_tables {
+            if let Some(suffix) = table.strip_prefix(&child_prefix) {
+                let new_name = format!("{dst_child_prefix}{suffix}");
+                let _ = session.rename_table(table, &new_name);
+            }
+        }
+
+        Ok(())
+    }
+
     /// Drop the entire database (deletes all data files).
     ///
     /// Only available on native targets (requires filesystem).

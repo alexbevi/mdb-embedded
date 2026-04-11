@@ -331,6 +331,46 @@ impl RedbLocalDB {
             .map_err(|e| PyRuntimeError::new_err(format!("list_collection_names: {}", e)))
     }
 
+    /// Atomically rename a collection (single redb write transaction).
+    ///
+    /// Also renames the oplog table and evicts stale cached handles.
+    pub fn rename_collection(
+        &self,
+        py: Python<'_>,
+        from: &str,
+        to: &str,
+        drop_target: bool,
+    ) -> PyResult<()> {
+        // If the destination already exists, optionally drop it first.
+        let existing = self.db.list_collection_names()
+            .map_err(|e| PyRuntimeError::new_err(format!("list_collection_names: {e}")))?;
+        if existing.iter().any(|n| n == to) {
+            if !drop_target {
+                return Err(PyRuntimeError::new_err(format!(
+                    "target collection {to} already exists"
+                )));
+            }
+            self.drop_collection(py, to)?;
+        }
+        // Atomic rename of the data + satellite tables.
+        self.db
+            .rename_collection(from, to)
+            .map_err(|e| PyRuntimeError::new_err(format!("rename_collection: {e}")))?;
+        // Best-effort rename of the oplog table.
+        let old_oplog = format!("__oplog_{}_{}", self.db_name, from);
+        let new_oplog = format!("__oplog_{}_{}", self.db_name, to);
+        if let Ok(session) = self.db.open_storage_session() {
+            let _ = session.rename_table(&old_oplog, &new_oplog);
+        }
+        // Evict stale cached handles.
+        {
+            let mut colls = self.collections.lock();
+            colls.remove(from);
+            colls.remove(to);
+        }
+        Ok(())
+    }
+
     /// Drop the collection table, best-effort drop of its oplog table, and evict cached handles.
     pub fn drop_collection(&self, _py: Python<'_>, name: &str) -> PyResult<()> {
         {

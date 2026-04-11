@@ -38,13 +38,18 @@ def _estimate_docs_bytes(docs: list[dict[str, Any]]) -> int:
 def _write_chunk_to_file(chunk: list[dict[str, Any]]) -> str:
     """Write a list of docs as JSON-lines to a temp file, return its path."""
     fd, path = tempfile.mkstemp(suffix=".jsonl", prefix="smongo_spill_")
+    f = None
     try:
-        with os.fdopen(fd, "w") as f:
-            for doc in chunk:
-                f.write(json.dumps(doc, default=str))
-                f.write("\n")
+        f = os.fdopen(fd, "w")
+        for doc in chunk:
+            f.write(json.dumps(doc, default=str))
+            f.write("\n")
+        f.close()
     except BaseException:
-        os.close(fd)
+        if f is not None:
+            f.close()
+        else:
+            os.close(fd)
         raise
     return path
 

@@ -48,8 +48,8 @@ class _MetricsMixin:
             key = f"{time.time_ns():020d}-{uuid.uuid4()}"
             with self._ck_lock:
                 self._rust.sync_kv_put(self._conflict_log_uri, key, json.dumps(entry, default=str))
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Failed to persist conflict log entry: %s", exc)
         log.info(
             "Conflict resolved: ns=%s doc_id=%s strategy=%s fields=%s",
             ns,
@@ -65,7 +65,8 @@ class _MetricsMixin:
                 rows = self._rust.sync_kv_scan(self._conflict_log_uri)
             entries = [json.loads(v) for _, v in rows]
             return entries[-limit:]
-        except Exception:
+        except Exception as exc:
+            log.debug("Failed to read persistent conflict log: %s", exc)
             with self._lock:
                 return list(self._conflict_log[-limit:])
 
@@ -83,8 +84,8 @@ class _MetricsMixin:
                 with self._ck_lock:
                     for k, _ in to_remove:
                         self._rust.sync_kv_remove(self._conflict_log_uri, k)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Failed to rotate persistent conflict log: %s", exc)
 
     # -- counter persistence -------------------------------------------
 
@@ -104,8 +105,8 @@ class _MetricsMixin:
                     "counters",
                     json.dumps(counters),
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Failed to persist sync counters: %s", exc)
 
     def _load_counters(self) -> None:
         """Restore sync counters from persistent storage."""
@@ -119,8 +120,8 @@ class _MetricsMixin:
                 self._conflict_count = counters.get("conflicts", 0)
                 self._error_count = counters.get("errors", 0)
                 self._cycle_count = counters.get("cycles", 0)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Failed to load persisted counters: %s", exc)
 
     # -- index hash ----------------------------------------------------
 

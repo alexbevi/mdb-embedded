@@ -222,22 +222,17 @@ def _cmd_rename_collection(
     src_db, src_coll = src_ns.split(".", 1)
     dst_db, dst_coll = dst_ns.split(".", 1)
 
-    src_collection = ctx.get_collection(src_db, src_coll)
-    docs = src_collection.get_all()
+    if src_db != dst_db:
+        return make_error(
+            "InvalidNamespace",
+            "renameCollection across databases is not supported in embedded mode",
+        )
 
-    dst_collection = ctx.get_collection(dst_db, dst_coll)
-    existing = dst_collection.get_all()
-    if existing and not drop_target:
-        return make_error("NamespaceExists", f"target namespace {dst_ns} already exists")
-    if existing and drop_target:
-        dst_collection.delete({}, multi=True)
-
-    for doc in docs:
-        dst_collection.insert_one(doc)
-
-    src_collection.delete({}, multi=True)
-    src_dbobj = ctx.get_db(src_db)
-    src_dbobj.drop_collection(src_coll)
+    db = ctx.get_db(src_db)
+    try:
+        db.rename_collection(src_coll, dst_coll, drop_target)
+    except Exception as exc:
+        return make_error("NamespaceExists", str(exc))
 
     return {"ok": 1.0}
 

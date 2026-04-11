@@ -199,7 +199,7 @@ class MongoClient:
         if self._sync_mgr:
             self._sync_mgr.stop()
             self._sync_mgr = None
-        if self.mode in ("local", "hybrid") and hasattr(self.client, "close"):
+        if hasattr(self.client, "close"):
             self.client.close()
 
     def list_database_names(self) -> list[str]:

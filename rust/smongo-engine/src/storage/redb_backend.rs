@@ -198,6 +198,40 @@ impl StorageSession for RedbSession {
         Ok(())
     }
 
+    fn rename_table(&self, from: &str, to: &str) -> StorageResult<()> {
+        let from_static = intern_table_name(from);
+        let to_static = intern_table_name(to);
+        let txn = self
+            .db
+            .begin_write()
+            .map_err(|e| StorageError::Other(e.to_string()))?;
+        {
+            let src = match txn.open_table(table_def(from_static)) {
+                Ok(t) => t,
+                Err(redb::TableError::TableDoesNotExist(_)) => {
+                    return Err(StorageError::NotFound(format!("table {from} does not exist")));
+                }
+                Err(e) => return Err(StorageError::Other(e.to_string())),
+            };
+            let mut dst = txn
+                .open_table(table_def(to_static))
+                .map_err(|e| StorageError::Other(e.to_string()))?;
+            let iter = src
+                .iter()
+                .map_err(|e| StorageError::Other(e.to_string()))?;
+            for item in iter {
+                let (k, v) = item.map_err(|e| StorageError::Other(e.to_string()))?;
+                dst.insert(k.value(), v.value())
+                    .map_err(|e| StorageError::Other(e.to_string()))?;
+            }
+        }
+        txn.delete_table(table_def(from_static))
+            .map_err(|e| StorageError::Other(e.to_string()))?;
+        txn.commit()
+            .map_err(|e| StorageError::Other(e.to_string()))?;
+        Ok(())
+    }
+
     fn open_sibling_session(&self) -> StorageResult<Self> {
         Ok(RedbSession {
             db: self.db.clone(),

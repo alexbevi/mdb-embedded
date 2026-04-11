@@ -8,6 +8,7 @@ const MAX_COLL_LEN = 256;
 const MAX_COLLECTIONS = 256;
 
 let db = null;
+let initInProgress = false;
 
 /**
  * @param {number} id
@@ -74,6 +75,10 @@ self.onmessage = async (e) => {
           postErr(id, new Error('OPFS worker already initialized'), 'OPFS_ALREADY_INITIALIZED');
           break;
         }
+        if (initInProgress) {
+          postErr(id, new Error('OPFS worker init already in progress'), 'OPFS_ALREADY_INITIALIZED');
+          break;
+        }
 
         const { dbName, collections } = p;
         if (!validDbName(dbName)) {
@@ -89,26 +94,33 @@ self.onmessage = async (e) => {
           break;
         }
 
-        await init();
+        initInProgress = true;
+        try {
+          await init();
 
-        const root = await navigator.storage.getDirectory();
-        const dbDir = await root.getDirectoryHandle(dbName, { create: true });
+          const root = await navigator.storage.getDirectory();
+          const dbDir = await root.getDirectoryHandle(dbName, { create: true });
 
-        for (const collName of collections) {
-          await dbDir.getFileHandle(collName, { create: true });
-        }
-
-        const handlesMap = new Map();
-        for await (const [tableName, entry] of dbDir.entries()) {
-          if (entry.kind === 'file') {
-            const fileHandle = await dbDir.getFileHandle(tableName);
-            const syncHandle = await fileHandle.createSyncAccessHandle();
-            handlesMap.set(tableName, syncHandle);
+          for (const collName of collections) {
+            await dbDir.getFileHandle(collName, { create: true });
           }
-        }
 
-        db = new WasmOpfsDatabase(dbName, handlesMap);
-        self.postMessage({ id, result: { success: true } });
+          const handlesMap = new Map();
+          for await (const [tableName, entry] of dbDir.entries()) {
+            if (entry.kind === 'file') {
+              const fileHandle = await dbDir.getFileHandle(tableName);
+              const syncHandle = await fileHandle.createSyncAccessHandle();
+              handlesMap.set(tableName, syncHandle);
+            }
+          }
+
+          db = new WasmOpfsDatabase(dbName, handlesMap);
+          self.postMessage({ id, result: { success: true } });
+        } catch (err) {
+          postErr(id, err, 'OPFS_WORKER_ERROR');
+        } finally {
+          initInProgress = false;
+        }
         break;
       }
 
@@ -410,6 +422,10 @@ self.onmessage = async (e) => {
       }
 
       case 'shutdown': {
+        if (initInProgress) {
+          postErr(id, new Error('Cannot shutdown while init is in progress'), 'OPFS_WORKER_ERROR');
+          break;
+        }
         if (db) {
           db.free();
           db = null;

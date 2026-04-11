@@ -35,12 +35,16 @@ class TransactionSession:
         _txn_state.session = None
 
     def commit(self) -> None:
-        self._rust.wire_txn_commit()
-        self.deactivate()
+        try:
+            self._rust.wire_txn_commit()
+        finally:
+            self.deactivate()
 
     def rollback(self) -> None:
-        self._rust.wire_txn_abort()
-        self.deactivate()
+        try:
+            self._rust.wire_txn_abort()
+        finally:
+            self.deactivate()
 
 
 def get_active_txn_session() -> Any | None:

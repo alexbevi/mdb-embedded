@@ -144,12 +144,13 @@ class _PushMixin:
                 ops.append(UpdateOne({"_id": _to_pymongo(doc_id)}, update_spec, upsert=True))
                 op_entries.append(entry)
                 field_key = (ns, str(doc_id))
-                self._local_field_history[field_key] = set(changed_fields)
-                cum = self._cumulative_field_history.get(field_key, set())
-                cum.update(changed_fields)
-                self._cumulative_field_history[field_key] = cum
-                if _is_commutative_op(payload):
-                    self._local_update_specs[field_key] = dict(payload)
+                with self._lock:
+                    self._local_field_history[field_key] = set(changed_fields)
+                    cum = self._cumulative_field_history.get(field_key, set())
+                    cum.update(changed_fields)
+                    self._cumulative_field_history[field_key] = cum
+                    if _is_commutative_op(payload):
+                        self._local_update_specs[field_key] = dict(payload)
             elif op == "delete":
                 ops.append(DeleteOne({"_id": _to_pymongo(doc_id)}))
                 op_entries.append(entry)
@@ -206,9 +207,10 @@ class _PushMixin:
 
         self._push_index_defs(ns, local_coll, remote_coll)
 
-        stats = self._ensure_ns_stats(ns)
-        stats["last_push_ts"] = time.time()
-        stats["last_push_count"] = ns_pushed
+        with self._lock:
+            stats = self._ensure_ns_stats(ns)
+            stats["last_push_ts"] = time.time()
+            stats["last_push_count"] = ns_pushed
 
     @staticmethod
     def _extract_index_options(idx: dict[str, Any]) -> dict[str, Any]:
@@ -259,9 +261,10 @@ class _PushMixin:
         local_hash = self._compute_index_hash(local_indexes)
         remote_hash = self._compute_index_hash(remote_indexes)
         cache_key = f"push:{ns}"
-        if local_hash == remote_hash and self._index_hash_cache.get(cache_key) == local_hash:
-            return
-        self._index_hash_cache[cache_key] = local_hash
+        with self._lock:
+            if local_hash == remote_hash and self._index_hash_cache.get(cache_key) == local_hash:
+                return
+            self._index_hash_cache[cache_key] = local_hash
 
         local_names = {idx.get("name", "") for idx in local_indexes}
         remote_names = {idx.get("name", "") for idx in remote_indexes}

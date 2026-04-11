@@ -65,14 +65,14 @@ def authed_app_client(authed_web_app):
 
 
 class TestCSPHeaders:
-    def test_script_src_allows_inline(self, app_client):
+    def test_script_src_no_unsafe_inline(self, app_client):
         resp = app_client.get("/")
         csp = resp.headers.get("Content-Security-Policy", "")
         parts = csp.split("script-src")
         assert len(parts) > 1
         script_directive = parts[1].split(";")[0]
         assert "'self'" in script_directive
-        assert "'unsafe-inline'" in script_directive
+        assert "'unsafe-inline'" not in script_directive
 
     def test_has_frame_deny(self, app_client):
         resp = app_client.get("/")

@@ -73,10 +73,18 @@ class _DLQMixin:
 
         eligible: list[tuple[str, dict[str, Any]]] = []
         for k, v_raw in rows:
-            v: dict[str, Any] = json.loads(v_raw)
+            try:
+                v: dict[str, Any] = json.loads(v_raw)
+            except (json.JSONDecodeError, ValueError):
+                log.warning("Corrupt DLQ entry %s; skipping", k)
+                continue
             if v.get("permanently_failed"):
                 continue
-            if v["next_retry_ts"] <= now:
+            next_ts = v.get("next_retry_ts")
+            if next_ts is None:
+                log.warning("DLQ entry %s missing next_retry_ts; skipping", k)
+                continue
+            if next_ts <= now:
                 eligible.append((k, v))
 
         if not eligible:
@@ -160,8 +168,8 @@ class _DLQMixin:
         with self._ck_lock:
             try:
                 self._rust.sync_kv_remove(self._dlq_uri, key)
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Failed to remove DLQ entry %s: %s", key, exc)
 
     def _dlq_update(self, key: str, value: dict[str, Any]) -> None:
         with self._ck_lock:

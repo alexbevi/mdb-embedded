@@ -454,35 +454,25 @@ fn cmd_rename_collection(
         PyValueError::new_err("invalid destination namespace for renameCollection")
     })?;
 
-    let src_collection = get_collection(ctx, src_db, src_coll)?;
-    let docs = src_collection.call_method0("get_all")?;
-
-    let dst_collection = get_collection(ctx, dst_db, dst_coll)?;
-    let existing = dst_collection.call_method0("get_all")?;
-    if existing.is_truthy()? && !drop_target {
+    if src_db != dst_db {
         let r = make_error(
             py,
-            "NamespaceExists",
-            &format!("target namespace {dst_ns} already exists"),
+            "InvalidNamespace",
+            "renameCollection across databases is not supported in embedded mode",
         )?;
         return Ok(r.into_any().unbind());
     }
-    if existing.is_truthy()? && drop_target {
-        let empty = PyDict::new(py);
-        dst_collection.call_method1("delete_many", (empty,))?;
+
+    let db = get_db(ctx, src_db)?;
+    let db_ref = db.cast::<RedbLocalDB>()?;
+    match db_ref.borrow().rename_collection(py, src_coll, dst_coll, drop_target) {
+        Ok(()) => Ok(ok_dict(py)?.into_any().unbind()),
+        Err(e) => {
+            let msg = e.value(py).str()?.to_string();
+            let r = make_error(py, "NamespaceExists", &msg)?;
+            Ok(r.into_any().unbind())
+        }
     }
-
-    for doc in docs.try_iter()? {
-        let doc = doc?;
-        dst_collection.call_method1("insert_one", (&doc,))?;
-    }
-
-    let empty = PyDict::new(py);
-    src_collection.call_method1("delete_many", (empty,))?;
-    let src_dbobj = get_db(ctx, src_db)?;
-    src_dbobj.call_method1("drop_collection", (src_coll,))?;
-
-    Ok(ok_dict(py)?.into_any().unbind())
 }
 
 fn cmd_compact(

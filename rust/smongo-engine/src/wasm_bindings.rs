@@ -189,16 +189,19 @@ impl WasmCollection {
         let docs_bson = wrapper
             .get_array("documents")
             .map_err(|e| js_err(format!("Missing 'documents' array: {}", e)))?;
-        let documents: Vec<Document> = docs_bson
-            .iter()
-            .filter_map(|b| {
-                if let Bson::Document(d) = b {
-                    Some(d.clone())
-                } else {
-                    None
+        let mut documents: Vec<Document> = Vec::with_capacity(docs_bson.len());
+        for (i, b) in docs_bson.iter().enumerate() {
+            match b {
+                Bson::Document(d) => documents.push(d.clone()),
+                other => {
+                    return Err(js_err(format!(
+                        "documents[{}] is not a document (got {:?})",
+                        i,
+                        other.element_type()
+                    )))
                 }
-            })
-            .collect();
+            }
+        }
         let result = self
             .inner
             .insert_many(documents)
@@ -501,16 +504,19 @@ impl WasmOpfsCollection {
         let docs_bson = wrapper
             .get_array("documents")
             .map_err(|e| js_err(format!("Missing 'documents' array: {}", e)))?;
-        let documents: Vec<Document> = docs_bson
-            .iter()
-            .filter_map(|b| {
-                if let Bson::Document(d) = b {
-                    Some(d.clone())
-                } else {
-                    None
+        let mut documents: Vec<Document> = Vec::with_capacity(docs_bson.len());
+        for (i, b) in docs_bson.iter().enumerate() {
+            match b {
+                Bson::Document(d) => documents.push(d.clone()),
+                other => {
+                    return Err(js_err(format!(
+                        "documents[{}] is not a document (got {:?})",
+                        i,
+                        other.element_type()
+                    )))
                 }
-            })
-            .collect();
+            }
+        }
         let result = self
             .inner
             .insert_many(documents)

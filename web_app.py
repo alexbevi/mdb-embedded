@@ -164,10 +164,13 @@ def _clean(doc: Any) -> Any:
     return doc
 
 
+_PROTECTED_PREFIXES = ("/api/", "/metrics")
+
+
 @app.before_request
 def _enforce_auth() -> Response | tuple[Response, int] | None:
-    """Reject /api/* requests when SMONGO_API_KEY is set but not provided."""
-    if _API_KEY and request.path.startswith("/api/"):
+    """Reject protected requests when SMONGO_API_KEY is set but not provided."""
+    if _API_KEY and any(request.path.startswith(p) for p in _PROTECTED_PREFIXES):
         auth = request.headers.get("Authorization", "")
         if auth != f"Bearer {_API_KEY}":
             return jsonify(
@@ -178,8 +181,8 @@ def _enforce_auth() -> Response | tuple[Response, int] | None:
 
 @app.before_request
 def _enforce_rate_limit() -> Response | tuple[Response, int] | None:
-    """Token-bucket rate limiting on /api/* routes."""
-    if request.path.startswith("/api/"):
+    """Token-bucket rate limiting on protected routes."""
+    if any(request.path.startswith(p) for p in _PROTECTED_PREFIXES):
         ip = request.remote_addr or "unknown"
         if not _limiter.allow(ip):
             return jsonify({"error": "Rate limit exceeded -- try again shortly"}), 429
@@ -193,7 +196,7 @@ def _set_security_headers(response: Response) -> Response:
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline'; "
+        "script-src 'self'; "
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
         "font-src 'self' https://fonts.gstatic.com; "
         "connect-src 'self'"
@@ -490,7 +493,10 @@ def drop_index(name: str) -> Response | tuple[Response, int]:
 @app.route("/api/oplog")
 def get_oplog() -> Response:
     coll = _coll(request.args.get("coll", "users"))
-    limit = int(request.args.get("limit", 50))
+    try:
+        limit = int(request.args.get("limit", 50))
+    except (ValueError, TypeError):
+        return jsonify({"error": "limit must be an integer"}), 400
     return jsonify(coll.get_oplog()[-limit:])
 
 

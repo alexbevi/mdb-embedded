@@ -1,4 +1,4 @@
-FROM python:3.11-bookworm
+FROM python:3.11.11-bookworm
 
 # Native libs for compression / common build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Rust toolchain (needed to compile the PyO3 extension via maturin)
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.84.0
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 WORKDIR /app

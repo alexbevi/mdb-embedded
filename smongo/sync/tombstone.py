@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from typing import Any
+
+log = logging.getLogger("smongo.sync")
 
 DEFAULT_TOMBSTONE_TTL_SEC = 7 * 24 * 3600  # 7 days
 
@@ -56,7 +59,14 @@ class TombstoneRegistry:
             if self._persistent_redb:
                 assert self._uri is not None and self._redb_client is not None
                 rows = self._redb_client.sync_kv_scan(self._uri)
-                to_remove = [k for k, v in rows if now - float(v) > self._ttl]
+                to_remove = []
+                for k, v in rows:
+                    try:
+                        if now - float(v) > self._ttl:
+                            to_remove.append(k)
+                    except (ValueError, TypeError):
+                        log.warning("Corrupt tombstone value for key %s: %r; removing", k, v)
+                        to_remove.append(k)
                 for k in to_remove:
                     self._redb_client.sync_kv_remove(self._uri, k)
                 return len(to_remove)

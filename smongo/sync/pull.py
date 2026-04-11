@@ -111,7 +111,8 @@ class _PullMixin:
             local_ids: list[Any] = [
                 doc["_id"] for doc in local_coll.find({}, projection={"_id": 1})
             ]
-        except Exception:
+        except Exception as exc:
+            log.warning("Failed to load local IDs for delete detection in %s: %s", ns, exc)
             return
         if not local_ids:
             return
@@ -311,7 +312,13 @@ class _PullMixin:
 
         token_key = f"pull_cs_token:{ns}"
         token_raw = self._get_checkpoint(token_key)
-        resume_token: dict[str, Any] | None = json.loads(token_raw) if token_raw else None
+        resume_token: dict[str, Any] | None = None
+        if token_raw:
+            try:
+                resume_token = json.loads(token_raw)
+            except (json.JSONDecodeError, ValueError):
+                log.warning("Corrupt change-stream resume token for %s; discarding", ns)
+                self._remove_checkpoint(token_key)
 
         try:
             watch_kwargs: dict[str, Any] = {
