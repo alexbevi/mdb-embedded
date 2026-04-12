@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "smongo"
-version = "1.2.5"
+version = "1.2.6"
 description = "Small MongoDB, big ambitions -- a local-first document engine (redb + Rust) with Atlas sync"
 readme = "README.md"
 requires-python = ">=3.11"

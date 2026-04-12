@@ -67,6 +67,7 @@ def _web_app(tmp_path):
         "errors": 0,
     }
     wa.sync_mgr = sync_mock
+    wa._limiter = wa._TokenBucket(10_000)
 
     yield wa
 
