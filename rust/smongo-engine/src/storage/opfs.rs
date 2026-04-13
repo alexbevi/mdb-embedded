@@ -78,6 +78,9 @@ impl StorageSession for OpfsSession {
         })
     }
 
+    fn in_transaction(&self) -> bool {
+        false
+    }
     fn begin_transaction(&self) -> StorageResult<()> {
         Ok(())
     }

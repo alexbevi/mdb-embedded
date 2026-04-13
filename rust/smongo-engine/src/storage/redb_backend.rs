@@ -144,6 +144,10 @@ impl StorageSession for RedbSession {
         })
     }
 
+    fn in_transaction(&self) -> bool {
+        self.in_transaction.load(Ordering::SeqCst)
+    }
+
     fn begin_transaction(&self) -> StorageResult<()> {
         self.in_transaction.store(true, Ordering::SeqCst);
         lock_map(&self.pending_writes)?.clear();

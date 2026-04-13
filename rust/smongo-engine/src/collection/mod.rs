@@ -377,6 +377,11 @@ impl<S: StorageSession> Collection<S> {
         &self,
         f: impl FnOnce(&Self) -> CollectionResult<R>,
     ) -> CollectionResult<R> {
+        // If an outer transaction is already active (e.g. from with_transaction),
+        // just run the closure without nesting to avoid commit/rollback conflicts.
+        if self.session.in_transaction() {
+            return f(self);
+        }
         self.session
             .begin_transaction()
             .map_err(CollectionError::from)?;

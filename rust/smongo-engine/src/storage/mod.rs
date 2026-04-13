@@ -73,6 +73,7 @@ pub trait StorageSession: Send + Sized {
     fn begin_transaction(&self) -> StorageResult<()>;
     fn commit_transaction(&self) -> StorageResult<()>;
     fn rollback_transaction(&self) -> StorageResult<()>;
+    fn in_transaction(&self) -> bool;
 
     /// Atomically rename a table by copying all rows from `from` to `to` and
     /// dropping `from`, all within a single transaction where the backend
