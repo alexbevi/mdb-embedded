@@ -1052,10 +1052,63 @@ pub fn stage_set_window_fields(
                         sorted_docs[idx].insert(field.clone(), Bson::Int32(current_rank));
                     }
                 }
+                "$documentNumber" => {
+                    for (pos, &idx) in partition.iter().enumerate() {
+                        sorted_docs[idx].insert(field.clone(), Bson::Int32((pos + 1) as i32));
+                    }
+                }
                 "$count" => {
                     let val = Bson::Int32(partition.len() as i32);
                     for &idx in partition {
                         sorted_docs[idx].insert(field.clone(), val.clone());
+                    }
+                }
+                "$first" => {
+                    let first_idx = partition[0];
+                    let val = evaluate_expression(&sorted_docs[first_idx], op_expr)?;
+                    for &idx in partition {
+                        sorted_docs[idx].insert(field.clone(), val.clone());
+                    }
+                }
+                "$last" => {
+                    let Some(&last_idx) = partition.last() else {
+                        continue;
+                    };
+                    let val = evaluate_expression(&sorted_docs[last_idx], op_expr)?;
+                    for &idx in partition {
+                        sorted_docs[idx].insert(field.clone(), val.clone());
+                    }
+                }
+                "$shift" => {
+                    let shift_doc = op_expr.as_document().ok_or_else(|| {
+                        AggregationError::InvalidStage(
+                            "$shift requires a document with output and by".into(),
+                        )
+                    })?;
+                    let output_expr = shift_doc.get("output").ok_or_else(|| {
+                        AggregationError::MissingField("$shift.output required".into())
+                    })?;
+                    let by = shift_doc
+                        .get_i32("by")
+                        .or_else(|_| shift_doc.get_i64("by").map(|n| n as i32))
+                        .unwrap_or(0);
+                    let default_val = shift_doc.get("default").cloned().unwrap_or(Bson::Null);
+                    let results: Vec<Bson> = partition
+                        .iter()
+                        .enumerate()
+                        .map(|(pos, &_idx)| {
+                            let shifted_pos = pos as i64 + by as i64;
+                            if shifted_pos >= 0 && (shifted_pos as usize) < partition.len() {
+                                let src_idx = partition[shifted_pos as usize];
+                                evaluate_expression(&sorted_docs[src_idx], output_expr)
+                                    .unwrap_or_else(|_| default_val.clone())
+                            } else {
+                                default_val.clone()
+                            }
+                        })
+                        .collect();
+                    for (pos, &idx) in partition.iter().enumerate() {
+                        sorted_docs[idx].insert(field.clone(), results[pos].clone());
                     }
                 }
                 "$sum" | "$avg" | "$min" | "$max" => {
@@ -1105,10 +1158,10 @@ pub fn stage_set_window_fields(
                     }
                 }
                 _ => {
-                    for &idx in partition {
-                        let val = evaluate_expression(&sorted_docs[idx], op_expr)?;
-                        sorted_docs[idx].insert(field.clone(), val);
-                    }
+                    return Err(AggregationError::InvalidOperator(format!(
+                        "Unknown $setWindowFields operator: {}",
+                        op
+                    )));
                 }
             }
         }
@@ -1445,10 +1498,10 @@ pub fn stage_sort_stream(
     input: DocStream,
     sort_spec: &Bson,
     memory_limit: Option<usize>,
-    allow_disk_use: bool,
+    _allow_disk_use: bool,
 ) -> AggregationResult<DocStream> {
     #[cfg(not(target_arch = "wasm32"))]
-    if allow_disk_use {
+    if _allow_disk_use {
         let limit = memory_limit.unwrap_or(super::DEFAULT_MEMORY_LIMIT_BYTES);
         let results = super::disk_spill::external_sort(input, sort_spec, limit)?;
         return Ok(Box::new(results.into_iter().map(Ok)));
@@ -1523,10 +1576,10 @@ pub fn stage_group_stream(
     input: DocStream,
     group_spec: &Bson,
     memory_limit: Option<usize>,
-    allow_disk_use: bool,
+    _allow_disk_use: bool,
 ) -> AggregationResult<DocStream> {
     #[cfg(not(target_arch = "wasm32"))]
-    if allow_disk_use {
+    if _allow_disk_use {
         let limit = memory_limit.unwrap_or(super::DEFAULT_MEMORY_LIMIT_BYTES);
         let results = super::disk_spill::external_group(input, group_spec, limit)?;
         return Ok(Box::new(results.into_iter().map(Ok)));
@@ -2028,5 +2081,105 @@ fn stage_geo_near(docs: Vec<Document>, spec: &Bson) -> AggregationResult<Vec<Doc
     } else {
         prepared.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         Ok(prepared.into_iter().map(|(_, doc)| doc).collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bson::doc;
+
+    #[test]
+    fn test_set_window_fields_unknown_operator_errors() {
+        let docs = vec![doc! { "x": 1 }, doc! { "x": 2 }];
+        let spec = Bson::Document(doc! {
+            "sortBy": { "x": 1 },
+            "output": {
+                "result": { "$bogusWindowOp": {} }
+            }
+        });
+        let result = stage_set_window_fields(docs, &spec);
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("Unknown $setWindowFields operator: $bogusWindowOp"),
+            "unexpected error message: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_set_window_fields_document_number() {
+        let docs = vec![doc! { "x": 3 }, doc! { "x": 1 }, doc! { "x": 2 }];
+        let spec = Bson::Document(doc! {
+            "sortBy": { "x": 1 },
+            "output": { "rowNum": { "$documentNumber": {} } }
+        });
+        let result = stage_set_window_fields(docs, &spec).unwrap();
+        assert_eq!(result[0].get_i32("rowNum").unwrap(), 1);
+        assert_eq!(result[1].get_i32("rowNum").unwrap(), 2);
+        assert_eq!(result[2].get_i32("rowNum").unwrap(), 3);
+    }
+
+    #[test]
+    fn test_set_window_fields_first_last() {
+        let docs = vec![doc! { "v": 10 }, doc! { "v": 20 }, doc! { "v": 30 }];
+        let spec = Bson::Document(doc! {
+            "sortBy": { "v": 1 },
+            "output": {
+                "earliest": { "$first": "$v" },
+                "latest": { "$last": "$v" }
+            }
+        });
+        let result = stage_set_window_fields(docs, &spec).unwrap();
+        for d in &result {
+            assert_eq!(d.get_i32("earliest").unwrap(), 10);
+            assert_eq!(d.get_i32("latest").unwrap(), 30);
+        }
+    }
+
+    #[test]
+    fn test_set_window_fields_shift() {
+        let docs = vec![doc! { "v": 1 }, doc! { "v": 2 }, doc! { "v": 3 }];
+        let spec = Bson::Document(doc! {
+            "sortBy": { "v": 1 },
+            "output": {
+                "prev": {
+                    "$shift": { "output": "$v", "by": -1, "default": -1 }
+                },
+                "next": {
+                    "$shift": { "output": "$v", "by": 1, "default": -1 }
+                }
+            }
+        });
+        let result = stage_set_window_fields(docs, &spec).unwrap();
+        assert_eq!(result[0].get_i32("prev").unwrap(), -1);
+        assert_eq!(result[0].get_i32("next").unwrap(), 2);
+        assert_eq!(result[1].get_i32("prev").unwrap(), 1);
+        assert_eq!(result[1].get_i32("next").unwrap(), 3);
+        assert_eq!(result[2].get_i32("prev").unwrap(), 2);
+        assert_eq!(result[2].get_i32("next").unwrap(), -1);
+    }
+
+    #[test]
+    fn test_set_window_fields_rank_and_dense_rank() {
+        let docs = vec![
+            doc! { "score": 100 },
+            doc! { "score": 90 },
+            doc! { "score": 90 },
+            doc! { "score": 80 },
+        ];
+        let spec = Bson::Document(doc! {
+            "sortBy": { "score": 1 },
+            "output": {
+                "r": { "$rank": {} },
+                "dr": { "$denseRank": {} }
+            }
+        });
+        let result = stage_set_window_fields(docs, &spec).unwrap();
+        let ranks: Vec<i32> = result.iter().map(|d| d.get_i32("r").unwrap()).collect();
+        let dense: Vec<i32> = result.iter().map(|d| d.get_i32("dr").unwrap()).collect();
+        assert_eq!(ranks, vec![1, 2, 2, 4]);
+        assert_eq!(dense, vec![1, 2, 2, 3]);
     }
 }

@@ -77,7 +77,10 @@ class _PushMixin:
         if checkpoint is not None:
             try:
                 oldest = reader.oldest_key()
+            except (KeyError, RuntimeError, OSError):
+                oldest = None
             except Exception:
+                log.warning("Unexpected error reading oldest oplog key for %s", ns, exc_info=True)
                 oldest = None
             if oldest is not None and checkpoint < oldest:
                 log.error(
@@ -123,8 +126,16 @@ class _PushMixin:
                             if not ops:
                                 safe_key = key
                             continue
-                    except (KeyError, TypeError):
-                        pass
+                    except (KeyError, TypeError) as exc:
+                        log.warning(
+                            "ns_filter raised %s for doc %s; excluding document",
+                            exc,
+                            entry.get("doc_id"),
+                        )
+                        last_key = key
+                        if not ops:
+                            safe_key = key
+                        continue
                 if not self._doc_passes_sync_filter(filter_doc):
                     last_key = key
                     if not ops:
@@ -316,10 +327,11 @@ class _PushMixin:
         """Flush a batch of operations to remote.
 
         Returns the number of successfully written ops (``len(ops)`` on full
-        success, 0..n on partial failure, ``-1`` on total failure).
-        Failed ops are enqueued into the dead-letter queue when *op_entries*
-        is provided.  Schema validation failures (code 121) are marked as
-        permanently failed and optionally rolled back locally.
+        success, 0..n on partial ``BulkWriteError``, ``-1`` on total network
+        or server failure).  Failed ops are enqueued into the dead-letter
+        queue when *op_entries* is provided.  Schema validation failures
+        (code 121) are marked as permanently failed and optionally rolled
+        back locally.
         """
         try:
             remote_coll.bulk_write(ops, ordered=False)
@@ -354,6 +366,12 @@ class _PushMixin:
                         )
             log.warning("Bulk write partial failure: %d/%d ops succeeded", n_ok, len(ops))
             return n_ok
+        except (PyMongoError, OSError) as exc:
+            log.error("Bulk write total failure for %s: %s", ns, exc)
+            if op_entries:
+                for entry in op_entries:
+                    self._dlq_enqueue(ns, entry, -1, str(exc))
+            return -1
 
     def _handle_schema_rejection(
         self,

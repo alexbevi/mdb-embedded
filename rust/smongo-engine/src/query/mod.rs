@@ -192,6 +192,10 @@ fn eval_operator(
         "$elemMatch" => eval_elem_match(value, cond_val),
         "$size" => eval_size(value, cond_val),
         "$mod" => eval_mod(value, cond_val),
+        "$bitsAllSet" => eval_bits(value, cond_val, BitsMode::AllSet),
+        "$bitsAnySet" => eval_bits(value, cond_val, BitsMode::AnySet),
+        "$bitsAllClear" => eval_bits(value, cond_val, BitsMode::AllClear),
+        "$bitsAnyClear" => eval_bits(value, cond_val, BitsMode::AnyClear),
         "$options" => Ok(true), // Handled with $regex
         "$near" | "$nearSphere" | "$geoWithin" | "$geoIntersects" => Ok(true), // Handled in eval_field_condition
         _ => Err(format!("Unknown operator: {}", op)),
@@ -694,6 +698,51 @@ fn eval_mod(value: Option<&Bson>, cond_val: &Bson) -> Result<bool, String> {
     Ok(field_val % divisor == remainder)
 }
 
+enum BitsMode {
+    AllSet,
+    AnySet,
+    AllClear,
+    AnyClear,
+}
+
+fn eval_bits(value: Option<&Bson>, cond_val: &Bson, mode: BitsMode) -> Result<bool, String> {
+    let field_val = match value {
+        Some(Bson::Int32(n)) => *n as i64,
+        Some(Bson::Int64(n)) => *n,
+        Some(Bson::Double(n)) => *n as i64,
+        _ => return Ok(false),
+    };
+
+    let mask: i64 = match cond_val {
+        Bson::Int32(m) => *m as i64,
+        Bson::Int64(m) => *m,
+        Bson::Double(m) => *m as i64,
+        Bson::Array(positions) => {
+            let mut m: i64 = 0;
+            for pos in positions {
+                let p = match pos {
+                    Bson::Int32(n) => *n as i64,
+                    Bson::Int64(n) => *n,
+                    _ => return Err("$bits position must be a non-negative integer".to_string()),
+                };
+                if !(0..=63).contains(&p) {
+                    return Err(format!("$bits position out of range: {}", p));
+                }
+                m |= 1i64 << p;
+            }
+            m
+        }
+        _ => return Err("$bits requires a numeric bitmask or array of bit positions".to_string()),
+    };
+
+    match mode {
+        BitsMode::AllSet => Ok((field_val & mask) == mask),
+        BitsMode::AnySet => Ok((field_val & mask) != 0),
+        BitsMode::AllClear => Ok((field_val & mask) == 0),
+        BitsMode::AnyClear => Ok((field_val & mask) != mask),
+    }
+}
+
 /// Evaluate `$expr`: run an aggregation expression and treat the result as a boolean.
 fn eval_expr(doc: &Document, condition: &Bson) -> Result<bool, String> {
     let result = evaluate_expression(doc, condition).map_err(|e| e.to_string())?;
@@ -1129,5 +1178,75 @@ mod tests {
             eval_query(&doc, &doc! { "qty": { "$not": { "$mod": [5, 0] } } }).unwrap() == false
         );
         assert!(eval_query(&doc, &doc! { "qty": { "$not": { "$mod": [3, 0] } } }).unwrap() == true);
+    }
+
+    #[test]
+    fn test_bits_all_set() {
+        let doc = doc! { "flags": 0b1010_1010_i32 };
+        assert!(eval_query(&doc, &doc! { "flags": { "$bitsAllSet": 0b0000_1010_i32 } }).unwrap());
+        assert!(!eval_query(&doc, &doc! { "flags": { "$bitsAllSet": 0b0000_0101_i32 } }).unwrap());
+    }
+
+    #[test]
+    fn test_bits_any_set() {
+        let doc = doc! { "flags": 0b1010_0000_i32 };
+        assert!(eval_query(&doc, &doc! { "flags": { "$bitsAnySet": 0b1000_0001_i32 } }).unwrap());
+        assert!(!eval_query(&doc, &doc! { "flags": { "$bitsAnySet": 0b0000_0101_i32 } }).unwrap());
+    }
+
+    #[test]
+    fn test_bits_all_clear() {
+        let doc = doc! { "flags": 0b1010_0000_i32 };
+        assert!(eval_query(
+            &doc,
+            &doc! { "flags": { "$bitsAllClear": 0b0000_0101_i32 } }
+        )
+        .unwrap());
+        assert!(!eval_query(
+            &doc,
+            &doc! { "flags": { "$bitsAllClear": 0b1000_0001_i32 } }
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn test_bits_any_clear() {
+        let doc = doc! { "flags": 0b1010_0000_i32 };
+        assert!(eval_query(
+            &doc,
+            &doc! { "flags": { "$bitsAnyClear": 0b1010_0001_i32 } }
+        )
+        .unwrap());
+        assert!(!eval_query(
+            &doc,
+            &doc! { "flags": { "$bitsAnyClear": 0b1010_0000_i32 } }
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn test_bits_with_position_array() {
+        let doc = doc! { "flags": 0b0000_1010_i32 };
+        assert!(eval_query(&doc, &doc! { "flags": { "$bitsAllSet": [1, 3] } }).unwrap());
+        assert!(!eval_query(&doc, &doc! { "flags": { "$bitsAllSet": [0, 1] } }).unwrap());
+    }
+
+    #[test]
+    fn test_bits_with_i64_value() {
+        let doc = doc! { "flags": 0xFF_i64 };
+        assert!(eval_query(&doc, &doc! { "flags": { "$bitsAllSet": 0x0F_i64 } }).unwrap());
+        assert!(eval_query(&doc, &doc! { "flags": { "$bitsAllClear": 0x100_i64 } }).unwrap());
+    }
+
+    #[test]
+    fn test_bits_missing_field_returns_false() {
+        let doc = doc! { "name": "Alice" };
+        assert!(!eval_query(&doc, &doc! { "flags": { "$bitsAllSet": 1 } }).unwrap());
+    }
+
+    #[test]
+    fn test_bits_non_numeric_field_returns_false() {
+        let doc = doc! { "flags": "not_a_number" };
+        assert!(!eval_query(&doc, &doc! { "flags": { "$bitsAnySet": 1 } }).unwrap());
     }
 }

@@ -33,7 +33,7 @@ impl<S: StorageSession> Collection<S> {
         document: Document,
         opts: InsertOptions,
     ) -> CollectionResult<InsertOneResult> {
-        self.with_oplog_transaction(|col| col.insert_one_inner(document, opts.internal))
+        self.with_batched_write(|col| col.insert_one_inner(document, opts.internal))
     }
 
     pub(super) fn insert_one_inner(
@@ -95,7 +95,7 @@ impl<S: StorageSession> Collection<S> {
             inserted_ids.push(id);
         }
 
-        self.with_oplog_transaction(|col| {
+        self.with_batched_write(|col| {
             for doc in &documents {
                 col.insert_into_indexes(doc)?;
                 let doc_bytes = serialize_document(doc)?;
@@ -369,7 +369,7 @@ impl<S: StorageSession> Collection<S> {
         update: Document,
         options: UpdateOptions,
     ) -> CollectionResult<UpdateResult> {
-        self.with_oplog_transaction(|col| col.update_one_inner(filter, update, options))
+        self.with_batched_write(|col| col.update_one_inner(filter, update, options))
     }
 
     fn update_one_inner(
@@ -476,7 +476,7 @@ impl<S: StorageSession> Collection<S> {
         update: Document,
         options: UpdateOptions,
     ) -> CollectionResult<UpdateResult> {
-        self.with_oplog_transaction(|col| col.update_many_inner(filter, update, options))
+        self.with_batched_write(|col| col.update_many_inner(filter, update, options))
     }
 
     fn update_many_inner(
@@ -572,7 +572,7 @@ impl<S: StorageSession> Collection<S> {
         filter: Document,
         options: DeleteOptions,
     ) -> CollectionResult<DeleteResult> {
-        self.with_oplog_transaction(|col| col.delete_one_inner(filter, options))
+        self.with_batched_write(|col| col.delete_one_inner(filter, options))
     }
 
     fn delete_one_inner(
@@ -630,7 +630,7 @@ impl<S: StorageSession> Collection<S> {
         filter: Document,
         options: DeleteOptions,
     ) -> CollectionResult<DeleteResult> {
-        self.with_oplog_transaction(|col| col.delete_many_inner(filter, options))
+        self.with_batched_write(|col| col.delete_many_inner(filter, options))
     }
 
     fn delete_many_inner(

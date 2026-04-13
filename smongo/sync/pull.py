@@ -76,8 +76,13 @@ class _PullMixin:
                         try:
                             if not ns_filter(rdoc):
                                 continue
-                        except (KeyError, TypeError):
-                            pass
+                        except (KeyError, TypeError) as exc:
+                            log.warning(
+                                "ns_filter raised %s for doc %s; excluding document",
+                                exc,
+                                rdoc.get("_id"),
+                            )
+                            continue
                     if not self._doc_passes_sync_filter(rdoc):
                         continue
                     remote_ts = rdoc.get("_lastModified", 0)
@@ -119,6 +124,7 @@ class _PullMixin:
 
         batch_size = int(self._config.get("delete_detection_batch_size", 1000))
         remote_ids: set[Any] = set()
+        all_batches_ok = True
 
         for i in range(0, len(local_ids), batch_size):
             batch = local_ids[i : i + batch_size]
@@ -130,9 +136,23 @@ class _PullMixin:
                     )
                 )
                 remote_ids.update(d["_id"] for d in remote_id_docs)
-            except (PyMongoError, AttributeError, TypeError) as exc:
-                log.debug("Remote delete detection query failed for %s: %s", ns, exc)
-                return
+            except (PyMongoError, OSError) as exc:
+                log.warning(
+                    "Remote delete detection batch failed for %s (batch %d): %s; "
+                    "aborting detection to prevent false deletes",
+                    ns,
+                    i // batch_size,
+                    exc,
+                )
+                all_batches_ok = False
+                break
+            except (AttributeError, TypeError) as exc:
+                log.warning("Remote delete detection query error for %s: %s", ns, exc)
+                all_batches_ok = False
+                break
+
+        if not all_batches_ok:
+            return
 
         deleted_ids = set(local_ids) - remote_ids
         for doc_id in deleted_ids:
@@ -141,7 +161,7 @@ class _PullMixin:
             try:
                 local_coll.delete({"_id": doc_id}, multi=False, _internal=True)
                 log.debug("Detected remote delete for %s _id=%s", ns, doc_id)
-            except Exception as exc:
+            except (RuntimeError, OSError) as exc:
                 log.warning("Failed to apply remote delete for %s _id=%s: %s", ns, doc_id, exc)
 
     def _upsert_remote_doc(
@@ -292,8 +312,13 @@ class _PullMixin:
                             try:
                                 if not ns_filter(rdoc):
                                     continue
-                            except (KeyError, TypeError):
-                                pass
+                            except (KeyError, TypeError) as exc:
+                                log.warning(
+                                    "ns_filter raised %s for doc %s; excluding document",
+                                    exc,
+                                    rdoc.get("_id"),
+                                )
+                                continue
                         if not self._doc_passes_sync_filter(rdoc):
                             continue
                         self._upsert_remote_doc(ns, local_coll, rdoc)
@@ -344,8 +369,14 @@ class _PullMixin:
                                     if not ns_filter(full_doc):
                                         processed += 1
                                         continue
-                                except (KeyError, TypeError):
-                                    pass
+                                except (KeyError, TypeError) as exc:
+                                    log.warning(
+                                        "ns_filter raised %s for doc %s; excluding document",
+                                        exc,
+                                        full_doc.get("_id"),
+                                    )
+                                    processed += 1
+                                    continue
                             if not self._doc_passes_sync_filter(full_doc):
                                 processed += 1
                                 continue

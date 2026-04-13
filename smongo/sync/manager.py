@@ -453,9 +453,15 @@ class SyncManager(_PushMixin, _PullMixin, _MetricsMixin, _DLQMixin):
         remote_coll: Any,
         winner: str = "server",
     ) -> dict[str, Any]:
-        """Reset sync state for *ns* and re-pull from the winning side."""
+        """Reset sync state for *ns* and re-pull from the winning side.
+
+        Returns a dict with ``ok`` (bool), ``docs_synced`` (int), and
+        ``error`` (str | None) indicating whether the resync completed
+        without critical failures.
+        """
         log.warning("Full resync triggered for %s (winner=%s)", ns, winner)
 
+        ck_failures = 0
         for suffix in (
             f"push:{ns}",
             f"pull_ts:{ns}",
@@ -466,8 +472,25 @@ class SyncManager(_PushMixin, _PullMixin, _MetricsMixin, _DLQMixin):
             with self._ck_lock:
                 try:
                     self._rust.sync_kv_remove(self._ck_uri, suffix)
-                except Exception as exc:
+                except (KeyError, RuntimeError, OSError) as exc:
                     log.debug("Failed to remove checkpoint %s: %s", suffix, exc)
+                except Exception as exc:
+                    ck_failures += 1
+                    log.warning("Unexpected error removing checkpoint %s: %s", suffix, exc)
+
+        if ck_failures:
+            log.error(
+                "Full resync for %s aborted: %d checkpoint(s) could not be cleared",
+                ns,
+                ck_failures,
+            )
+            return {
+                "ns": ns,
+                "winner": winner,
+                "docs_synced": 0,
+                "ok": False,
+                "error": f"{ck_failures} checkpoint removal(s) failed",
+            }
 
         docs_synced = 0
         if winner == "server":
@@ -475,8 +498,24 @@ class SyncManager(_PushMixin, _PullMixin, _MetricsMixin, _DLQMixin):
                 all_local = list(local_coll.find({}, projection={"_id": 1}))
                 for doc in all_local:
                     local_coll.delete({"_id": doc["_id"]}, multi=False, _internal=True)
+            except (RuntimeError, OSError, KeyError) as exc:
+                log.error("Full resync: failed to clear local data for %s: %s", ns, exc)
+                return {
+                    "ns": ns,
+                    "winner": winner,
+                    "docs_synced": 0,
+                    "ok": False,
+                    "error": f"local clear failed: {exc}",
+                }
             except Exception as exc:
-                log.warning("Full resync: error clearing local data for %s: %s", ns, exc)
+                log.error("Full resync: unexpected error clearing local data for %s: %s", ns, exc)
+                return {
+                    "ns": ns,
+                    "winner": winner,
+                    "docs_synced": 0,
+                    "ok": False,
+                    "error": f"local clear failed (unexpected): {exc}",
+                }
 
             try:
                 from smongo._smongo_core import from_pymongo as _from_pymongo
@@ -485,13 +524,39 @@ class SyncManager(_PushMixin, _PullMixin, _MetricsMixin, _DLQMixin):
                     rdoc = _from_pymongo(rdoc)
                     local_coll.insert_one(rdoc, _internal=True)
                     docs_synced += 1
+            except (PyMongoError, OSError) as exc:
+                log.error(
+                    "Full resync: remote pull failed for %s after %d docs: %s",
+                    ns,
+                    docs_synced,
+                    exc,
+                )
+                return {
+                    "ns": ns,
+                    "winner": winner,
+                    "docs_synced": docs_synced,
+                    "ok": False,
+                    "error": f"remote pull failed after {docs_synced} docs: {exc}",
+                }
             except Exception as exc:
-                log.warning("Full resync: error pulling remote data for %s: %s", ns, exc)
+                log.error(
+                    "Full resync: unexpected error pulling remote data for %s after %d docs: %s",
+                    ns,
+                    docs_synced,
+                    exc,
+                )
+                return {
+                    "ns": ns,
+                    "winner": winner,
+                    "docs_synced": docs_synced,
+                    "ok": False,
+                    "error": f"remote pull failed (unexpected) after {docs_synced} docs: {exc}",
+                }
 
         with self._lock:
             self._pulled_count += docs_synced
 
-        return {"ns": ns, "winner": winner, "docs_synced": docs_synced}
+        return {"ns": ns, "winner": winner, "docs_synced": docs_synced, "ok": True, "error": None}
 
     # -- checkpoint persistence ----------------------------------------
 

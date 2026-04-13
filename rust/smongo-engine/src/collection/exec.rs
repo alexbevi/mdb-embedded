@@ -434,7 +434,6 @@ impl<S: StorageSession> Collection<S> {
         Ok(out)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn collect_bitmap_scan(
         &self,
         filter: &Document,
@@ -505,16 +504,6 @@ impl<S: StorageSession> Collection<S> {
         Ok(out)
     }
 
-    #[cfg(target_arch = "wasm32")]
-    fn collect_bitmap_scan(
-        &self,
-        filter: &Document,
-        _index_name: &str,
-        _field: &str,
-    ) -> CollectionResult<Vec<Document>> {
-        self.collect_collection_scan(filter)
-    }
-
     fn collect_prefix_index_scan(
         &self,
         filter: &Document,
@@ -573,7 +562,6 @@ impl<S: StorageSession> Collection<S> {
         Ok(out)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn collect_text_index_scan(
         &self,
         filter: &Document,
@@ -614,16 +602,6 @@ impl<S: StorageSession> Collection<S> {
             }
         }
         Ok(out)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn collect_text_index_scan(
-        &self,
-        filter: &Document,
-        _index_name: &str,
-        _fields: &[String],
-    ) -> CollectionResult<Vec<Document>> {
-        self.collect_collection_scan(filter)
     }
 
     #[allow(clippy::too_many_arguments)]

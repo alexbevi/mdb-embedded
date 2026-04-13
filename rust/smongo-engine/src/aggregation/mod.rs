@@ -58,11 +58,22 @@ impl std::fmt::Display for AggregationError {
             AggregationError::MemoryLimitExceeded { stage, used, limit } => {
                 let used_mb = *used as f64 / (1024.0 * 1024.0);
                 let limit_mb = *limit as f64 / (1024.0 * 1024.0);
-                write!(
-                    f,
-                    "{stage} requires ~{used_mb:.0} MB, exceeding the {limit_mb:.0} MB limit. \
-                     Pass allowDiskUse=True to enable spill-to-disk for memory-intensive stages."
-                )
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    write!(
+                        f,
+                        "{stage} requires ~{used_mb:.0} MB, exceeding the {limit_mb:.0} MB limit. \
+                         Pass allowDiskUse=True to enable spill-to-disk for memory-intensive stages."
+                    )
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    write!(
+                        f,
+                        "{stage} requires ~{used_mb:.0} MB, exceeding the {limit_mb:.0} MB limit. \
+                         Reduce the dataset size or increase the memory limit."
+                    )
+                }
             }
             AggregationError::Other(s) => write!(f, "{}", s),
         }

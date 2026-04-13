@@ -37,7 +37,7 @@ use web_sys::FileSystemSyncAccessHandle;
 
 use crate::collection::{Collection, FindOptions};
 use crate::database::Database;
-use crate::index::IndexOptions;
+use crate::index::{IndexOptions, IndexType, PrefixOptions, TextIndexOptions, VectorIndexOptions};
 use crate::storage::{MemBackend, MemSession, OpfsBackend, OpfsSession};
 
 /// Called automatically when the WASM module loads. Installs a panic hook that
@@ -78,6 +78,74 @@ fn parse_index_options(opts_bytes: &[u8]) -> Result<IndexOptions, JsValue> {
     let opts_doc: Document = from_slice(opts_bytes)
         .map_err(|e| js_err(format!("BSON parse error (index options): {}", e)))?;
 
+    let index_type = opts_doc.get_str("indexType").ok().and_then(|s| match s {
+        "btree" | "bTree" => Some(IndexType::BTree),
+        "text" => Some(IndexType::Text),
+        "bitmap" => Some(IndexType::Bitmap),
+        "prefix" => Some(IndexType::Prefix),
+        "vectorSearch" => Some(IndexType::VectorSearch),
+        "2dsphere" => Some(IndexType::TwoDSphere),
+        _ => None,
+    });
+
+    let vector_options = opts_doc
+        .get_document("vectorOptions")
+        .or_else(|_| opts_doc.get_document("vectorSearchOptions"))
+        .ok()
+        .map(|vdoc| VectorIndexOptions {
+            dimensions: vdoc
+                .get_i64("dimensions")
+                .or_else(|_| vdoc.get_i64("numDimensions"))
+                .ok()
+                .or_else(|| {
+                    vdoc.get_i32("dimensions")
+                        .or_else(|_| vdoc.get_i32("numDimensions"))
+                        .ok()
+                        .map(i64::from)
+                })
+                .unwrap_or(0) as usize,
+            metric: vdoc
+                .get_str("metric")
+                .or_else(|_| vdoc.get_str("similarity"))
+                .ok()
+                .unwrap_or("cosine")
+                .to_string(),
+            indexing_method: vdoc
+                .get_str("indexingMethod")
+                .ok()
+                .unwrap_or("hnsw")
+                .to_string(),
+            ef_construction: vdoc
+                .get_i64("efConstruction")
+                .ok()
+                .or_else(|| vdoc.get_i32("efConstruction").ok().map(i64::from))
+                .map(|v| v as usize),
+            m: vdoc
+                .get_i64("m")
+                .ok()
+                .or_else(|| vdoc.get_i32("m").ok().map(i64::from))
+                .map(|v| v as usize),
+        });
+
+    let text_options = opts_doc
+        .get_document("textOptions")
+        .ok()
+        .map(|tdoc| TextIndexOptions {
+            default_language: tdoc.get_str("defaultLanguage").ok().map(String::from),
+            weights: tdoc.get_document("weights").ok().cloned(),
+        });
+
+    let prefix_options = opts_doc
+        .get_document("prefixOptions")
+        .ok()
+        .map(|pdoc| PrefixOptions {
+            prefix_length: pdoc
+                .get_i64("prefixLength")
+                .ok()
+                .or_else(|| pdoc.get_i32("prefixLength").ok().map(i64::from))
+                .unwrap_or(128) as usize,
+        });
+
     Ok(IndexOptions {
         name: opts_doc.get_str("name").ok().map(String::from),
         unique: opts_doc.get_bool("unique").unwrap_or(false),
@@ -93,10 +161,10 @@ fn parse_index_options(opts_bytes: &[u8]) -> Result<IndexOptions, JsValue> {
             .ok()
             .cloned(),
         collation: opts_doc.get_document("collation").ok().cloned(),
-        index_type: None,
-        vector_options: None,
-        text_options: None,
-        prefix_options: None,
+        index_type,
+        vector_options,
+        text_options,
+        prefix_options,
     })
 }
 

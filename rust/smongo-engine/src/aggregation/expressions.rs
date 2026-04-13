@@ -3,7 +3,7 @@
 use bson::{Bson, Document};
 use chrono::{Datelike, TimeZone, Timelike, Utc};
 
-use super::AggregationResult;
+use super::{AggregationError, AggregationResult};
 use crate::paths::get_value;
 
 /// Evaluate an aggregation expression against a document.
@@ -105,7 +105,10 @@ fn evaluate_operator_expression(doc: &Document, op_doc: &Document) -> Aggregatio
             Ok(Bson::Boolean(matches!(val, Bson::Array(_))))
         }
         "$sum" => expr_sum_expr(doc, args),
-        _ => Ok(Bson::Null),
+        _ => Err(AggregationError::InvalidOperator(format!(
+            "Unknown expression operator: {}",
+            op
+        ))),
     }
 }
 
@@ -630,7 +633,12 @@ fn expr_meta(doc: &Document, args: &Bson) -> AggregationResult<Bson> {
         "vectorSearchScore" | "searchScore" => "_vectorScore",
         "textScore" => "_textScore",
         "geoNearDistance" | "indexKey" => "dist",
-        _ => return Ok(Bson::Null),
+        _ => {
+            return Err(AggregationError::InvalidOperator(format!(
+                "Unknown $meta keyword: {}",
+                keyword
+            )))
+        }
     };
     Ok(doc.get(field).cloned().unwrap_or(Bson::Null))
 }
@@ -1020,5 +1028,33 @@ mod tests {
         let expr = doc! { "$meta": "vectorSearchScore" };
         let result = evaluate_expression(&d, &Bson::Document(expr)).unwrap();
         assert_eq!(result, Bson::Null);
+    }
+
+    #[test]
+    fn test_unknown_expression_operator_errors() {
+        let d = doc! { "x": 1 };
+        let expr = doc! { "$bogus": "$x" };
+        let result = evaluate_expression(&d, &Bson::Document(expr));
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("Unknown expression operator: $bogus"),
+            "unexpected error message: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_unknown_meta_keyword_errors() {
+        let d = doc! { "x": 1 };
+        let expr = doc! { "$meta": "unknownKeyword" };
+        let result = evaluate_expression(&d, &Bson::Document(expr));
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("Unknown $meta keyword: unknownKeyword"),
+            "unexpected error message: {}",
+            msg
+        );
     }
 }

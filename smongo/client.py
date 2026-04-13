@@ -35,6 +35,67 @@ def _get_version() -> str:
 
 
 # ------------------------------------------------------------------
+# Helpers for distinct() — path resolution with array flattening
+# ------------------------------------------------------------------
+
+
+def _resolve_distinct_path(obj: Any, parts: list[str]) -> list[Any]:
+    """Walk *parts* through *obj*, flattening arrays at each level (MongoDB semantics).
+
+    When the terminal value is a list, each element is yielded individually
+    rather than the list itself — matching ``db.coll.distinct("tags")`` when
+    ``tags`` is ``["a", "b"]``.
+    """
+    if not parts:
+        if isinstance(obj, list):
+            out: list[Any] = []
+            for item in obj:
+                out.extend(_resolve_distinct_path(item, []))
+            return out
+        return [obj]
+
+    head, *tail = parts
+
+    if isinstance(obj, list):
+        out = []
+        for item in obj:
+            out.extend(_resolve_distinct_path(item, [head, *tail]))
+        return out
+
+    if isinstance(obj, dict):
+        if head not in obj:
+            return []
+        return _resolve_distinct_path(obj[head], tail)
+
+    return []
+
+
+_SENTINEL = object()
+
+
+def _canonical_key(val: Any) -> str:
+    """Return a hashable canonical representation for dedup in distinct().
+
+    Normalises numeric types so that ``1`` (int) and ``1.0`` (float) with the
+    same mathematical value map to the same key, matching MongoDB semantics.
+    """
+    if isinstance(val, bool):
+        return f"bool:{val}"
+    if isinstance(val, int | float):
+        fv = float(val)
+        if fv == int(fv) and fv == fv:  # not NaN
+            return f"num:{int(fv)}"
+        return f"num:{fv!r}"
+    if isinstance(val, str):
+        return f"str:{val}"
+    if isinstance(val, list):
+        return f"arr:{[_canonical_key(v) for v in val]}"
+    if isinstance(val, dict):
+        return f"doc:{sorted((k, _canonical_key(v)) for k, v in val.items())}"
+    return f"other:{val!r}"
+
+
+# ------------------------------------------------------------------
 # Bulk-write operation descriptors (lightweight PyMongo work-alikes)
 # ------------------------------------------------------------------
 
@@ -448,21 +509,31 @@ class Collection:
         return self.backend.count(query)  # type: ignore[no-any-return]
 
     def distinct(self, key: str, filter: Filter | None = None) -> list[Any]:
-        """Return distinct values for *key* among documents matching *filter*."""
+        """Return distinct values for *key* among documents matching *filter*.
+
+        Handles dotted-path traversal through arrays (MongoDB semantics),
+        includes explicit ``None``/null values, and deduplicates via a
+        canonical representation for consistent equality.
+        """
         if self.mode == "remote":
             return self.backend.distinct(key, filter or {})  # type: ignore[no-any-return]
-        seen: list[Any] = []
+
+        seen_keys: set[str] = set()
+        result: list[Any] = []
+        has_none = False
+
         for doc in self.find(filter):
-            v: Any = doc
-            for part in key.split("."):
-                if isinstance(v, dict):
-                    v = v.get(part)
-                else:
-                    v = None
-                    break
-            if v is not None and v not in seen:
-                seen.append(v)
-        return seen
+            for v in _resolve_distinct_path(doc, key.split(".")):
+                if v is None:
+                    if not has_none:
+                        has_none = True
+                        result.append(None)
+                    continue
+                ck = _canonical_key(v)
+                if ck not in seen_keys:
+                    seen_keys.add(ck)
+                    result.append(v)
+        return result
 
     def estimated_document_count(self) -> int:
         """Fast approximate count (uses count_fast when available)."""

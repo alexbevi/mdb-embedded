@@ -40,10 +40,11 @@
 //! ```
 
 use bson::{oid::ObjectId, Bson, Document};
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::io::Cursor;
 
-use crate::index::extract_index_key;
+use crate::index::{extract_index_key, IndexSpec};
 use crate::oplog::{append_oplog, AppendOplogOpts, CollectionOplogSettings};
 use crate::storage::{DefaultSession, StorageCursor, StorageError, StorageResult, StorageSession};
 
@@ -332,6 +333,9 @@ pub struct Collection<S: StorageSession = DefaultSession> {
     validator: Option<Document>,
     /// When set, mutating operations append BSON oplog rows in the same storage transaction.
     oplog: Option<CollectionOplogSettings>,
+    /// Cached index specs, populated on first `list_indexes()` call within a
+    /// `with_batched_write` scope to avoid repeated metadata reads.
+    index_cache: RefCell<Option<Vec<IndexSpec>>>,
 }
 
 impl<S: StorageSession> Collection<S> {
@@ -352,6 +356,7 @@ impl<S: StorageSession> Collection<S> {
             collection_name: name.to_string(),
             validator: None,
             oplog: None,
+            index_cache: RefCell::new(None),
         })
     }
 
@@ -368,17 +373,16 @@ impl<S: StorageSession> Collection<S> {
         CollectionError::Other(e.to_string())
     }
 
-    fn with_oplog_transaction<R>(
+    fn with_batched_write<R>(
         &self,
         f: impl FnOnce(&Self) -> CollectionResult<R>,
     ) -> CollectionResult<R> {
-        if self.oplog.is_none() {
-            return f(self);
-        }
         self.session
             .begin_transaction()
             .map_err(CollectionError::from)?;
         let r = f(self);
+        // Invalidate cached index list; the committed data may have changed.
+        *self.index_cache.borrow_mut() = None;
         match &r {
             Ok(_) => {
                 self.session

@@ -279,3 +279,86 @@ class TestClientRedbDefault:
             assert "plan" in plan
         finally:
             client.close()
+
+
+class TestDistinct:
+    """Tests for Collection.distinct() with proper MongoDB semantics."""
+
+    def _make_coll(self, tmp_path, name="c"):
+        client = MongoClient(f"local://{tmp_path}/rdb")
+        return client, client["db"][name]
+
+    def test_basic_distinct(self, tmp_path):
+        client, coll = self._make_coll(tmp_path)
+        coll.insert_many([{"x": 1}, {"x": 2}, {"x": 1}, {"x": 3}])
+        result = coll.distinct("x")
+        assert sorted(result) == [1, 2, 3]
+        client.close()
+
+    def test_distinct_with_filter(self, tmp_path):
+        client, coll = self._make_coll(tmp_path)
+        coll.insert_many([{"x": 1, "y": "a"}, {"x": 2, "y": "b"}, {"x": 1, "y": "b"}])
+        result = coll.distinct("x", {"y": "b"})
+        assert sorted(result) == [1, 2]
+        client.close()
+
+    def test_distinct_dotted_path(self, tmp_path):
+        client, coll = self._make_coll(tmp_path)
+        coll.insert_many([{"a": {"b": 1}}, {"a": {"b": 2}}, {"a": {"b": 1}}])
+        result = coll.distinct("a.b")
+        assert sorted(result) == [1, 2]
+        client.close()
+
+    def test_distinct_null_included(self, tmp_path):
+        """Explicit null values should be included in the result."""
+        client, coll = self._make_coll(tmp_path)
+        coll.insert_many([{"x": 1}, {"x": None}, {"x": 2}])
+        result = coll.distinct("x")
+        assert None in result
+        non_null = [v for v in result if v is not None]
+        assert sorted(non_null) == [1, 2]
+        client.close()
+
+    def test_distinct_missing_field_excluded(self, tmp_path):
+        """Documents where the field is entirely absent yield nothing."""
+        client, coll = self._make_coll(tmp_path)
+        coll.insert_many([{"x": 1}, {"y": 2}, {"x": 3}])
+        result = coll.distinct("x")
+        assert sorted(result) == [1, 3]
+        client.close()
+
+    def test_distinct_array_flattening(self, tmp_path):
+        """Values inside arrays should be flattened (MongoDB semantics)."""
+        client, coll = self._make_coll(tmp_path)
+        coll.insert_many([{"tags": ["a", "b"]}, {"tags": ["b", "c"]}])
+        result = coll.distinct("tags")
+        assert sorted(result) == ["a", "b", "c"]
+        client.close()
+
+    def test_distinct_dotted_path_through_array(self, tmp_path):
+        """Dotted paths through arrays should flatten at each level."""
+        client, coll = self._make_coll(tmp_path)
+        coll.insert_many(
+            [
+                {"items": [{"name": "a"}, {"name": "b"}]},
+                {"items": [{"name": "b"}, {"name": "c"}]},
+            ]
+        )
+        result = coll.distinct("items.name")
+        assert sorted(result) == ["a", "b", "c"]
+        client.close()
+
+    def test_distinct_dedup_int_float(self, tmp_path):
+        """int(1) and float(1.0) should be treated as the same value."""
+        client, coll = self._make_coll(tmp_path)
+        coll.insert_many([{"x": 1}, {"x": 1.0}, {"x": 2}])
+        result = coll.distinct("x")
+        numeric = [v for v in result if v is not None]
+        assert len(numeric) == 2
+        client.close()
+
+    def test_distinct_empty_collection(self, tmp_path):
+        client, coll = self._make_coll(tmp_path)
+        result = coll.distinct("x")
+        assert result == []
+        client.close()

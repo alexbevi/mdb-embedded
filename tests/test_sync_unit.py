@@ -2636,3 +2636,176 @@ def test_status_includes_schema_rejections():
     mgr._schema_rejection_count = 3
     s = mgr.status()
     assert s["schema_rejections"] == 3
+
+
+# ==================================================================
+# Hardening: ns_filter fail-closed behaviour
+# ==================================================================
+
+
+class TestNsFilterFailClosed:
+    """ns_filter errors should exclude documents (fail-closed), not include them."""
+
+    def _setup_pull_manager(self):
+        mgr = _make_manager()
+        mgr._config["use_change_stream_pull"] = False
+
+        inserted = []
+
+        local_coll = types.SimpleNamespace(
+            insert_one=lambda doc, **kw: inserted.append(doc),
+            find_one=lambda f: None,
+            find=lambda *a, **kw: iter([]),
+            get_by_id=lambda _id: None,
+            list_indexes=lambda: [],
+            get_oplog_reader=lambda: types.SimpleNamespace(
+                read_from=lambda *a, **kw: [],
+                oldest_key=lambda: "0",
+            ),
+        )
+
+        remote_docs = [
+            {"_id": "d1", "x": 1, "_lastModified": 10},
+            {"_id": "d2", "x": 2, "_lastModified": 10},
+        ]
+
+        class FakeCursor:
+            def sort(self, *a, **kw):
+                return remote_docs
+
+        remote_coll = types.SimpleNamespace(
+            find=lambda *a, **kw: FakeCursor(),
+            list_indexes=lambda: [],
+        )
+
+        def broken_filter(doc):
+            raise KeyError("bad_field")
+
+        mgr._tracked = {"db.coll": (local_coll, remote_coll, broken_filter)}
+        return mgr, inserted
+
+    def test_pull_ns_filter_error_excludes_docs(self):
+        mgr, inserted = self._setup_pull_manager()
+        mgr._pull()
+        assert len(inserted) == 0, "ns_filter errors should exclude docs, not include them"
+
+
+# ==================================================================
+# Hardening: DLQ count resilience to corrupt data
+# ==================================================================
+
+
+class TestDlqCountCorruption:
+    """_dlq_count should not crash on corrupt DLQ rows."""
+
+    def test_dlq_count_with_corrupt_row(self):
+        mgr = _make_manager()
+        mgr._rust.sync_kv_put(mgr._dlq_uri, "key1", "NOT-VALID-JSON{{{")
+        mgr._rust.sync_kv_put(
+            mgr._dlq_uri,
+            "key2",
+            json.dumps({"permanently_failed": True}),
+        )
+        total = mgr._dlq_count()
+        assert total == 2
+
+        perm_only = mgr._dlq_count(permanent_only=True)
+        assert perm_only == 1
+
+    def test_dlq_count_all_corrupt(self):
+        mgr = _make_manager()
+        mgr._rust.sync_kv_put(mgr._dlq_uri, "key1", "GARBAGE")
+        mgr._rust.sync_kv_put(mgr._dlq_uri, "key2", "MORE-GARBAGE")
+        assert mgr._dlq_count(permanent_only=True) == 0
+        assert mgr._dlq_count() == 2
+
+
+# ==================================================================
+# Hardening: oldest_key exception narrowing
+# ==================================================================
+
+
+class TestOldestKeyNarrowing:
+    """Unexpected oldest_key() errors should be logged, not silently swallowed."""
+
+    def test_unexpected_error_is_logged(self, caplog):
+        import logging
+
+        mgr = _make_manager()
+
+        call_count = [0]
+
+        class BrokenReader:
+            def oldest_key(self):
+                raise ValueError("something unexpected")
+
+            def read_from(self, ck, skip_internal=True):
+                call_count[0] += 1
+                return []
+
+        local_coll = types.SimpleNamespace(
+            get_oplog_reader=lambda: BrokenReader(),
+        )
+        remote_coll = types.SimpleNamespace()
+        mgr._set_checkpoint("push:db.coll", "old_checkpoint")
+        with caplog.at_level(logging.WARNING, logger="smongo.sync"):
+            mgr._push_namespace("db.coll", local_coll, remote_coll, None, 10)
+
+        assert any(
+            "Unexpected error" in r.message for r in caplog.records
+        ), "Should log a warning about unexpected oldest_key error"
+        assert call_count[0] > 0, "Should still proceed with read_from after warning"
+
+    def test_expected_errors_stay_silent(self, caplog):
+        import logging
+
+        mgr = _make_manager()
+
+        class EmptyReader:
+            def oldest_key(self):
+                raise KeyError("no keys")
+
+            def read_from(self, ck, skip_internal=True):
+                return []
+
+        local_coll = types.SimpleNamespace(
+            get_oplog_reader=lambda: EmptyReader(),
+        )
+        remote_coll = types.SimpleNamespace()
+        mgr._set_checkpoint("push:db.coll", "old_checkpoint")
+        with caplog.at_level(logging.WARNING, logger="smongo.sync"):
+            mgr._push_namespace("db.coll", local_coll, remote_coll, None, 10)
+
+        unexpected_warnings = [r for r in caplog.records if "Unexpected error" in r.message]
+        assert len(unexpected_warnings) == 0, "KeyError should be silently handled"
+
+
+# ==================================================================
+# Hardening: _flush_bulk total failure routes to DLQ
+# ==================================================================
+
+
+class TestFlushBulkTotalFailure:
+    """Total bulk_write failures (non-BulkWriteError) should DLQ all ops and return -1."""
+
+    def test_total_failure_returns_minus_one(self):
+        mgr = _make_manager()
+        mgr._tracked = {"db.coll": (None, None, None)}
+
+        class FailingColl:
+            def bulk_write(self, ops, ordered=False):
+                raise PyMongoError("connection lost")
+
+        entries = [
+            {"op": "insert", "doc_id": "d1", "payload": {"_id": "d1"}, "ts": 1},
+            {"op": "insert", "doc_id": "d2", "payload": {"_id": "d2"}, "ts": 2},
+        ]
+        result = mgr._flush_bulk(
+            FailingColl(),
+            ["op1", "op2"],
+            ns="db.coll",
+            op_entries=entries,
+        )
+        assert result == -1
+
+        assert mgr._dlq_count() == 2

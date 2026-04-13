@@ -5,11 +5,9 @@
 //! and write-maintenance code dispatch via exhaustive `match` on this enum
 //! so that adding a new type is a compile error until every path is handled.
 
-#[cfg(not(target_arch = "wasm32"))]
 pub mod bitmap_index;
 pub mod hnsw;
 pub mod prefix_index;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod text_index;
 pub mod vector_index;
 

@@ -42,18 +42,16 @@ fn table_def(name: &'static str) -> TableDefinition<'static, &'static [u8], &'st
 // Pending write buffer (used during explicit transactions)
 // ---------------------------------------------------------------------------
 
+/// Buffered write operation. The table name is the HashMap key in the
+/// partitioned `pending_writes` map, so it is not stored here.
 #[derive(Debug, Clone)]
 enum PendingWrite {
-    Insert {
-        table: String,
-        key: Vec<u8>,
-        value: Vec<u8>,
-    },
-    Remove {
-        table: String,
-        key: Vec<u8>,
-    },
+    Insert { key: Vec<u8>, value: Vec<u8> },
+    Remove { key: Vec<u8> },
 }
+
+/// Pending writes partitioned by table name for O(1) lookup in `materialize()`.
+type PendingWriteMap = HashMap<String, Vec<PendingWrite>>;
 
 // ---------------------------------------------------------------------------
 // RedbBackend
@@ -75,7 +73,7 @@ impl StorageBackend for RedbBackend {
         Ok(RedbSession {
             db: self.db.clone(),
             in_transaction: Arc::new(AtomicBool::new(false)),
-            pending_writes: Arc::new(Mutex::new(Vec::new())),
+            pending_writes: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -98,7 +96,7 @@ impl StorageBackend for RedbBackend {
 pub struct RedbSession {
     db: Arc<Database>,
     in_transaction: Arc<AtomicBool>,
-    pending_writes: Arc<Mutex<Vec<PendingWrite>>>,
+    pending_writes: Arc<Mutex<PendingWriteMap>>,
 }
 
 impl StorageSession for RedbSession {
@@ -153,13 +151,13 @@ impl StorageSession for RedbSession {
     }
 
     fn commit_transaction(&self) -> StorageResult<()> {
-        let ops: Vec<PendingWrite> = {
+        let ops_by_table: PendingWriteMap = {
             let mut buf = lock_map(&self.pending_writes)?;
             std::mem::take(&mut *buf)
         };
         self.in_transaction.store(false, Ordering::SeqCst);
 
-        if ops.is_empty() {
+        if ops_by_table.is_empty() {
             return Ok(());
         }
 
@@ -168,21 +166,20 @@ impl StorageSession for RedbSession {
             .begin_write()
             .map_err(|e| StorageError::Other(e.to_string()))?;
 
-        for op in ops {
-            match op {
-                PendingWrite::Insert { table, key, value } => {
-                    let mut t = txn
-                        .open_table(table_def(intern_table_name(&table)))
-                        .map_err(|e| StorageError::Other(e.to_string()))?;
-                    t.insert(key.as_slice(), value.as_slice())
-                        .map_err(|e| StorageError::Other(e.to_string()))?;
-                }
-                PendingWrite::Remove { table, key } => {
-                    let mut t = txn
-                        .open_table(table_def(intern_table_name(&table)))
-                        .map_err(|e| StorageError::Other(e.to_string()))?;
-                    t.remove(key.as_slice())
-                        .map_err(|e| StorageError::Other(e.to_string()))?;
+        for (table, ops) in &ops_by_table {
+            let mut t = txn
+                .open_table(table_def(intern_table_name(table)))
+                .map_err(|e| StorageError::Other(e.to_string()))?;
+            for op in ops {
+                match op {
+                    PendingWrite::Insert { key, value } => {
+                        t.insert(key.as_slice(), value.as_slice())
+                            .map_err(|e| StorageError::Other(e.to_string()))?;
+                    }
+                    PendingWrite::Remove { key } => {
+                        t.remove(key.as_slice())
+                            .map_err(|e| StorageError::Other(e.to_string()))?;
+                    }
                 }
             }
         }
@@ -236,7 +233,7 @@ impl StorageSession for RedbSession {
         Ok(RedbSession {
             db: self.db.clone(),
             in_transaction: Arc::new(AtomicBool::new(false)),
-            pending_writes: Arc::new(Mutex::new(Vec::new())),
+            pending_writes: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 }
@@ -263,7 +260,7 @@ pub struct RedbCursor {
 
     // Shared transaction state with the session
     in_transaction: Arc<AtomicBool>,
-    pending_writes: Arc<Mutex<Vec<PendingWrite>>>,
+    pending_writes: Arc<Mutex<PendingWriteMap>>,
 }
 
 impl RedbCursor {
@@ -295,23 +292,24 @@ impl RedbCursor {
         }
 
         // During an explicit transaction, mutations are buffered in `pending_writes`
-        // and are not yet visible to redb read transactions. Merge them so scans
-        // (find / aggregate / etc.) see the same session's uncommitted writes.
+        // and are not yet visible to redb read transactions. Merge only the ops
+        // for *this* table (O(1) HashMap lookup instead of scanning all ops).
         if self.in_transaction.load(Ordering::SeqCst) {
             let pending = lock_map(&self.pending_writes)?;
-            for op in pending.iter() {
-                match op {
-                    PendingWrite::Insert { table, key, value } if table == &self.table_name => {
-                        rows.retain(|(k, _)| k != key);
-                        rows.push((key.clone(), value.clone()));
+            if let Some(ops) = pending.get(&self.table_name) {
+                for op in ops {
+                    match op {
+                        PendingWrite::Insert { key, value } => {
+                            rows.retain(|(k, _)| k != key);
+                            rows.push((key.clone(), value.clone()));
+                        }
+                        PendingWrite::Remove { key } => {
+                            rows.retain(|(k, _)| k != key);
+                        }
                     }
-                    PendingWrite::Remove { table, key } if table == &self.table_name => {
-                        rows.retain(|(k, _)| k != key);
-                    }
-                    _ => {}
                 }
+                rows.sort_by(|a, b| a.0.cmp(&b.0));
             }
-            rows.sort_by(|a, b| a.0.cmp(&b.0));
         }
 
         self.entries = Some(rows);
@@ -325,20 +323,19 @@ impl RedbCursor {
             .db
             .begin_write()
             .map_err(|e| StorageError::Other(e.to_string()))?;
-        match op {
-            PendingWrite::Insert { table, key, value } => {
-                let mut t = txn
-                    .open_table(table_def(intern_table_name(&table)))
-                    .map_err(|e| StorageError::Other(e.to_string()))?;
-                t.insert(key.as_slice(), value.as_slice())
-                    .map_err(|e| StorageError::Other(e.to_string()))?;
-            }
-            PendingWrite::Remove { table, key } => {
-                let mut t = txn
-                    .open_table(table_def(intern_table_name(&table)))
-                    .map_err(|e| StorageError::Other(e.to_string()))?;
-                t.remove(key.as_slice())
-                    .map_err(|e| StorageError::Other(e.to_string()))?;
+        {
+            let mut t = txn
+                .open_table(table_def(intern_table_name(&self.table_name)))
+                .map_err(|e| StorageError::Other(e.to_string()))?;
+            match op {
+                PendingWrite::Insert { key, value } => {
+                    t.insert(key.as_slice(), value.as_slice())
+                        .map_err(|e| StorageError::Other(e.to_string()))?;
+                }
+                PendingWrite::Remove { key } => {
+                    t.remove(key.as_slice())
+                        .map_err(|e| StorageError::Other(e.to_string()))?;
+                }
             }
         }
         txn.commit()
@@ -352,7 +349,10 @@ impl RedbCursor {
         // A fresh cursor will see the updated data.
 
         if self.in_transaction.load(Ordering::SeqCst) {
-            lock_map(&self.pending_writes)?.push(op);
+            lock_map(&self.pending_writes)?
+                .entry(self.table_name.clone())
+                .or_default()
+                .push(op);
             Ok(())
         } else {
             self.write_immediate(op)
@@ -534,11 +534,7 @@ impl StorageCursor for RedbCursor {
     fn insert(&mut self) -> StorageResult<()> {
         let key = self.effective_key()?;
         let value = self.effective_value()?;
-        self.do_write(PendingWrite::Insert {
-            table: self.table_name.clone(),
-            key,
-            value,
-        })
+        self.do_write(PendingWrite::Insert { key, value })
     }
 
     fn update(&mut self) -> StorageResult<()> {
@@ -548,10 +544,7 @@ impl StorageCursor for RedbCursor {
 
     fn remove(&mut self) -> StorageResult<()> {
         let key = self.effective_key()?;
-        self.do_write(PendingWrite::Remove {
-            table: self.table_name.clone(),
-            key,
-        })
+        self.do_write(PendingWrite::Remove { key })
     }
 
     fn reset(&mut self) -> StorageResult<()> {

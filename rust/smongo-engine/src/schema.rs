@@ -265,6 +265,8 @@ fn validate_doc_fields(
         }
     }
 
+    validate_combinators(&Bson::Document(doc.clone()), schema, path, depth)?;
+
     Ok(())
 }
 
@@ -300,11 +302,85 @@ fn validate_value(
         }
     }
 
+    validate_combinators(value, schema, path, depth)?;
+
     match value {
         Bson::Document(_) => validate_object(value, schema, path, depth),
         Bson::Array(arr) => validate_array(arr, schema, path, depth),
         _ => validate_scalar(value, schema, path),
     }
+}
+
+fn validate_combinators(
+    value: &Bson,
+    schema: &Document,
+    path: &str,
+    depth: usize,
+) -> Result<(), ValidationError> {
+    if let Some(Bson::Array(schemas)) = schema.get("allOf") {
+        for (i, sub) in schemas.iter().enumerate() {
+            if let Bson::Document(sub_schema) = sub {
+                validate_value(value, sub_schema, path, depth + 1).map_err(|e| {
+                    ValidationError {
+                        path: e.path,
+                        message: format!("allOf[{}]: {}", i, e.message),
+                    }
+                })?;
+            }
+        }
+    }
+
+    if let Some(Bson::Array(schemas)) = schema.get("anyOf") {
+        let mut matched = false;
+        for sub in schemas {
+            if let Bson::Document(sub_schema) = sub {
+                if validate_value(value, sub_schema, path, depth + 1).is_ok() {
+                    matched = true;
+                    break;
+                }
+            }
+        }
+        if !matched {
+            return Err(ValidationError {
+                path: path.to_string(),
+                message: "Value does not match any schema in anyOf".to_string(),
+            });
+        }
+    }
+
+    if let Some(Bson::Array(schemas)) = schema.get("oneOf") {
+        let mut match_count = 0;
+        for sub in schemas {
+            if let Bson::Document(sub_schema) = sub {
+                if validate_value(value, sub_schema, path, depth + 1).is_ok() {
+                    match_count += 1;
+                    if match_count > 1 {
+                        break;
+                    }
+                }
+            }
+        }
+        if match_count != 1 {
+            return Err(ValidationError {
+                path: path.to_string(),
+                message: format!(
+                    "Value must match exactly one schema in oneOf, but matched {}",
+                    match_count
+                ),
+            });
+        }
+    }
+
+    if let Some(Bson::Document(not_schema)) = schema.get("not") {
+        if validate_value(value, not_schema, path, depth + 1).is_ok() {
+            return Err(ValidationError {
+                path: path.to_string(),
+                message: "Value must not match the schema in 'not'".to_string(),
+            });
+        }
+    }
+
+    Ok(())
 }
 
 fn validate_scalar(value: &Bson, schema: &Document, path: &str) -> Result<(), ValidationError> {
@@ -704,6 +780,150 @@ mod tests {
         };
         assert!(validate_document(&doc! { "val": "hello" }, &schema).is_ok());
         assert!(validate_document(&doc! { "val": bson::Bson::Null }, &schema).is_ok());
+    }
+
+    #[test]
+    fn test_all_of_passes() {
+        let schema = doc! {
+            "properties": {
+                "age": {
+                    "allOf": [
+                        { "bsonType": "int", "minimum": 0 },
+                        { "maximum": 120 }
+                    ]
+                }
+            }
+        };
+        assert!(validate_document(&doc! { "age": 25 }, &schema).is_ok());
+    }
+
+    #[test]
+    fn test_all_of_fails() {
+        let schema = doc! {
+            "properties": {
+                "age": {
+                    "allOf": [
+                        { "minimum": 0 },
+                        { "maximum": 120 }
+                    ]
+                }
+            }
+        };
+        assert!(validate_document(&doc! { "age": 200 }, &schema).is_err());
+    }
+
+    #[test]
+    fn test_any_of_passes() {
+        let schema = doc! {
+            "properties": {
+                "val": {
+                    "anyOf": [
+                        { "bsonType": "string" },
+                        { "bsonType": "int" }
+                    ]
+                }
+            }
+        };
+        assert!(validate_document(&doc! { "val": "hello" }, &schema).is_ok());
+        assert!(validate_document(&doc! { "val": 42 }, &schema).is_ok());
+    }
+
+    #[test]
+    fn test_any_of_fails() {
+        let schema = doc! {
+            "properties": {
+                "val": {
+                    "anyOf": [
+                        { "bsonType": "string" },
+                        { "bsonType": "int" }
+                    ]
+                }
+            }
+        };
+        assert!(validate_document(&doc! { "val": true }, &schema).is_err());
+    }
+
+    #[test]
+    fn test_one_of_exactly_one() {
+        let schema = doc! {
+            "properties": {
+                "val": {
+                    "oneOf": [
+                        { "bsonType": "string" },
+                        { "bsonType": "int" }
+                    ]
+                }
+            }
+        };
+        assert!(validate_document(&doc! { "val": "hello" }, &schema).is_ok());
+    }
+
+    #[test]
+    fn test_one_of_fails_none_match() {
+        let schema = doc! {
+            "properties": {
+                "val": {
+                    "oneOf": [
+                        { "bsonType": "string" },
+                        { "bsonType": "int" }
+                    ]
+                }
+            }
+        };
+        assert!(validate_document(&doc! { "val": true }, &schema).is_err());
+    }
+
+    #[test]
+    fn test_one_of_fails_multiple_match() {
+        let schema = doc! {
+            "properties": {
+                "val": {
+                    "oneOf": [
+                        { "bsonType": "number" },
+                        { "bsonType": "int" }
+                    ]
+                }
+            }
+        };
+        let result = validate_document(&doc! { "val": 42 }, &schema);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("matched 2"));
+    }
+
+    #[test]
+    fn test_not_passes() {
+        let schema = doc! {
+            "properties": {
+                "status": {
+                    "not": { "bsonType": "null" }
+                }
+            }
+        };
+        assert!(validate_document(&doc! { "status": "active" }, &schema).is_ok());
+    }
+
+    #[test]
+    fn test_not_fails() {
+        let schema = doc! {
+            "properties": {
+                "status": {
+                    "not": { "bsonType": "string" }
+                }
+            }
+        };
+        assert!(validate_document(&doc! { "status": "active" }, &schema).is_err());
+    }
+
+    #[test]
+    fn test_combinators_at_document_level() {
+        let schema = doc! {
+            "allOf": [
+                { "required": ["name"] },
+                { "required": ["age"] }
+            ]
+        };
+        assert!(validate_document(&doc! { "name": "Alice", "age": 30 }, &schema).is_ok());
+        assert!(validate_document(&doc! { "name": "Alice" }, &schema).is_err());
     }
 
     #[test]

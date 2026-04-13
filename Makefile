@@ -8,7 +8,7 @@ ifeq ($(origin PYTHON),undefined)
 PYTHON := $(shell test -x "$(ROOT)/.venv/bin/python" && echo "$(ROOT)/.venv/bin/python" || command -v python3)
 endif
 
-SRC     := smongo web_app.py demo.py
+SRC     := smongo web_app.py demo.py demo-sql.py
 TESTS   := tests
 
 # ---------------------------------------------------------------------------

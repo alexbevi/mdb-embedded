@@ -181,8 +181,12 @@ class _DLQMixin:
             if not permanent_only:
                 return len(rows)
             n = 0
-            for _k, v_raw in rows:
-                v = json.loads(v_raw)
+            for k, v_raw in rows:
+                try:
+                    v = json.loads(v_raw)
+                except (json.JSONDecodeError, ValueError):
+                    log.warning("Corrupt DLQ entry %s in count; skipping", k)
+                    continue
                 if v.get("permanently_failed"):
                     n += 1
             return n
