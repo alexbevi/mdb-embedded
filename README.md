@@ -553,6 +553,25 @@ make coverage       # coverage report (70% enforced)
 make typecheck      # mypy strict
 ```
 
+### YCSB Benchmarks
+
+The `benchmark` branch includes the YCSB harness as a submodule at
+`tools/benchmark` and exposes it through `tools/smongo-bench`:
+
+```bash
+tools/smongo-bench --target smongo --record-count 1000 --operation-count 1000
+tools/smongo-bench --target mongodb --record-count 1000 --operation-count 1000
+tools/smongo-bench --target ferretdb --record-count 1000 --operation-count 1000
+tools/smongo-bench --target postgresql --record-count 1000 --operation-count 1000
+tools/smongo-bench --target mysql --record-count 1000 --operation-count 1000
+tools/smongo-bench --target sqlite --record-count 1000 --operation-count 1000
+tools/smongo-bench --target documentdb --uri "$DOCUMENTDB_URI"
+```
+
+Docker-backed targets start with `docker compose`; `smongo` starts the local
+wire server automatically. See `tools/benchmark/README.md` for generic JDBC,
+DocumentDB TLS, and other target-specific options.
+
 ---
 
 ## The API
