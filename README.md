@@ -571,8 +571,9 @@ tools/smongo-bench --source smongo --target sqlite --record-count 1000 --operati
 
 Docker-backed targets start with `docker compose`; `smongo` starts the local
 wire server automatically. Comparison tables include source/target version
-headers and a plain `+`/`-` difference column. See `tools/benchmark/README.md` for
-generic JDBC, DocumentDB URI overrides, and other target-specific options.
+headers and a signed percentage difference column. See
+`tools/benchmark/README.md` for generic JDBC, DocumentDB URI overrides, and
+other target-specific options.
 
 ---
 
