@@ -1,0 +1,3 @@
+[submodule "tools/benchmark"]
+	path = tools/benchmark
+	url = https://github.com/alexbevi/ycsb-mongodb-sql.git
