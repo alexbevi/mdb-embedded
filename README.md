@@ -565,12 +565,12 @@ tools/smongo-bench --target ferretdb --record-count 1000 --operation-count 1000
 tools/smongo-bench --target postgresql --record-count 1000 --operation-count 1000
 tools/smongo-bench --target mysql --record-count 1000 --operation-count 1000
 tools/smongo-bench --target sqlite --record-count 1000 --operation-count 1000
-tools/smongo-bench --target documentdb --uri "$DOCUMENTDB_URI"
+tools/smongo-bench --target documentdb --record-count 1000 --operation-count 1000
 ```
 
 Docker-backed targets start with `docker compose`; `smongo` starts the local
 wire server automatically. See `tools/benchmark/README.md` for generic JDBC,
-DocumentDB TLS, and other target-specific options.
+DocumentDB URI overrides, and other target-specific options.
 
 ---
 
