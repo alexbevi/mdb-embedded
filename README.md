@@ -559,19 +559,20 @@ The `benchmark` branch includes the YCSB harness as a submodule at
 `tools/benchmark` and exposes it through `tools/smongo-bench`:
 
 ```bash
-tools/smongo-bench --target smongo --record-count 1000 --operation-count 1000
-tools/smongo-bench --target mongodb --record-count 1000 --operation-count 1000
-tools/smongo-bench --target ferretdb --record-count 1000 --operation-count 1000
-tools/smongo-bench --target postgresql --record-count 1000 --operation-count 1000
-tools/smongo-bench --target mysql --record-count 1000 --operation-count 1000
-tools/smongo-bench --target sqlite --record-count 1000 --operation-count 1000
-tools/smongo-bench --target documentdb --record-count 1000 --operation-count 1000
-tools/smongo-bench --target sqlite --compare-smongo --record-count 1000 --operation-count 1000
+tools/smongo-bench --source smongo --record-count 1000 --operation-count 1000
+tools/smongo-bench --source mongodb --record-count 1000 --operation-count 1000
+tools/smongo-bench --source ferretdb --record-count 1000 --operation-count 1000
+tools/smongo-bench --source postgresql --record-count 1000 --operation-count 1000
+tools/smongo-bench --source mysql --record-count 1000 --operation-count 1000
+tools/smongo-bench --source sqlite --record-count 1000 --operation-count 1000
+tools/smongo-bench --source documentdb --record-count 1000 --operation-count 1000
+tools/smongo-bench --source smongo --target sqlite --record-count 1000 --operation-count 1000
 ```
 
 Docker-backed targets start with `docker compose`; `smongo` starts the local
-wire server automatically. See `tools/benchmark/README.md` for generic JDBC,
-DocumentDB URI overrides, and other target-specific options.
+wire server automatically. Comparison tables include source/target version
+headers and a colored difference column. See `tools/benchmark/README.md` for
+generic JDBC, DocumentDB URI overrides, and other target-specific options.
 
 ---
 
