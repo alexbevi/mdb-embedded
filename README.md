@@ -566,6 +566,7 @@ tools/smongo-bench --target postgresql --record-count 1000 --operation-count 100
 tools/smongo-bench --target mysql --record-count 1000 --operation-count 1000
 tools/smongo-bench --target sqlite --record-count 1000 --operation-count 1000
 tools/smongo-bench --target documentdb --record-count 1000 --operation-count 1000
+tools/smongo-bench --target sqlite --compare-smongo --record-count 1000 --operation-count 1000
 ```
 
 Docker-backed targets start with `docker compose`; `smongo` starts the local
