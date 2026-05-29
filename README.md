@@ -423,8 +423,11 @@ Runs the full embedded engine locally -- indexes, queries, aggregation, oplog --
 smongo includes a wire protocol server so that **real drivers** can connect to the embedded engine over TCP.
 
 ```bash
-# Start the server on the default port
-python -m smongo.wire --port 27018
+# Start the server with the installed CLI
+smongo-wire --db-path ./data --host 127.0.0.1 --port 27018
+
+# Equivalent module form, useful from a source checkout
+python -m smongo.wire --db-path ./data --host 127.0.0.1 --port 27018
 ```
 
 Then connect with any standard MongoDB client:
